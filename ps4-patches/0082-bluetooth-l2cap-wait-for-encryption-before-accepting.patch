@@ -1,0 +1,119 @@
+From 4f45f7a4bcb551c1086bf89f7090938b59f181fc Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sat, 7 Nov 2026 14:43:00 +0100
+Subject: [PATCH 082/124] bluetooth: l2cap: wait for encryption before
+ accepting classic channels
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ include/net/bluetooth/l2cap.h |  1 +
+ net/bluetooth/l2cap_core.c    | 39 ++++++++++++++++++++++++++++++-----
+ 2 files changed, 35 insertions(+), 5 deletions(-)
+
+diff --git a/include/net/bluetooth/l2cap.h b/include/net/bluetooth/l2cap.h
+index 3d9a32094347cda13db2415667950a2398b83a8f..747b2a89e1e50f64d8c9fe61283f642966c6b6ed 100644
+--- a/include/net/bluetooth/l2cap.h
++++ b/include/net/bluetooth/l2cap.h
+@@ -752,6 +752,7 @@ enum {
+ 	FLAG_PENDING_SECURITY,
+ 	FLAG_HOLD_HCI_CONN,
+ 	FLAG_DEL,
++	FLAG_PENDING_CLASSIC_ENCRYPTION,
+ };
+ 
+ /* Lock nesting levels for L2CAP channels. We need these because lockdep
+diff --git a/net/bluetooth/l2cap_core.c b/net/bluetooth/l2cap_core.c
+index d87d2dfbce6848768f11e00785e3531f81b49cf2..51bba7d01501f30facce965a5ecb0841e0b9984c 100644
+--- a/net/bluetooth/l2cap_core.c
++++ b/net/bluetooth/l2cap_core.c
+@@ -1596,7 +1596,11 @@ static void l2cap_conn_start(struct l2cap_conn *conn)
+ 			rsp.scid = cpu_to_le16(chan->dcid);
+ 			rsp.dcid = cpu_to_le16(chan->scid);
+ 
+-			if (l2cap_chan_check_security(chan, false)) {
++			if (l2cap_chan_check_security(chan, false) &&
++			    (!test_bit(FLAG_PENDING_CLASSIC_ENCRYPTION, &chan->flags) ||
++			     (hci_conn_check_link_mode(conn->hcon) &&
++			      l2cap_check_enc_key_size(conn->hcon, chan)))) {
++				clear_bit(FLAG_PENDING_CLASSIC_ENCRYPTION, &chan->flags);
+ 				if (test_bit(FLAG_DEFER_SETUP, &chan->flags)) {
+ 					rsp.result = cpu_to_le16(L2CAP_CR_PEND);
+ 					rsp.status = cpu_to_le16(L2CAP_CS_AUTHOR_PEND);
+@@ -4112,6 +4116,7 @@ static void l2cap_connect(struct l2cap_conn *conn, struct l2cap_cmd_hdr *cmd,
+ 	struct l2cap_conn_req *req = (struct l2cap_conn_req *) data;
+ 	struct l2cap_conn_rsp rsp;
+ 	struct l2cap_chan *chan = NULL, *pchan = NULL;
++	bool wait_for_encryption;
+ 	int result, status = L2CAP_CS_NO_INFO;
+ 
+ 	u16 dcid = 0, scid = __le16_to_cpu(req->scid);
+@@ -4128,10 +4133,14 @@ static void l2cap_connect(struct l2cap_conn *conn, struct l2cap_cmd_hdr *cmd,
+ 	}
+ 
+ 	l2cap_chan_lock(pchan);
++	wait_for_encryption = hci_conn_ssp_enabled(conn->hcon) &&
++		!test_bit(HCI_CONN_ENCRYPT, &conn->hcon->flags) &&
++		!hci_dev_test_flag(conn->hcon->hdev, HCI_SC_ONLY) &&
++		conn->hcon->sec_level != BT_SECURITY_FIPS;
+ 
+ 	/* Check if the ACL is secure enough (if not SDP) */
+ 	if (psm != cpu_to_le16(L2CAP_PSM_SDP) &&
+-	    (!hci_conn_check_link_mode(conn->hcon) ||
++	    ((!wait_for_encryption && !hci_conn_check_link_mode(conn->hcon)) ||
+ 	    !l2cap_check_enc_key_size(conn->hcon, pchan))) {
+ 		conn->disc_reason = HCI_ERROR_AUTH_FAILURE;
+ 		result = L2CAP_CR_SEC_BLOCK;
+@@ -4155,6 +4164,8 @@ static void l2cap_connect(struct l2cap_conn *conn, struct l2cap_cmd_hdr *cmd,
+ 	chan = l2cap_new_connection(conn, pchan);
+ 	if (!chan)
+ 		goto response;
++	if (psm != cpu_to_le16(L2CAP_PSM_SDP) && wait_for_encryption)
++		set_bit(FLAG_PENDING_CLASSIC_ENCRYPTION, &chan->flags);
+ 
+ 	/* For certain devices (ex: HID mouse), support for authentication,
+ 	 * pairing and bonding is optional. For such devices, inorder to avoid
+@@ -4177,7 +4188,11 @@ static void l2cap_connect(struct l2cap_conn *conn, struct l2cap_cmd_hdr *cmd,
+ 	chan->ident = cmd->ident;
+ 
+ 	if (conn->info_state & L2CAP_INFO_FEAT_MASK_REQ_DONE) {
+-		if (l2cap_chan_check_security(chan, false)) {
++		if (l2cap_chan_check_security(chan, false) &&
++		    (!test_bit(FLAG_PENDING_CLASSIC_ENCRYPTION, &chan->flags) ||
++		     (hci_conn_check_link_mode(conn->hcon) &&
++		      l2cap_check_enc_key_size(conn->hcon, chan)))) {
++			clear_bit(FLAG_PENDING_CLASSIC_ENCRYPTION, &chan->flags);
+ 			if (test_bit(FLAG_DEFER_SETUP, &chan->flags)) {
+ 				l2cap_state_change(chan, BT_CONNECT2);
+ 				result = L2CAP_CR_PEND;
+@@ -7686,7 +7701,8 @@ static void l2cap_security_cfm(struct hci_conn *hcon, u8 status, u8 encrypt)
+ 		BT_DBG("chan %p scid 0x%4.4x state %s", chan, chan->scid,
+ 		       state_to_string(chan->state));
+ 
+-		if (!status && encrypt)
++		if (!status && encrypt &&
++		    !test_bit(FLAG_PENDING_CLASSIC_ENCRYPTION, &chan->flags))
+ 			chan->sec_level = hcon->sec_level;
+ 
+ 		if (!__l2cap_no_conn_pending(chan)) {
+@@ -7713,7 +7729,20 @@ static void l2cap_security_cfm(struct hci_conn *hcon, u8 status, u8 encrypt)
+ 			struct l2cap_conn_rsp rsp;
+ 			__u16 res, stat;
+ 
+-			if (!status && l2cap_check_enc_key_size(hcon, chan)) {
++			if (!status &&
++			    test_bit(FLAG_PENDING_CLASSIC_ENCRYPTION, &chan->flags) &&
++			    (!encrypt ||
++			     (hci_conn_check_link_mode(hcon) &&
++			      !l2cap_chan_check_security(chan, false)))) {
++				l2cap_chan_unlock(chan);
++				continue;
++			}
++
++			if (!status &&
++			    (!test_bit(FLAG_PENDING_CLASSIC_ENCRYPTION, &chan->flags) ||
++			     hci_conn_check_link_mode(hcon)) &&
++			    l2cap_check_enc_key_size(hcon, chan)) {
++				clear_bit(FLAG_PENDING_CLASSIC_ENCRYPTION, &chan->flags);
+ 				if (test_bit(FLAG_DEFER_SETUP, &chan->flags)) {
+ 					res = L2CAP_CR_PEND;
+ 					stat = L2CAP_CS_AUTHOR_PEND;

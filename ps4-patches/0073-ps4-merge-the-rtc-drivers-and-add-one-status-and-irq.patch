@@ -1,0 +1,1231 @@
+From 9df8ee379fb3796d5b8b73c138d2826077e15016 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Fri, 6 Nov 2026 21:33:42 +0100
+Subject: [PATCH 073/124] ps4: merge the rtc drivers and add one status and irq
+ entry point
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ arch/x86/include/asm/ps4.h                    |  23 +-
+ arch/x86/platform/ps4/ps4.c                   |  31 +-
+ drivers/ata/ahci.c                            |  14 +-
+ drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c       |   2 +-
+ drivers/gpu/drm/amd/amdgpu/ps4_bridge.c       |   2 +-
+ drivers/gpu/drm/radeon/radeon_drv.c           |   2 +-
+ drivers/mmc/host/sdhci-pci-core.c             |  22 +-
+ drivers/net/ethernet/marvell/sky2.c           |  10 +-
+ drivers/net/ethernet/sony/mts/mts_main.c      |   2 +-
+ drivers/net/wireless/marvell/mwifiex/main.h   |   2 +-
+ .../MT6632/wlan/os/linux/gl_cfg80211.c        |   2 +-
+ .../drv_wlan/MT6632/wlan/os/linux/gl_init.c   |   2 +-
+ drivers/ps4/Makefile                          |   3 +-
+ drivers/ps4/baikal.h                          |   8 -
+ drivers/ps4/ps4-apcie.c                       |  11 +-
+ drivers/ps4/ps4-bpcie-rtc.c                   |  98 ------
+ drivers/ps4/ps4-bpcie.c                       |  11 +-
+ drivers/ps4/ps4-led.c                         |   2 +-
+ drivers/ps4/ps4-rtc.c                         | 278 ------------------
+ drivers/ps4/ps4-rtc.h                         |  41 ---
+ drivers/ps4/ps4sb.h                           |  13 +
+ drivers/ps4/sb-rtc.c                          | 176 +++++++++++
+ drivers/usb/host/xhci-aeolia.c                |  26 +-
+ 23 files changed, 252 insertions(+), 529 deletions(-)
+ delete mode 100644 drivers/ps4/ps4-bpcie-rtc.c
+ delete mode 100644 drivers/ps4/ps4-rtc.c
+ delete mode 100644 drivers/ps4/ps4-rtc.h
+ create mode 100644 drivers/ps4/sb-rtc.c
+
+diff --git a/arch/x86/include/asm/ps4.h b/arch/x86/include/asm/ps4.h
+index 9cb903f53a7e5728f7625a38d4d4e4ca85abe149..2694d59324c0422978e27246ad0bd85a70ee002f 100644
+--- a/arch/x86/include/asm/ps4.h
++++ b/arch/x86/include/asm/ps4.h
+@@ -44,12 +44,14 @@ extern int ps4_samu_map(struct page **pages, unsigned int count, u64 *va);
+ extern void ps4_samu_unmap(void);
+ extern int ps4_samu_rng(void *buf, size_t len);
+ extern int ps4_samu_ccp(void *op);
+-extern int apcie_status(void);
++extern bool ps4sb_initialized;
++extern int ps4sb_status(void);
++extern int ps4sb_assign_irqs(struct pci_dev *dev, int nvec);
++extern void ps4sb_free_irqs(unsigned int virq, unsigned int nr_irqs);
+ extern bool ps4_is_baikal(void);
+ extern int bpcie_assign_irqs(struct pci_dev *dev, int nvec);
+ extern void bpcie_free_irqs(unsigned int virq, unsigned int nr_irqs);
+ extern void ps4sb_icc_reboot(void);
+-extern int bpcie_status(void);
+ extern int ps4sb_icc_cmd(u8 major, u16 minor, const void *data,
+ 			 u16 length, void *reply, u16 reply_length);
+ extern int ps4sb_icc_register_event_handler(u8 major, ps4sb_icc_event_fn fn,
+@@ -61,14 +63,14 @@ extern void ps4sb_icc_unregister_event_handler(u8 major);
+ 
+ typedef void (*ps4sb_icc_event_fn)(void *ctx, u16 minor, const u8 *data,
+ 				   u16 length);
+-static inline int apcie_assign_irqs(struct pci_dev *dev, int nvec)
++static inline int ps4sb_assign_irqs(struct pci_dev *dev, int nvec)
+ {
+ 	return -ENODEV;
+ }
+-static inline void apcie_free_irqs(unsigned int virq, unsigned int nvec)
++static inline void ps4sb_free_irqs(unsigned int virq, unsigned int nr_irqs)
+ {
+ }
+-static inline int apcie_status(void)
++static inline int ps4sb_status(void)
+ {
+ 	return -ENODEV;
+ }
+@@ -76,17 +78,6 @@ static inline bool ps4_is_baikal(void)
+ {
+ 	return false;
+ }
+-static inline int bpcie_assign_irqs(struct pci_dev *dev, int nvec)
+-{
+-	return -ENODEV;
+-}
+-static inline void bpcie_free_irqs(unsigned int virq, unsigned int nvec)
+-{
+-}
+-static inline int bpcie_status(void)
+-{
+-	return -ENODEV;
+-}
+ static inline int ps4sb_icc_cmd(u8 major, u16 minor, const void *data,
+ 				u16 length, void *reply, u16 reply_length)
+ {
+diff --git a/arch/x86/platform/ps4/ps4.c b/arch/x86/platform/ps4/ps4.c
+index 947173e4bfe2bc3250d46094ace851e69cbbf4b5..564eb3112751750041587f2184e884f351dd09d2 100644
+--- a/arch/x86/platform/ps4/ps4.c
++++ b/arch/x86/platform/ps4/ps4.c
+@@ -31,8 +31,7 @@
+ 
+ static bool is_ps4;
+ static bool is_baikal;
+-bool apcie_initialized;
+-bool bpcie_initialized;
++bool ps4sb_initialized;
+ 
+ /*
+  * The RTC is part of the Aeolia PCI device and will be implemented there as
+@@ -47,25 +46,29 @@ static int dummy_set_wallclock(const struct timespec64 *now)
+ 	return -ENODEV;
+ }
+ 
+-/*
+- * Provide a way for generic drivers to query for the availability of the
+- * PS4 apcie driver/device, which is a dependency for them.
+- */
+-int apcie_status(void)
++int ps4sb_status(void)
+ {
+ 	if (!is_ps4)
+ 		return -ENODEV;
+-	return READ_ONCE(apcie_initialized) || READ_ONCE(bpcie_initialized);
++	return READ_ONCE(ps4sb_initialized);
+ }
+-EXPORT_SYMBOL_GPL(apcie_status);
++EXPORT_SYMBOL_GPL(ps4sb_status);
+ 
+-int bpcie_status(void)
++int ps4sb_assign_irqs(struct pci_dev *dev, int nvec)
+ {
+-	if (!is_ps4)
+-		return -ENODEV;
+-	return READ_ONCE(bpcie_initialized);
++	return is_baikal ? bpcie_assign_irqs(dev, nvec) :
++			   apcie_assign_irqs(dev, nvec);
++}
++EXPORT_SYMBOL_GPL(ps4sb_assign_irqs);
++
++void ps4sb_free_irqs(unsigned int virq, unsigned int nr_irqs)
++{
++	if (is_baikal)
++		bpcie_free_irqs(virq, nr_irqs);
++	else
++		apcie_free_irqs(virq, nr_irqs);
+ }
+-EXPORT_SYMBOL_GPL(bpcie_status);
++EXPORT_SYMBOL_GPL(ps4sb_free_irqs);
+ 
+ bool ps4_is_baikal(void)
+ {
+diff --git a/drivers/ata/ahci.c b/drivers/ata/ahci.c
+index 785f3122fe3c342e4b6e2a5af3bdf8be3d0508f5..2d2844c1c4d74a35b7d2e5f84ab9aa614433ede8 100644
+--- a/drivers/ata/ahci.c
++++ b/drivers/ata/ahci.c
+@@ -2757,11 +2757,7 @@ static void ahci_init_irq(struct pci_dev *pdev, unsigned int n_ports,
+ 
+ 	#ifdef CONFIG_X86_PS4
+ 	if (pdev->vendor == PCI_VENDOR_ID_SONY) {
+-		if (pdev->device == PCI_DEVICE_ID_SONY_BAIKAL_AHCI) {
+-			bpcie_assign_irqs(pdev, n_ports);
+-			return;
+-		}
+-		apcie_assign_irqs(pdev, n_ports);
++		ps4sb_assign_irqs(pdev, n_ports);
+ 		return;
+ 	}
+ 	#endif
+@@ -2972,7 +2968,7 @@ static int ahci_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	
+ 	#ifdef CONFIG_X86_PS4
+ 	/* This will return negative on non-PS4 platforms */
+-	if (apcie_status() == 0)
++	if (ps4sb_status() == 0)
+ 		return -EPROBE_DEFER;
+ 
+ 	if (pdev->vendor == PCI_VENDOR_ID_SONY &&
+@@ -3271,11 +3267,7 @@ static void ahci_remove_one(struct pci_dev *pdev)
+ 
+ 	#ifdef CONFIG_X86_PS4
+ 	if (pdev->vendor == PCI_VENDOR_ID_SONY) {
+-		if (pdev->device == PCI_DEVICE_ID_SONY_BAIKAL_AHCI) {
+-			bpcie_free_irqs(pdev->irq, 1);
+-			return;
+-		}
+-		apcie_free_irqs(pdev->irq, 1);
++		ps4sb_free_irqs(pdev->irq, 1);
+ 	}
+ 	#endif
+ }
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
+index 4aa55841f6e911cd92487bee99aa5965b913fef4..77f86b90aed5bbb15e5bd8fe156710cd2c5658fb 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
+@@ -2444,7 +2444,7 @@ static int amdgpu_pci_probe(struct pci_dev *pdev,
+ 	 * so defer probe until it is ready. This test passes if this isn't
+ 	 * a PS4 (returns -ENODEV).
+ 	 */
+-	if (apcie_status() == 0)
++	if (ps4sb_status() == 0)
+ 		return -EPROBE_DEFER;
+ 	#endif
+ 
+diff --git a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+index 5f83dfacaceded297a4c0c6605f7bb1a6f9cf7a9..d11a9f73070b1e63ece51079c81e9db1af35b7ed 100644
+--- a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
++++ b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+@@ -1110,7 +1110,7 @@ static void ps4_bridge_events_stop(void *data)
+ static void ps4_bridge_events_start(struct device *dev,
+ 				    struct ps4_bridge *mn_bridge)
+ {
+-	if (bpcie_status() <= 0)
++	if (!ps4_is_baikal() || ps4sb_status() <= 0)
+ 		return;
+ 	if (ps4sb_icc_register_event_handler(PS4_BRIDGE_ICC_SERVICE,
+ 					     ps4_bridge_hdmi_event, mn_bridge))
+diff --git a/drivers/gpu/drm/radeon/radeon_drv.c b/drivers/gpu/drm/radeon/radeon_drv.c
+index 092f1643fe05e25ada54442259f19b0f858d55bb..e15a1714bc155b542b80519f5ca8d47be742c6d8 100644
+--- a/drivers/gpu/drm/radeon/radeon_drv.c
++++ b/drivers/gpu/drm/radeon/radeon_drv.c
+@@ -339,7 +339,7 @@ static int radeon_pci_probe(struct pci_dev *pdev,
+ 	 * so defer probe until it is ready. This test passes if this isn't
+ 	 * a PS4 (returns -ENODEV).
+ 	 */
+-	if (apcie_status() == 0)
++	if (ps4sb_status() == 0)
+ 		return -EPROBE_DEFER;
+ 	#endif
+ 
+diff --git a/drivers/mmc/host/sdhci-pci-core.c b/drivers/mmc/host/sdhci-pci-core.c
+index a97442d1017859c6f9dc3c02c199c9ee0ab6607b..c8e80be2e22ed200504898bf55103678441b8b5f 100644
+--- a/drivers/mmc/host/sdhci-pci-core.c
++++ b/drivers/mmc/host/sdhci-pci-core.c
+@@ -330,27 +330,11 @@ static const struct sdhci_pci_fixes sdhci_intel_qrk = {
+ };
+ 
+ #ifdef CONFIG_X86_PS4
+-static int aeolia_assign_irqs(struct sdhci_pci_slot *slot)
+-{
+-	if (slot->chip->pdev->device == PCI_DEVICE_ID_SONY_BAIKAL_SDHCI)
+-		return bpcie_assign_irqs(slot->chip->pdev, 1);
+-	return apcie_assign_irqs(slot->chip->pdev, 1);
+-}
+-
+-static void aeolia_free_irqs(struct sdhci_pci_slot *slot)
+-{
+-	if (slot->chip->pdev->device == PCI_DEVICE_ID_SONY_BAIKAL_SDHCI) {
+-		bpcie_free_irqs(slot->host->irq, 1);
+-		return;
+-	}
+-	apcie_free_irqs(slot->host->irq, 1);
+-}
+-
+ static int aeolia_probe(struct sdhci_pci_chip *chip)
+ {
+ 	chip->num_slots = 1;
+ 	chip->first_bar = 0;
+-	if (apcie_status() == 0)
++	if (ps4sb_status() == 0)
+ 		return -EPROBE_DEFER;
+ 
+ 	chip->pdev->class &= ~0x0000FF;
+@@ -360,7 +344,7 @@ static int aeolia_probe(struct sdhci_pci_chip *chip)
+ 
+ static int aeolia_probe_slot(struct sdhci_pci_slot *slot)
+ {
+-	int err = aeolia_assign_irqs(slot);
++	int err = ps4sb_assign_irqs(slot->chip->pdev, 1);
+ 	if (err <= 0) {
+ 		dev_err(&slot->chip->pdev->dev, "failed to get IRQ: %d\n", err);
+ 		return -ENODEV;
+@@ -397,7 +381,7 @@ static int aeolia_probe_slot(struct sdhci_pci_slot *slot)
+ 
+ static void aeolia_remove_slot(struct sdhci_pci_slot *slot, int dead)
+ {
+-	aeolia_free_irqs(slot);
++	ps4sb_free_irqs(slot->host->irq, 1);
+ }
+ 
+ static int aeolia_enable_dma(struct sdhci_pci_slot *slot)
+diff --git a/drivers/net/ethernet/marvell/sky2.c b/drivers/net/ethernet/marvell/sky2.c
+index cbb9abb2357328b6352d988ee31d18471ea93ba4..11d71a097b9eea3602f6a258fce7a4f1678f310b 100644
+--- a/drivers/net/ethernet/marvell/sky2.c
++++ b/drivers/net/ethernet/marvell/sky2.c
+@@ -4896,7 +4896,7 @@ static int sky2_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 
+ 	#ifdef CONFIG_X86_PS4
+ 	/* This will return negative on non-PS4 platforms */
+-	if (apcie_status() == 0)
++	if (ps4sb_status() == 0)
+ 		return -EPROBE_DEFER;
+ 	#endif
+ 
+@@ -5027,10 +5027,10 @@ static int sky2_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 
+ 	#ifdef CONFIG_X86_PS4
+ 	if (pdev->vendor == PCI_VENDOR_ID_SONY &&
+-	    apcie_assign_irqs(pdev, 1) > 0) {
++	    ps4sb_assign_irqs(pdev, 1) > 0) {
+ 		err = sky2_test_msi(hw);
+ 		if (err) {
+-			apcie_free_irqs(pdev->irq, 1);
++			ps4sb_free_irqs(pdev->irq, 1);
+ 			/* PS4 requires MSI, so if it fails, bail out. */
+ 			goto err_out_free_netdev;
+ 		}
+@@ -5096,7 +5096,7 @@ err_out_unregister:
+ err_out_free_netdev:
+ 	#ifdef CONFIG_X86_PS4
+ 	if (hw->flags & SKY2_HW_USE_AEOLIA_MSI)
+-		apcie_free_irqs(pdev->irq, 1);
++		ps4sb_free_irqs(pdev->irq, 1);
+ 	else
+ 	#endif
+ 		if (hw->flags & SKY2_HW_USE_MSI)
+@@ -5150,7 +5150,7 @@ static void sky2_remove(struct pci_dev *pdev)
+ 
+ 	#ifdef CONFIG_X86_PS4
+ 	if (hw->flags & SKY2_HW_USE_AEOLIA_MSI)
+-		apcie_free_irqs(pdev->irq, 1);
++		ps4sb_free_irqs(pdev->irq, 1);
+ 	else
+ 	#endif
+ 
+diff --git a/drivers/net/ethernet/sony/mts/mts_main.c b/drivers/net/ethernet/sony/mts/mts_main.c
+index 26155a0c18d4d3347c454bd902336ed390fc0592..684794902ce729ea1d00eadf8f76c585dbc2b35f 100644
+--- a/drivers/net/ethernet/sony/mts/mts_main.c
++++ b/drivers/net/ethernet/sony/mts/mts_main.c
+@@ -651,7 +651,7 @@ static int mts_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+ 			 netdev->dev_addr);
+ 	}
+ 
+-	ret = bpcie_assign_irqs(pdev, 1);
++	ret = ps4sb_assign_irqs(pdev, 1);
+ 	if (ret < 0) {
+ 		mts_glue_unmap(p);
+ 		return ret == -ENODEV ? -EPROBE_DEFER : ret;
+diff --git a/drivers/net/wireless/marvell/mwifiex/main.h b/drivers/net/wireless/marvell/mwifiex/main.h
+index a2556c903ad3f8ca2fe85f65d83802d339f65984..ae06e35fb268ed4bd1e19ef3141c3ecb110410a6 100644
+--- a/drivers/net/wireless/marvell/mwifiex/main.h
++++ b/drivers/net/wireless/marvell/mwifiex/main.h
+@@ -59,7 +59,7 @@ struct mwifiex_private;
+ static inline bool mwifiex_is_ps4(void)
+ {
+ #ifdef CONFIG_X86_PS4
+-	return apcie_status() >= 0;
++	return ps4sb_status() >= 0;
+ #else
+ 	return false;
+ #endif
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_cfg80211.c b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_cfg80211.c
+index 32c0203ece2086e299aea2302093f4578b62ae77..75fceb9dc3d91a1e01f0c32ab8fe83b318daa36a 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_cfg80211.c
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_cfg80211.c
+@@ -85,7 +85,7 @@
+ static bool mtk_wifi_is_ps4(void)
+ {
+ #ifdef CONFIG_X86_PS4
+-	return apcie_status() >= 0;
++	return ps4sb_status() >= 0;
+ #else
+ 	return false;
+ #endif
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_init.c b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_init.c
+index e8e4d98acef3756b1b29f1adad0ec957d3a3f340..0f1b926052d41e81db5be2a83b04e7896b6b4df9 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_init.c
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_init.c
+@@ -84,7 +84,7 @@
+ static bool mtk_wifi_is_ps4(void)
+ {
+ #ifdef CONFIG_X86_PS4
+-	return apcie_status() >= 0;
++	return ps4sb_status() >= 0;
+ #else
+ 	return false;
+ #endif
+diff --git a/drivers/ps4/Makefile b/drivers/ps4/Makefile
+index 5e5d0ad2d4f3267b4359a444d709a6d36687818c..87185bad571c1a9e07eee2ef3fca943db5035a11 100644
+--- a/drivers/ps4/Makefile
++++ b/drivers/ps4/Makefile
+@@ -8,11 +8,10 @@ obj-y += ps4-apcie.o \
+     sb-icc.o \
+     ps4-apcie-pwrbutton.o \
+     icc/i2c.o
+-obj-$(CONFIG_RTC_CLASS) += ps4-bpcie-rtc.o
++obj-$(CONFIG_RTC_CLASS) += sb-rtc.o
+ obj-y += ps4-led.o
+ obj-y += ps4-fan.o
+ obj-y += ps4-buzzer.o
+-obj-$(CONFIG_RTC_CLASS) += ps4-rtc.o
+ obj-y += ps4-sflash.o
+ obj-$(CONFIG_PS4_TRNG) += ps4-trng.o
+ obj-$(CONFIG_PS4_CCP) += ps4-ccp.o
+\ No newline at end of file
+diff --git a/drivers/ps4/baikal.h b/drivers/ps4/baikal.h
+index baf2c40abac7f001a2e658612eec68b3882d5280..8c052b33ff052803368ea6b79569da8b88cef084 100644
+--- a/drivers/ps4/baikal.h
++++ b/drivers/ps4/baikal.h
+@@ -160,14 +160,6 @@ static inline void pci_pm_stop_all(struct pci_dev *dev)
+ int bpcie_is_compatible_device(struct pci_dev *dev);
+ u32 glue_read32(struct bpcie_dev *sc, u32 offset);
+ void glue_write32(struct bpcie_dev *sc, u32 offset, u32 value);
+-#ifdef CONFIG_RTC_CLASS
+-int bpcie_rtc_init(struct bpcie_dev *sc);
+-#else
+-static inline int bpcie_rtc_init(struct bpcie_dev *sc)
+-{
+-	return 0;
+-}
+-#endif
+ int bpcie_baikal_sata_phy_init(struct pci_dev *pdev, void __iomem *ahci_mmio);
+ 
+ #endif
+diff --git a/drivers/ps4/ps4-apcie.c b/drivers/ps4/ps4-apcie.c
+index f06526507fd88c3b82ad44bad7fd663b5643c19e..bdf0bfe386b04bebc128f743b70e11d046c0cf1b 100644
+--- a/drivers/ps4/ps4-apcie.c
++++ b/drivers/ps4/ps4-apcie.c
+@@ -569,7 +569,6 @@ void ps4sb_icc_resume(struct apcie_dev *sc);
+ #endif
+ 
+ /* From arch/x86/platform/ps4/ps4.c */
+-extern bool apcie_initialized;
+ 
+ static const struct ps4sb_family aeolia_family = {
+ 	.name		= "Aeolia",
+@@ -584,6 +583,10 @@ static const struct ps4sb_family aeolia_family = {
+ 	.icc_boot_led	= true,
+ 	.i2c_data_off	= 0x14,
+ 	.i2c_err_off	= 0x0c,
++	.rtc_bar	= 2,
++	.rtc_reg	= 0x130,
++	.rtc_byte_regs	= true,
++	.rtc_epoch	= -1431543102LL,
+ };
+ 
+ static int apcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+@@ -626,10 +629,12 @@ static int apcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+ 
+ 	if ((ret = apcie_glue_init(sc)) < 0)
+ 		goto free_bars;
++	if (ps4sb_rtc_init(sc) < 0)
++		sc_err("rtc not registered\n");
+ 	if ((ret = ps4sb_icc_init(sc)) < 0)
+ 		goto remove_glue;
+ 
+-	WRITE_ONCE(apcie_initialized, true);
++	WRITE_ONCE(ps4sb_initialized, true);
+ 	return 0;
+ 
+ remove_glue:
+@@ -651,7 +656,7 @@ static void apcie_remove(struct pci_dev *dev) {
+ 	struct apcie_dev *sc;
+ 	sc = pci_get_drvdata(dev);
+ 
+-	WRITE_ONCE(apcie_initialized, false);
++	WRITE_ONCE(ps4sb_initialized, false);
+ 	ps4sb_icc_remove(sc);
+ 	ps4sb_uart_remove(sc);
+ 	apcie_glue_remove(sc);
+diff --git a/drivers/ps4/ps4-bpcie-rtc.c b/drivers/ps4/ps4-bpcie-rtc.c
+deleted file mode 100644
+index 1454f8763cb06207b3b9d05c261a0757ec3f546c..0000000000000000000000000000000000000000
+--- a/drivers/ps4/ps4-bpcie-rtc.c
++++ /dev/null
+@@ -1,98 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0-only
+-#include <linux/delay.h>
+-#include <linux/pci.h>
+-#include <linux/rtc.h>
+-
+-#include "baikal.h"
+-
+-#define BPCIE_RTC_STATUS		0x50cc
+-#define BPCIE_RTC_SECONDS		0x50d0
+-#define BPCIE_RTC_STATUS_BATTERY_OK	BIT(8)
+-#define BPCIE_RTC_STATUS_CLOCK_OK	BIT(9)
+-#define BPCIE_RTC_EPOCH			1325376000LL
+-#define BPCIE_RTC_READ_RETRIES		21
+-#define BPCIE_RTC_RETRY_DELAY_US	100
+-
+-struct bpcie_rtc {
+-	struct bpcie_dev *sc;
+-	time64_t offset;
+-};
+-
+-static struct bpcie_rtc bpcie_rtc;
+-
+-static int bpcie_rtc_read_seconds(struct bpcie_dev *sc, u32 *seconds)
+-{
+-	u32 previous, current_value;
+-	int retry;
+-
+-	previous = ioread32(sc->bar4 + BPCIE_RTC_SECONDS);
+-	for (retry = 0; retry < BPCIE_RTC_READ_RETRIES; retry++) {
+-		udelay(BPCIE_RTC_RETRY_DELAY_US);
+-		current_value = ioread32(sc->bar4 + BPCIE_RTC_SECONDS);
+-		if (current_value == previous) {
+-			*seconds = current_value;
+-			return 0;
+-		}
+-		previous = current_value;
+-	}
+-	return -EIO;
+-}
+-
+-static int bpcie_rtc_read_time(struct device *dev, struct rtc_time *tm)
+-{
+-	struct bpcie_rtc *rtc = &bpcie_rtc;
+-	u32 seconds;
+-	int ret;
+-
+-	ret = bpcie_rtc_read_seconds(rtc->sc, &seconds);
+-	if (ret)
+-		return ret;
+-
+-	rtc_time64_to_tm(BPCIE_RTC_EPOCH + seconds + rtc->offset, tm);
+-	return 0;
+-}
+-
+-static int bpcie_rtc_set_time(struct device *dev, struct rtc_time *tm)
+-{
+-	struct bpcie_rtc *rtc = &bpcie_rtc;
+-	u32 seconds;
+-	int ret;
+-
+-	ret = bpcie_rtc_read_seconds(rtc->sc, &seconds);
+-	if (ret)
+-		return ret;
+-
+-	rtc->offset = rtc_tm_to_time64(tm) - (BPCIE_RTC_EPOCH + seconds);
+-	return 0;
+-}
+-
+-static const struct rtc_class_ops bpcie_rtc_ops = {
+-	.read_time = bpcie_rtc_read_time,
+-	.set_time = bpcie_rtc_set_time,
+-};
+-
+-int bpcie_rtc_init(struct bpcie_dev *sc)
+-{
+-	struct device *dev = &sc->pdev->dev;
+-	struct rtc_device *rtc_dev;
+-	u32 status;
+-
+-	status = ioread32(sc->bar4 + BPCIE_RTC_STATUS);
+-	if (!(status & BPCIE_RTC_STATUS_BATTERY_OK))
+-		dev_warn(dev, "rtc: battery failure indication\n");
+-	if (!(status & BPCIE_RTC_STATUS_CLOCK_OK))
+-		dev_warn(dev, "rtc: clock failure indication\n");
+-
+-	if (bpcie_rtc.sc)
+-		return -EBUSY;
+-
+-	rtc_dev = devm_rtc_allocate_device(dev);
+-	if (IS_ERR(rtc_dev))
+-		return PTR_ERR(rtc_dev);
+-
+-	bpcie_rtc.sc = sc;
+-	bpcie_rtc.offset = 0;
+-	rtc_dev->ops = &bpcie_rtc_ops;
+-
+-	return devm_rtc_register_device(rtc_dev);
+-}
+diff --git a/drivers/ps4/ps4-bpcie.c b/drivers/ps4/ps4-bpcie.c
+index 56107d38a096376f208f551e91498ac0f7103c84..fa0bcc4fb39e1aaa5afecb925a20cc0ecaded183 100644
+--- a/drivers/ps4/ps4-bpcie.c
++++ b/drivers/ps4/ps4-bpcie.c
+@@ -406,7 +406,6 @@ static int bpcie_glue_resume(struct bpcie_dev *sc) {
+ #ifdef CONFIG_PM
+ #endif
+ 
+-extern bool bpcie_initialized;
+ 
+ static const struct ps4sb_family baikal_family = {
+ 	.name			= "Baikal",
+@@ -421,6 +420,10 @@ static const struct ps4sb_family baikal_family = {
+ 	.icc_usb_power		= true,
+ 	.i2c_data_off		= 8,
+ 	.i2c_err_off		= 0,
++	.rtc_bar		= 4,
++	.rtc_reg		= 0x50d0,
++	.rtc_status		= 0x50cc,
++	.rtc_epoch		= 1325376000LL,
+ };
+ 
+ static int bpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+@@ -461,12 +464,12 @@ static int bpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+ 		goto free_bars;
+ 	if (ps4sb_uart_init(sc) < 0)
+ 		sc_err("uart not registered\n");
+-	if (bpcie_rtc_init(sc) < 0)
++	if (ps4sb_rtc_init(sc) < 0)
+ 		sc_err("rtc not registered\n");
+ 	if ((ret = ps4sb_icc_init(sc)) < 0)
+ 		goto remove_uart;
+ 
+-	WRITE_ONCE(bpcie_initialized, true);
++	WRITE_ONCE(ps4sb_initialized, true);
+ 	return 0;
+ 
+ remove_uart:
+@@ -489,7 +492,7 @@ static void bpcie_remove(struct pci_dev *dev) {
+ 	struct bpcie_dev *sc;
+ 	sc = pci_get_drvdata(dev);
+ 
+-	WRITE_ONCE(bpcie_initialized, false);
++	WRITE_ONCE(ps4sb_initialized, false);
+ 	ps4sb_icc_remove(sc);
+ 	ps4sb_uart_remove(sc);
+ 	bpcie_glue_remove(sc);
+diff --git a/drivers/ps4/ps4-led.c b/drivers/ps4/ps4-led.c
+index 34de02e15aa58906769ecfc798915186718600dc..6259494545d98e3dc09be0617d9a6812bda92bb4 100644
+--- a/drivers/ps4/ps4-led.c
++++ b/drivers/ps4/ps4-led.c
+@@ -276,7 +276,7 @@ static int ps4_led_probe(struct platform_device *pdev)
+ 		}
+ 	}
+ 
+-	boot_payload = bpcie_status() > 0 ? led_violet_blue : led_purple;
++	boot_payload = ps4_is_baikal() ? led_violet_blue : led_purple;
+ 
+ 	memset(reply, 0, sizeof(reply));
+ 	ret = ps4sb_icc_cmd(PS4_LED_ICC_MAJOR, PS4_LED_ICC_MINOR,
+diff --git a/drivers/ps4/ps4-rtc.c b/drivers/ps4/ps4-rtc.c
+deleted file mode 100644
+index 9275d485b4aa90bf56ee438e7d7e02bf61d3053f..0000000000000000000000000000000000000000
+--- a/drivers/ps4/ps4-rtc.c
++++ /dev/null
+@@ -1,278 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0-only
+-
+-#define pr_fmt(fmt) "ps4-rtc: " fmt
+-
+-#include <linux/module.h>
+-#include <linux/kernel.h>
+-#include <linux/init.h>
+-#include <linux/pci.h>
+-#include <linux/io.h>
+-#include <linux/delay.h>
+-#include <linux/fs.h>
+-#include <linux/miscdevice.h>
+-#include <linux/uaccess.h>
+-#include <linux/rtc.h>
+-
+-#include "ps4-rtc.h"
+-
+-#define PS4_RTC_MAX_RETRIES         10
+-#define PS4_RTC_STABILIZE_US        100
+-
+-static unsigned long long rtc_offset = 1431543102ULL;
+-module_param(rtc_offset, ullong, 0644);
+-
+-struct ps4_rtc_dev {
+-	struct pci_dev *pdev;
+-	void __iomem *mmio;
+-	struct miscdevice misc;
+-	struct rtc_device *rtc_dev;
+-};
+-
+-static struct ps4_rtc_dev *g_ps4_rtc;
+-
+-static u32 ps4_rtc_read_raw_unprotected(void __iomem *mmio)
+-{
+-	u32 b0 = ioread32(mmio + PS4_RTC_REG_B0) & 0xff;
+-	u32 b1 = ioread32(mmio + PS4_RTC_REG_B1) & 0xff;
+-	u32 b2 = ioread32(mmio + PS4_RTC_REG_B2) & 0xff;
+-	u32 b3 = ioread32(mmio + PS4_RTC_REG_B3) & 0xff;
+-
+-	return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+-}
+-
+-static u32 ps4_rtc_read_stable(void __iomem *mmio)
+-{
+-	u32 val1, val2;
+-	int retry;
+-
+-	for (retry = 0; retry < PS4_RTC_MAX_RETRIES; retry++) {
+-		val1 = ps4_rtc_read_raw_unprotected(mmio);
+-		udelay(PS4_RTC_STABILIZE_US);
+-		val2 = ps4_rtc_read_raw_unprotected(mmio);
+-
+-		if (val1 == val2)
+-			return val1;
+-	}
+-
+-	pr_warn_ratelimited("read instability: %08x != %08x\n", val1, val2);
+-	return val2;
+-}
+-
+-u32 ps4_rtc_get_raw_ticks(void)
+-{
+-	if (!g_ps4_rtc || !g_ps4_rtc->mmio)
+-		return 0;
+-
+-	return ps4_rtc_read_stable(g_ps4_rtc->mmio);
+-}
+-EXPORT_SYMBOL_GPL(ps4_rtc_get_raw_ticks);
+-
+-u64 ps4_rtc_get_time(void)
+-{
+-	u32 ticks = ps4_rtc_get_raw_ticks();
+-
+-	if (!ticks)
+-		return 0;
+-
+-	return (u64)((int64_t)ticks - rtc_offset);
+-}
+-EXPORT_SYMBOL_GPL(ps4_rtc_get_time);
+-
+-static int ps4_rtc_read_time(struct device *dev, struct rtc_time *tm)
+-{
+-	struct ps4_rtc_dev *rtc = g_ps4_rtc;
+-	u32 raw;
+-	time64_t t;
+-
+-	if (!rtc || !rtc->mmio)
+-		return -ENODEV;
+-
+-	raw = ps4_rtc_read_stable(rtc->mmio);
+-	t = (time64_t)raw - rtc_offset;
+-	rtc_time64_to_tm(t, tm);
+-	return 0;
+-}
+-
+-static int ps4_rtc_set_time(struct device *dev, struct rtc_time *tm)
+-{
+-	struct ps4_rtc_dev *rtc = g_ps4_rtc;
+-	u32 raw;
+-	time64_t t;
+-
+-	if (!rtc || !rtc->mmio)
+-		return -ENODEV;
+-
+-	raw = ps4_rtc_read_stable(rtc->mmio);
+-	t = rtc_tm_to_time64(tm);
+-	rtc_offset = (unsigned long long)((int64_t)raw - t);
+-	return 0;
+-}
+-
+-static const struct rtc_class_ops ps4_rtc_ops = {
+-	.read_time = ps4_rtc_read_time,
+-	.set_time  = ps4_rtc_set_time,
+-};
+-
+-static ssize_t ps4_rtc_dev_read(struct file *filp, char __user *ubuf, size_t count, loff_t *ppos)
+-{
+-	struct ps4_rtc_dev *rtc = filp->private_data;
+-	char buf[32];
+-	u32 ticks;
+-	int len;
+-
+-	if (*ppos > 0)
+-		return 0;
+-
+-	ticks = ps4_rtc_read_stable(rtc->mmio);
+-	len = scnprintf(buf, sizeof(buf), "%u\n", ticks);
+-
+-	if (copy_to_user(ubuf, buf, len))
+-		return -EFAULT;
+-
+-	*ppos += len;
+-	return len;
+-}
+-
+-static long ps4_rtc_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+-{
+-	struct ps4_rtc_dev *rtc = filp->private_data;
+-	u32 ticks;
+-	u64 t;
+-
+-	switch (cmd) {
+-	case PS4_RTC_IOC_GET_TICKS:
+-		ticks = ps4_rtc_read_stable(rtc->mmio);
+-		if (copy_to_user((u32 __user *)arg, &ticks, sizeof(ticks)))
+-			return -EFAULT;
+-		return 0;
+-	case PS4_RTC_IOC_GET_TIME:
+-		ticks = ps4_rtc_read_stable(rtc->mmio);
+-		t = (u64)((int64_t)ticks - rtc_offset);
+-		if (copy_to_user((u64 __user *)arg, &t, sizeof(t)))
+-			return -EFAULT;
+-		return 0;
+-	default:
+-		return -ENOTTY;
+-	}
+-}
+-
+-static int ps4_rtc_dev_open(struct inode *inode, struct file *filp)
+-{
+-	if (!g_ps4_rtc)
+-		return -ENODEV;
+-
+-	filp->private_data = g_ps4_rtc;
+-	return 0;
+-}
+-
+-static const struct file_operations ps4_rtc_fops = {
+-	.owner          = THIS_MODULE,
+-	.open           = ps4_rtc_dev_open,
+-	.read           = ps4_rtc_dev_read,
+-	.unlocked_ioctl = ps4_rtc_dev_ioctl,
+-	.llseek         = noop_llseek,
+-};
+-
+-static const struct {
+-	u16 device;
+-	const char *name;
+-} ps4_rtc_sb_devices[] = {
+-	{ PS4_AEOLIA_PCI_DEV_MISC_0, "Aeolia" },
+-	{ PS4_BELIZE_PCI_DEV_MISC_0, "Belize" },
+-	{ PS4_AEOLIA_PCI_DEV_MISC_2, "Aeolia" },
+-	{ PS4_BELIZE_PCI_DEV_MISC_2, "Belize" },
+-	{ PS4_AEOLIA_PCI_DEV_MISC_1, "Aeolia" },
+-};
+-
+-static int __init ps4_rtc_init(void)
+-{
+-	struct ps4_rtc_dev *rtc;
+-	struct pci_dev *pdev = NULL;
+-	const char *sb_name = "unknown";
+-	u32 initial_ticks;
+-	int ret, i;
+-
+-	for (i = 0; i < ARRAY_SIZE(ps4_rtc_sb_devices); i++) {
+-		pdev = pci_get_device(PS4_AEOLIA_VENDOR_ID, ps4_rtc_sb_devices[i].device, NULL);
+-		if (pdev) {
+-			sb_name = ps4_rtc_sb_devices[i].name;
+-			break;
+-		}
+-	}
+-
+-	if (!pdev) {
+-		pr_err("Southbridge device not found\n");
+-		return -ENODEV;
+-	}
+-
+-	rtc = kzalloc(sizeof(*rtc), GFP_KERNEL);
+-	if (!rtc) {
+-		pci_dev_put(pdev);
+-		return -ENOMEM;
+-	}
+-
+-	rtc->pdev = pdev;
+-	rtc->mmio = pci_iomap(pdev, 2, 0x1000);
+-	if (!rtc->mmio) {
+-		pr_err("failed to map %s Southbridge BAR2\n", sb_name);
+-		ret = -ENOMEM;
+-		goto err_free;
+-	}
+-
+-	rtc->misc.minor = MISC_DYNAMIC_MINOR;
+-	rtc->misc.name  = "ps4rtc";
+-	rtc->misc.fops  = &ps4_rtc_fops;
+-	ret = misc_register(&rtc->misc);
+-	if (ret) {
+-		pr_err("failed to register misc device\n");
+-		goto err_unmap;
+-	}
+-
+-	g_ps4_rtc = rtc;
+-
+-	rtc->rtc_dev = devm_rtc_allocate_device(&pdev->dev);
+-	if (!IS_ERR(rtc->rtc_dev)) {
+-		rtc->rtc_dev->ops = &ps4_rtc_ops;
+-		ret = devm_rtc_register_device(rtc->rtc_dev);
+-		if (ret)
+-			pr_warn("failed to register with Linux RTC core: %d\n", ret);
+-	}
+-
+-	initial_ticks = ps4_rtc_read_stable(rtc->mmio);
+-
+-	pr_info("%s Southbridge hardware RTC initialized (PCI %04x:%04x)\n",
+-		sb_name, pdev->vendor, pdev->device);
+-	pr_info("Current hardware RTC raw ticks: %u (0x%08x)\n",
+-		initial_ticks, initial_ticks);
+-	pr_info("Userspace character device registered (/dev/ps4rtc)\n");
+-	return 0;
+-
+-err_unmap:
+-	g_ps4_rtc = NULL;
+-	pci_iounmap(pdev, rtc->mmio);
+-err_free:
+-	pci_dev_put(pdev);
+-	kfree(rtc);
+-	return ret;
+-}
+-
+-static void __exit ps4_rtc_exit(void)
+-{
+-	struct ps4_rtc_dev *rtc = g_ps4_rtc;
+-
+-	if (!rtc)
+-		return;
+-
+-	misc_deregister(&rtc->misc);
+-	pci_iounmap(rtc->pdev, rtc->mmio);
+-	pci_dev_put(rtc->pdev);
+-	kfree(rtc);
+-	g_ps4_rtc = NULL;
+-}
+-
+-module_init(ps4_rtc_init);
+-module_exit(ps4_rtc_exit);
+-
+-MODULE_AUTHOR("Armandas Kvietkus <armandas.kvietkus@proton.me>");
+-MODULE_DESCRIPTION("PS4 Aeolia/Belize Southbridge Hardware Real-Time Clock Driver");
+-MODULE_LICENSE("GPL");
+diff --git a/drivers/ps4/ps4-rtc.h b/drivers/ps4/ps4-rtc.h
+deleted file mode 100644
+index 6a3bb42c34f0729232580f9893ed176d9359a16c..0000000000000000000000000000000000000000
+--- a/drivers/ps4/ps4-rtc.h
++++ /dev/null
+@@ -1,41 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0-only
+-
+-#ifndef _PS4_RTC_H
+-#define _PS4_RTC_H
+-
+-#include <linux/types.h>
+-#include <linux/ioctl.h>
+-#include <linux/pci_ids.h>
+-
+-#define PS4_AEOLIA_VENDOR_ID        PCI_VENDOR_ID_SONY
+-#define PS4_AEOLIA_PCI_DEV_MISC_0   PCI_DEVICE_ID_SONY_AEOLIA_PCIE
+-#define PS4_AEOLIA_PCI_DEV_MISC_1   0x9090
+-#define PS4_AEOLIA_PCI_DEV_MISC_2   PCI_DEVICE_ID_SONY_AEOLIA_SDHCI
+-
+-#define PS4_BELIZE_VENDOR_ID        PCI_VENDOR_ID_SONY
+-#define PS4_BELIZE_PCI_DEV_MISC_0   PCI_DEVICE_ID_SONY_BELIZE_PCIE
+-#define PS4_BELIZE_PCI_DEV_MISC_2   PCI_DEVICE_ID_SONY_BELIZE_SDHCI
+-
+-#define PS4_RTC_REG_B0              0x130
+-#define PS4_RTC_REG_B1              0x134
+-#define PS4_RTC_REG_B2              0x138
+-#define PS4_RTC_REG_B3              0x13c
+-
+-#define PS4_AEOLIA_RTC_REG_B0       PS4_RTC_REG_B0
+-#define PS4_AEOLIA_RTC_REG_B1       PS4_RTC_REG_B1
+-#define PS4_AEOLIA_RTC_REG_B2       PS4_RTC_REG_B2
+-#define PS4_AEOLIA_RTC_REG_B3       PS4_RTC_REG_B3
+-
+-#define PS4_BELIZE_RTC_REG_B0       PS4_RTC_REG_B0
+-#define PS4_BELIZE_RTC_REG_B1       PS4_RTC_REG_B1
+-#define PS4_BELIZE_RTC_REG_B2       PS4_RTC_REG_B2
+-#define PS4_BELIZE_RTC_REG_B3       PS4_RTC_REG_B3
+-
+-#define PS4_RTC_IOC_MAGIC           'R'
+-#define PS4_RTC_IOC_GET_TICKS       _IOR(PS4_RTC_IOC_MAGIC, 1, __u32)
+-#define PS4_RTC_IOC_GET_TIME        _IOR(PS4_RTC_IOC_MAGIC, 2, __u64)
+-
+-u32 ps4_rtc_get_raw_ticks(void);
+-u64 ps4_rtc_get_time(void);
+-
+-#endif
+diff --git a/drivers/ps4/ps4sb.h b/drivers/ps4/ps4sb.h
+index e8a97298aee5a1c84f6939d81632c02abe10cb09..605476847c81f2b9994509776cdc2f9e71384268 100644
+--- a/drivers/ps4/ps4sb.h
++++ b/drivers/ps4/ps4sb.h
+@@ -61,6 +61,11 @@ struct ps4sb_family {
+ 	bool icc_boot_led;
+ 	u8 i2c_data_off;
+ 	u8 i2c_err_off;
++	unsigned int rtc_bar;
++	u32 rtc_reg;
++	u32 rtc_status;
++	bool rtc_byte_regs;
++	s64 rtc_epoch;
+ };
+ 
+ struct ps4sb_icc_dev {
+@@ -140,6 +145,14 @@ void ps4sb_uart_resume(struct ps4sb_dev *sc);
+ void ps4sb_icc_suspend(struct ps4sb_dev *sc, pm_message_t state);
+ void ps4sb_icc_resume(struct ps4sb_dev *sc);
+ #endif
++#ifdef CONFIG_RTC_CLASS
++int ps4sb_rtc_init(struct ps4sb_dev *sc);
++#else
++static inline int ps4sb_rtc_init(struct ps4sb_dev *sc)
++{
++	return 0;
++}
++#endif
+ int icc_i2c_init(struct ps4sb_dev *sc);
+ void icc_i2c_remove(struct ps4sb_dev *sc);
+ int icc_pwrbutton_init(struct ps4sb_dev *sc);
+diff --git a/drivers/ps4/sb-rtc.c b/drivers/ps4/sb-rtc.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..d083838013c431ea73398340df3cc62729d3caa8
+--- /dev/null
++++ b/drivers/ps4/sb-rtc.c
+@@ -0,0 +1,176 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#include <linux/delay.h>
++#include <linux/fs.h>
++#include <linux/miscdevice.h>
++#include <linux/pci.h>
++#include <linux/rtc.h>
++#include <linux/uaccess.h>
++
++#include "ps4sb.h"
++
++#define RTC_READ_RETRIES	21
++#define RTC_RETRY_DELAY_US	100
++#define RTC_STATUS_BATTERY_OK	BIT(8)
++#define RTC_STATUS_CLOCK_OK	BIT(9)
++
++#define RTC_IOC_GET_TICKS	_IOR('R', 1, __u32)
++#define RTC_IOC_GET_TIME	_IOR('R', 2, __u64)
++
++struct ps4sb_rtc {
++	struct ps4sb_dev *sc;
++	void __iomem *regs;
++	time64_t offset;
++};
++
++static struct ps4sb_rtc ps4sb_rtc;
++
++static u32 rtc_read_raw(struct ps4sb_rtc *rtc)
++{
++	u32 value = 0;
++	int i;
++
++	if (!rtc->sc->family->rtc_byte_regs)
++		return ioread32(rtc->regs);
++
++	for (i = 0; i < 4; i++)
++		value |= (ioread32(rtc->regs + i * 4) & 0xff) << (i * 8);
++	return value;
++}
++
++static int rtc_read_ticks(struct ps4sb_rtc *rtc, u32 *ticks)
++{
++	u32 previous = rtc_read_raw(rtc);
++	u32 current_value;
++	int retry;
++
++	for (retry = 0; retry < RTC_READ_RETRIES; retry++) {
++		udelay(RTC_RETRY_DELAY_US);
++		current_value = rtc_read_raw(rtc);
++		if (current_value == previous) {
++			*ticks = current_value;
++			return 0;
++		}
++		previous = current_value;
++	}
++	return -EIO;
++}
++
++static time64_t rtc_ticks_to_time(struct ps4sb_rtc *rtc, u32 ticks)
++{
++	return rtc->sc->family->rtc_epoch + ticks + rtc->offset;
++}
++
++static int ps4sb_rtc_read_time(struct device *dev, struct rtc_time *tm)
++{
++	u32 ticks;
++	int ret;
++
++	ret = rtc_read_ticks(&ps4sb_rtc, &ticks);
++	if (ret)
++		return ret;
++
++	rtc_time64_to_tm(rtc_ticks_to_time(&ps4sb_rtc, ticks), tm);
++	return 0;
++}
++
++static int ps4sb_rtc_set_time(struct device *dev, struct rtc_time *tm)
++{
++	u32 ticks;
++	int ret;
++
++	ret = rtc_read_ticks(&ps4sb_rtc, &ticks);
++	if (ret)
++		return ret;
++
++	ps4sb_rtc.offset = rtc_tm_to_time64(tm) -
++			   (ps4sb_rtc.sc->family->rtc_epoch + ticks);
++	return 0;
++}
++
++static const struct rtc_class_ops ps4sb_rtc_ops = {
++	.read_time = ps4sb_rtc_read_time,
++	.set_time = ps4sb_rtc_set_time,
++};
++
++static ssize_t rtc_dev_read(struct file *file, char __user *ubuf, size_t count,
++			    loff_t *ppos)
++{
++	char buf[32];
++	u32 ticks;
++	int ret;
++
++	ret = rtc_read_ticks(&ps4sb_rtc, &ticks);
++	if (ret)
++		return ret;
++
++	ret = scnprintf(buf, sizeof(buf), "%u\n", ticks);
++	return simple_read_from_buffer(ubuf, count, ppos, buf, ret);
++}
++
++static long rtc_dev_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
++{
++	u32 ticks;
++	u64 time;
++	int ret;
++
++	ret = rtc_read_ticks(&ps4sb_rtc, &ticks);
++	if (ret)
++		return ret;
++
++	switch (cmd) {
++	case RTC_IOC_GET_TICKS:
++		return put_user(ticks, (u32 __user *)arg);
++	case RTC_IOC_GET_TIME:
++		time = rtc_ticks_to_time(&ps4sb_rtc, ticks);
++		return put_user(time, (u64 __user *)arg);
++	default:
++		return -ENOTTY;
++	}
++}
++
++static const struct file_operations rtc_dev_fops = {
++	.owner		= THIS_MODULE,
++	.read		= rtc_dev_read,
++	.unlocked_ioctl	= rtc_dev_ioctl,
++	.llseek		= noop_llseek,
++};
++
++static struct miscdevice rtc_miscdev = {
++	.minor	= MISC_DYNAMIC_MINOR,
++	.name	= "ps4rtc",
++	.fops	= &rtc_dev_fops,
++};
++
++int ps4sb_rtc_init(struct ps4sb_dev *sc)
++{
++	const struct ps4sb_family *f = sc->family;
++	struct device *dev = &sc->pdev->dev;
++	struct rtc_device *rtc_dev;
++	int ret;
++
++	if (ps4sb_rtc.sc)
++		return -EBUSY;
++
++	if (f->rtc_status) {
++		u32 status = ioread32(ps4sb_bar(sc, f->rtc_bar) + f->rtc_status);
++
++		if (!(status & RTC_STATUS_BATTERY_OK))
++			dev_warn(dev, "rtc: battery failure indication\n");
++		if (!(status & RTC_STATUS_CLOCK_OK))
++			dev_warn(dev, "rtc: clock failure indication\n");
++	}
++
++	rtc_dev = devm_rtc_allocate_device(dev);
++	if (IS_ERR(rtc_dev))
++		return PTR_ERR(rtc_dev);
++
++	ps4sb_rtc.sc = sc;
++	ps4sb_rtc.regs = ps4sb_bar(sc, f->rtc_bar) + f->rtc_reg;
++	rtc_dev->ops = &ps4sb_rtc_ops;
++
++	ret = devm_rtc_register_device(rtc_dev);
++	if (ret)
++		return ret;
++
++	return misc_register(&rtc_miscdev);
++}
+diff --git a/drivers/usb/host/xhci-aeolia.c b/drivers/usb/host/xhci-aeolia.c
+index 9ffed71367f7d383a80e7c86d34217430fb9699b..5f0f2826039a2148006a46a28b3496beda688d33 100644
+--- a/drivers/usb/host/xhci-aeolia.c
++++ b/drivers/usb/host/xhci-aeolia.c
+@@ -84,24 +84,6 @@ static int xhci_aeolia_irqnum(struct aeolia_xhci *axhci,
+ 	return dev->irq + index;
+ }
+ 
+-static int xhci_aeolia_assign_irqs(struct pci_dev *dev)
+-{
+-	if (xhci_aeolia_is_baikal(dev))
+-		return bpcie_assign_irqs(dev, NR_DEVICES);
+-
+-	return apcie_assign_irqs(dev, NR_DEVICES);
+-}
+-
+-static void xhci_aeolia_free_irqs(struct pci_dev *dev, int nr_irqs)
+-{
+-	if (xhci_aeolia_is_baikal(dev)) {
+-		bpcie_free_irqs(dev->irq, nr_irqs);
+-		return;
+-	}
+-
+-	apcie_free_irqs(dev->irq, nr_irqs);
+-}
+-
+ static int xhci_aeolia_probe_one(struct pci_dev *dev, int index)
+ {
+ 	int retval;
+@@ -441,7 +423,7 @@ static int xhci_aeolia_probe(struct pci_dev *dev, const struct pci_device_id *id
+ 	bool ahci_started = false;
+ 	struct aeolia_xhci *axhci;
+ 
+-	if (apcie_status() == 0)
++	if (ps4sb_status() == 0)
+ 		return -EPROBE_DEFER;
+ 
+ 	if (pci_enable_device(dev) < 0)
+@@ -454,7 +436,7 @@ static int xhci_aeolia_probe(struct pci_dev *dev, const struct pci_device_id *id
+ 	}
+ 	pci_set_drvdata(dev, axhci);
+ 
+-	axhci->nr_irqs = retval = xhci_aeolia_assign_irqs(dev);
++	axhci->nr_irqs = retval = ps4sb_assign_irqs(dev, NR_DEVICES);
+ 	if (retval < 0) {
+ 		goto free_axhci;
+ 	}
+@@ -501,7 +483,7 @@ remove_hcds:
+ 	if (ahci_started)
+ 		ahci_remove_one(dev);
+ free_irqs:
+-	xhci_aeolia_free_irqs(dev, axhci->nr_irqs);
++	ps4sb_free_irqs(dev->irq, axhci->nr_irqs);
+ free_axhci:
+ 	pci_set_drvdata(dev, NULL);
+ 	kfree(axhci);
+@@ -526,7 +508,7 @@ static void xhci_aeolia_remove(struct pci_dev *dev)
+ 	if (dev->device == PCI_DEVICE_ID_SONY_BELIZE_XHCI ||
+ 	    xhci_aeolia_is_baikal(dev))
+ 		ahci_remove_one(dev);
+-	xhci_aeolia_free_irqs(dev, axhci->nr_irqs);
++	ps4sb_free_irqs(dev->irq, axhci->nr_irqs);
+ 
+ 	pci_set_drvdata(dev, NULL);
+ 	kfree(axhci);

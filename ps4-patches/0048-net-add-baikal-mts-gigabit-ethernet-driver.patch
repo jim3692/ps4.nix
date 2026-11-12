@@ -1,0 +1,1273 @@
+From 6934876ea2f1bd5262494f5d24f86ec9dcc30453 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Wed, 4 Nov 2026 19:11:12 +0100
+Subject: [PATCH 048/124] net: add baikal mts gigabit ethernet driver
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/net/ethernet/Kconfig             |   1 +
+ drivers/net/ethernet/Makefile            |   1 +
+ drivers/net/ethernet/sony/Kconfig        |  18 +
+ drivers/net/ethernet/sony/Makefile       |   2 +
+ drivers/net/ethernet/sony/mts/Kconfig    |  10 +
+ drivers/net/ethernet/sony/mts/Makefile   |   3 +
+ drivers/net/ethernet/sony/mts/mts.h      | 181 ++++++
+ drivers/net/ethernet/sony/mts/mts_main.c | 712 +++++++++++++++++++++++
+ drivers/net/ethernet/sony/mts/mts_phy.c  | 256 ++++++++
+ 9 files changed, 1184 insertions(+)
+ create mode 100644 drivers/net/ethernet/sony/Kconfig
+ create mode 100644 drivers/net/ethernet/sony/Makefile
+ create mode 100644 drivers/net/ethernet/sony/mts/Kconfig
+ create mode 100644 drivers/net/ethernet/sony/mts/Makefile
+ create mode 100644 drivers/net/ethernet/sony/mts/mts.h
+ create mode 100644 drivers/net/ethernet/sony/mts/mts_main.c
+ create mode 100644 drivers/net/ethernet/sony/mts/mts_phy.c
+
+diff --git a/drivers/net/ethernet/Kconfig b/drivers/net/ethernet/Kconfig
+index 8581ccba1505e3aaaeac645a88b804a080aa8f51..aff0d6f31d7d63a5604e7a5632d67d4f6764221a 100644
+--- a/drivers/net/ethernet/Kconfig
++++ b/drivers/net/ethernet/Kconfig
+@@ -174,6 +174,7 @@ source "drivers/net/ethernet/sis/Kconfig"
+ source "drivers/net/ethernet/sfc/Kconfig"
+ source "drivers/net/ethernet/smsc/Kconfig"
+ source "drivers/net/ethernet/socionext/Kconfig"
++source "drivers/net/ethernet/sony/Kconfig"
+ source "drivers/net/ethernet/spacemit/Kconfig"
+ source "drivers/net/ethernet/stmicro/Kconfig"
+ source "drivers/net/ethernet/sun/Kconfig"
+diff --git a/drivers/net/ethernet/Makefile b/drivers/net/ethernet/Makefile
+index 2b1153d35b52b3ac7847110e863f357b7e2f86af..6e39a0d9d2db0de8b2385564acf5409d0e500022 100644
+--- a/drivers/net/ethernet/Makefile
++++ b/drivers/net/ethernet/Makefile
+@@ -88,6 +88,7 @@ obj-$(CONFIG_NET_VENDOR_SOLARFLARE) += sfc/
+ obj-$(CONFIG_NET_VENDOR_SGI) += sgi/
+ obj-$(CONFIG_NET_VENDOR_SMSC) += smsc/
+ obj-$(CONFIG_NET_VENDOR_SOCIONEXT) += socionext/
++obj-$(CONFIG_NET_VENDOR_SONY) += sony/
+ obj-$(CONFIG_NET_VENDOR_SPACEMIT) += spacemit/
+ obj-$(CONFIG_NET_VENDOR_STMICRO) += stmicro/
+ obj-$(CONFIG_NET_VENDOR_SUN) += sun/
+diff --git a/drivers/net/ethernet/sony/Kconfig b/drivers/net/ethernet/sony/Kconfig
+new file mode 100644
+index 0000000000000000000000000000000000000000..16e8c20a754e0fb7e13b4811cbc84ad57009344f
+--- /dev/null
++++ b/drivers/net/ethernet/sony/Kconfig
+@@ -0,0 +1,18 @@
++# SPDX-License-Identifier: GPL-2.0-only
++config NET_VENDOR_SONY
++	bool "Sony devices"
++	default y
++	depends on PCI
++	help
++	  If you have a network (Ethernet) card belonging to this class, say Y.
++
++	  Note that the answer to this question doesn't directly affect the
++	  kernel: saying N will just cause the configurator to skip all
++	  the questions about Sony cards. If you say Y, you will be asked
++	  for your specific card in the following questions.
++
++if NET_VENDOR_SONY
++
++source "drivers/net/ethernet/sony/mts/Kconfig"
++
++endif # NET_VENDOR_SONY
+diff --git a/drivers/net/ethernet/sony/Makefile b/drivers/net/ethernet/sony/Makefile
+new file mode 100644
+index 0000000000000000000000000000000000000000..c7621810943191e7cdb75eb7555238d9d07ae68e
+--- /dev/null
++++ b/drivers/net/ethernet/sony/Makefile
+@@ -0,0 +1,2 @@
++# SPDX-License-Identifier: GPL-2.0-only
++obj-$(CONFIG_MTS) += mts/
+diff --git a/drivers/net/ethernet/sony/mts/Kconfig b/drivers/net/ethernet/sony/mts/Kconfig
+new file mode 100644
+index 0000000000000000000000000000000000000000..42973f63759d4f5fda292d559e226eec1c9728f7
+--- /dev/null
++++ b/drivers/net/ethernet/sony/mts/Kconfig
+@@ -0,0 +1,10 @@
++# SPDX-License-Identifier: GPL-2.0-only
++config MTS
++	tristate "PlayStation 4 Baikal Gigabit Ethernet"
++	depends on PCI && X86_PS4_BAIKAL
++	help
++	  Driver for the Sony mts Gigabit Ethernet controller (104d:90d8)
++	  in the Baikal southbridge of the PlayStation 4.
++
++	  To compile this driver as a module, choose M here. The module
++	  will be called mts.
+diff --git a/drivers/net/ethernet/sony/mts/Makefile b/drivers/net/ethernet/sony/mts/Makefile
+new file mode 100644
+index 0000000000000000000000000000000000000000..e01771be845b779ed8bbc752947658fdb20ae60f
+--- /dev/null
++++ b/drivers/net/ethernet/sony/mts/Makefile
+@@ -0,0 +1,3 @@
++# SPDX-License-Identifier: GPL-2.0-only
++obj-$(CONFIG_MTS) += mts.o
++mts-y := mts_main.o mts_phy.o
+diff --git a/drivers/net/ethernet/sony/mts/mts.h b/drivers/net/ethernet/sony/mts/mts.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..ea16953f6eeafe1af336e5fdcb08bd1862b6c553
+--- /dev/null
++++ b/drivers/net/ethernet/sony/mts/mts.h
+@@ -0,0 +1,181 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++
++#ifndef _MTS_H
++#define _MTS_H
++
++#include <linux/bits.h>
++#include <linux/io.h>
++#include <linux/netdevice.h>
++#include <linux/spinlock.h>
++#include <linux/types.h>
++#include <linux/workqueue.h>
++
++struct pci_dev;
++
++#define MTS_REG_SMI		0x000
++#define MTS_REG_LINK		0x004
++#define MTS_REG_CLK_CTRL	0x008
++#define MTS_REG_CTRL		0x00c
++#define MTS_REG_MODE		0x010
++#define MTS_REG_MAC_HI		0x014
++#define MTS_REG_MAC_LO		0x018
++#define MTS_REG_MC_HASH		0x01c
++#define MTS_REG_RXBUF		0x030
++#define MTS_REG_TX_DMA_CTRL	0x034
++#define MTS_REG_RX_DMA_CTRL	0x038
++#define MTS_REG_TX_RING_CUR	0x03c
++#define MTS_REG_RX_RING_CUR	0x040
++#define MTS_REG_TX_RING_BASE	0x044
++#define MTS_REG_RX_RING_BASE	0x048
++#define MTS_REG_ISR		0x050
++#define MTS_REG_IMR		0x054
++#define MTS_REG_SERDES		0x074
++#define MTS_REG_RX_PCODE	0x078
++#define MTS_REG_CLK_FREQ	0x07c
++#define MTS_REG_RESET		0x0ac
++#define MTS_REG_MIB_RX_DROP	0x110
++#define MTS_REG_MIB_RX_CRC	0x114
++#define MTS_REG_RX_EN		0x1d4
++#define MTS_REG_WOL_CTRL	0x200
++#define MTS_REG_COAL		0x204
++
++#define MTS_GLUE_FUSE_BASE	0xc000
++#define MTS_GLUE_FUSE_SIZE	0x100
++
++#define MTS_CLK_ENABLE		0x07597c00
++#define MTS_CLK_FREQ_HZ		25000000
++#define MTS_SERDES_VAL		0x2277
++#define MTS_RXBUF_VAL		0x00010100
++#define MTS_RESET_VAL		9
++
++#define MTS_LINK_UP		BIT(0)
++#define MTS_LINK_AN_EN		BIT(8)
++#define MTS_LINK_SPEED		GENMASK(10, 9)
++#define MTS_LINK_SPEED_10	0
++#define MTS_LINK_SPEED_100	1
++#define MTS_LINK_SPEED_1000	2
++#define MTS_LINK_FULL_DPX	BIT(11)
++#define MTS_LINK_KEEP		0x7fffcfff
++
++#define MTS_ISR_LINK		BIT(2)
++#define MTS_ISR_RX_DONE		BIT(6)
++#define MTS_ISR_TX_DONE		BIT(7)
++#define MTS_ISR_RX_EMPTY	(BIT(1) | BIT(5))
++#define MTS_ISR_TIMER		BIT(18)
++#define MTS_ISR_WORK		(MTS_ISR_RX_DONE | MTS_ISR_RX_EMPTY | MTS_ISR_TX_DONE)
++#define MTS_ISR_ERRORS		0x7be600
++#define MTS_ISR_LSO_RECOVER	0x500000
++
++#define MTS_ERR_LSO_FIFO	BIT(21)
++#define MTS_ERR_LSO_PROTO	BIT(19)
++#define MTS_ERR_RX_AXI		BIT(17)
++#define MTS_ERR_IP_CKSUM	BIT(15)
++#define MTS_ERR_TCP_CKSUM	BIT(14)
++#define MTS_ERR_UDP_CKSUM	BIT(13)
++#define MTS_ERR_RX_PCODE	BIT(10)
++
++#define MTS_IMR_NORMAL		0x1018
++#define MTS_IMR_ALL		0x7fffff
++#define MTS_IMR_TIMER		(MTS_IMR_ALL & ~MTS_ISR_TIMER)
++
++#define MTS_COAL_EN		BIT(28)
++#define MTS_COAL_TICK		0x1388
++
++#define MTS_MODE_PROMISC	BIT(4)
++
++#define MTS_MC_HASH_CLEAR	BIT(31)
++#define MTS_MC_HASH_CLEARED	BIT(17)
++#define MTS_MC_HASH_BUSY	BIT(14)
++#define MTS_MC_HASH_SET		0x7000
++#define MTS_MC_HASH_BITS	256
++
++#define MTS_DMA_START		BIT(0)
++#define MTS_DMA_STOP		BIT(1)
++#define MTS_DMA_KICK		BIT(2)
++
++#define MTS_ST_LSO_RECOVER	0
++#define MTS_ST_RX_RESTART	1
++
++struct mts_desc {
++	__le32	flags;
++	__le32	buf_addr;
++	__le32	word2;
++	__le32	word3;
++};
++
++#define MTS_DESC_DONE		BIT(31)
++#define MTS_DESC_WRAP		BIT(30)
++#define MTS_DESC_SOP		BIT(29)
++#define MTS_DESC_EOP		BIT(28)
++#define MTS_DESC_LEN_MASK	0xffff
++#define MTS_DESC_RX_LEN		0x600
++#define MTS_DESC_RX_LEN_MASK	0x7ff
++#define MTS_DESC_W2_FREE	0xffff0000
++#define MTS_DESC_W2_TX		0x4
++
++#define MTS_RING_ALIGN		0x4000
++#define MTS_TX_RING_SIZE	256
++#define MTS_TX_RING_BYTES	MTS_RING_ALIGN
++#define MTS_RX_RING_SIZE	1024
++#define MTS_RX_RING_BYTES	(MTS_RX_RING_SIZE * sizeof(struct mts_desc))
++#define MTS_TX_MAX_LEN		1536
++#define MTS_TX_SCRATCH_SIZE	0xa0000
++#define MTS_RX_POOL_SIZE	(MTS_RX_RING_SIZE * MTS_DESC_RX_LEN)
++
++struct mts_priv {
++	struct net_device	*netdev;
++	struct pci_dev		*pdev;
++	void __iomem		*base;
++	void __iomem		*fuse;
++	struct pci_dev		*glue_pdev;
++
++	struct mts_desc		*tx_ring;
++	dma_addr_t		tx_ring_dma;
++	void			*tx_scratch;
++	dma_addr_t		tx_scratch_dma;
++	unsigned int		tx_scratch_off;
++	unsigned int		tx_head;
++	unsigned int		tx_tail;
++
++	struct mts_desc		*rx_ring;
++	dma_addr_t		rx_ring_dma;
++	void			*rx_pool;
++	dma_addr_t		rx_pool_dma;
++	unsigned int		rx_head;
++
++	struct napi_struct	napi;
++	struct delayed_work	link_poll;
++	spinlock_t		lock;
++	unsigned long		state;
++	int			irq;
++	bool			link_up;
++	bool			coal_on;
++	u32			irq_count;
++	u32			irq_seen;
++};
++
++static inline u32 mts_rd(struct mts_priv *p, u32 reg)
++{
++	return readl(p->base + reg);
++}
++
++static inline void mts_wr(struct mts_priv *p, u32 reg, u32 val)
++{
++	writel(val, p->base + reg);
++}
++
++static inline void mts_set(struct mts_priv *p, u32 reg, u32 bits)
++{
++	mts_wr(p, reg, mts_rd(p, reg) | bits);
++}
++
++static inline void mts_clr(struct mts_priv *p, u32 reg, u32 bits)
++{
++	mts_wr(p, reg, mts_rd(p, reg) & ~bits);
++}
++
++void mts_phy_init(struct mts_priv *p);
++void mts_phy_autoneg(struct mts_priv *p);
++void mts_phy_resolve(struct mts_priv *p, int *speed, bool *full);
++
++#endif
+diff --git a/drivers/net/ethernet/sony/mts/mts_main.c b/drivers/net/ethernet/sony/mts/mts_main.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..26155a0c18d4d3347c454bd902336ed390fc0592
+--- /dev/null
++++ b/drivers/net/ethernet/sony/mts/mts_main.c
+@@ -0,0 +1,712 @@
++// SPDX-License-Identifier: GPL-2.0-only
++
++#include <linux/bitfield.h>
++#include <linux/bitrev.h>
++#include <linux/crc32.h>
++#include <linux/delay.h>
++#include <linux/etherdevice.h>
++#include <linux/ethtool.h>
++#include <linux/interrupt.h>
++#include <linux/iopoll.h>
++#include <linux/module.h>
++#include <linux/netdevice.h>
++#include <linux/pci.h>
++#include <asm/ps4.h>
++
++#include "mts.h"
++
++#define MTS_GLUE_FUNC		4
++#define MTS_GLUE_BAR		4
++#define MTS_READRQ_SONY		2048
++
++static void mts_write_mac(struct mts_priv *p, const u8 *addr)
++{
++	mts_wr(p, MTS_REG_MAC_HI, (addr[0] << 8) | addr[1]);
++	mts_wr(p, MTS_REG_MAC_LO, (addr[2] << 24) | (addr[3] << 16) |
++	       (addr[4] << 8) | addr[5]);
++}
++
++static void mts_read_mac(struct mts_priv *p, u8 *addr)
++{
++	u32 hi = mts_rd(p, MTS_REG_MAC_HI);
++	u32 lo = mts_rd(p, MTS_REG_MAC_LO);
++
++	addr[0] = hi >> 8;
++	addr[1] = hi;
++	addr[2] = lo >> 24;
++	addr[3] = lo >> 16;
++	addr[4] = lo >> 8;
++	addr[5] = lo;
++}
++
++static int mts_glue_map(struct mts_priv *p)
++{
++	struct pci_dev *glue;
++	resource_size_t start;
++
++	glue = pci_get_slot(p->pdev->bus,
++			    PCI_DEVFN(PCI_SLOT(p->pdev->devfn), MTS_GLUE_FUNC));
++	if (!glue)
++		return -ENODEV;
++
++	if (glue->vendor != PCI_VENDOR_ID_SONY ||
++	    glue->device != PCI_DEVICE_ID_SONY_BAIKAL_PCIE ||
++	    !(pci_resource_flags(glue, MTS_GLUE_BAR) & IORESOURCE_MEM) ||
++	    pci_resource_len(glue, MTS_GLUE_BAR) <
++	    MTS_GLUE_FUSE_BASE + MTS_GLUE_FUSE_SIZE) {
++		pci_dev_put(glue);
++		return -ENODEV;
++	}
++
++	start = pci_resource_start(glue, MTS_GLUE_BAR) + MTS_GLUE_FUSE_BASE;
++	p->fuse = ioremap(start, MTS_GLUE_FUSE_SIZE);
++	if (!p->fuse) {
++		pci_dev_put(glue);
++		return -ENOMEM;
++	}
++
++	p->glue_pdev = glue;
++	return 0;
++}
++
++static void mts_glue_unmap(struct mts_priv *p)
++{
++	if (p->fuse)
++		iounmap(p->fuse);
++	p->fuse = NULL;
++	pci_dev_put(p->glue_pdev);
++	p->glue_pdev = NULL;
++}
++
++static void mts_init_tx_ring(struct mts_priv *p)
++{
++	int i;
++
++	for (i = 0; i < MTS_TX_RING_SIZE; i++) {
++		p->tx_ring[i].flags = cpu_to_le32(MTS_DESC_DONE |
++			(i == MTS_TX_RING_SIZE - 1 ? MTS_DESC_WRAP : 0));
++		p->tx_ring[i].buf_addr = 0;
++		p->tx_ring[i].word2 = cpu_to_le32(MTS_DESC_W2_FREE);
++		p->tx_ring[i].word3 = 0;
++	}
++	p->tx_head = 0;
++	p->tx_tail = 0;
++	p->tx_scratch_off = 0;
++}
++
++static void mts_rx_give(struct mts_priv *p, unsigned int i)
++{
++	p->rx_ring[i].word2 = 0;
++	p->rx_ring[i].word3 = 0;
++	dma_wmb();
++	p->rx_ring[i].flags = cpu_to_le32(MTS_DESC_RX_LEN |
++		(i == MTS_RX_RING_SIZE - 1 ? MTS_DESC_WRAP : 0));
++}
++
++static void mts_init_rx_ring(struct mts_priv *p)
++{
++	int i;
++
++	for (i = 0; i < MTS_RX_RING_SIZE; i++) {
++		p->rx_ring[i].buf_addr = cpu_to_le32(p->rx_pool_dma +
++						     i * MTS_DESC_RX_LEN);
++		mts_rx_give(p, i);
++	}
++	p->rx_head = 0;
++}
++
++static void mts_start_dma(struct mts_priv *p)
++{
++	wmb();
++
++	mts_wr(p, MTS_REG_TX_RING_BASE, p->tx_ring_dma);
++	mts_wr(p, MTS_REG_TX_RING_CUR, p->tx_ring_dma);
++	mts_wr(p, MTS_REG_RX_RING_BASE, p->rx_ring_dma);
++	mts_wr(p, MTS_REG_RX_RING_CUR, p->rx_ring_dma);
++	mts_set(p, MTS_REG_TX_DMA_CTRL, MTS_DMA_START);
++	mts_set(p, MTS_REG_RX_DMA_CTRL, MTS_DMA_START);
++	mts_wr(p, MTS_REG_ISR, mts_rd(p, MTS_REG_ISR));
++	mts_wr(p, MTS_REG_IMR, MTS_IMR_NORMAL);
++}
++
++static void mts_stop_dma(struct mts_priv *p)
++{
++	u32 val;
++
++	mts_wr(p, MTS_REG_IMR, MTS_IMR_ALL);
++	mts_wr(p, MTS_REG_COAL, 0);
++	p->coal_on = false;
++
++	mts_set(p, MTS_REG_TX_DMA_CTRL, MTS_DMA_STOP);
++	if (readl_poll_timeout(p->base + MTS_REG_TX_DMA_CTRL, val,
++			       !(val & MTS_DMA_STOP), 10, 1000000))
++		netdev_warn(p->netdev, "TX DMA stop timeout\n");
++
++	mts_set(p, MTS_REG_RX_DMA_CTRL, MTS_DMA_STOP);
++	if (readl_poll_timeout(p->base + MTS_REG_RX_DMA_CTRL, val,
++			       !(val & MTS_DMA_STOP), 10, 1000000))
++		netdev_warn(p->netdev, "RX DMA stop timeout\n");
++}
++
++static void mts_init_hw(struct mts_priv *p)
++{
++	mts_wr(p, MTS_REG_WOL_CTRL, 0);
++	mts_wr(p, MTS_REG_ISR, mts_rd(p, MTS_REG_ISR));
++	usleep_range(680, 1000);
++
++	mts_phy_init(p);
++
++	mts_write_mac(p, p->netdev->dev_addr);
++	mts_clr(p, MTS_REG_CTRL, BIT(7));
++	mts_wr(p, MTS_REG_SERDES, MTS_SERDES_VAL);
++	mts_set(p, MTS_REG_CLK_CTRL, MTS_CLK_ENABLE);
++	mts_wr(p, MTS_REG_RX_EN, 1);
++	mts_wr(p, MTS_REG_MODE, (mts_rd(p, MTS_REG_MODE) & 0xffffff6e) | 0x81);
++	mts_wr(p, MTS_REG_RXBUF, MTS_RXBUF_VAL);
++
++	mts_wr(p, MTS_REG_COAL, 0);
++	p->coal_on = false;
++	mts_rd(p, MTS_REG_MIB_RX_DROP);
++	mts_rd(p, MTS_REG_MIB_RX_CRC);
++}
++
++static int mts_alloc_rings(struct mts_priv *p)
++{
++	struct device *dev = &p->pdev->dev;
++
++	p->tx_ring = dmam_alloc_coherent(dev, MTS_TX_RING_BYTES,
++					 &p->tx_ring_dma, GFP_KERNEL);
++	p->rx_ring = dmam_alloc_coherent(dev, MTS_RX_RING_BYTES,
++					 &p->rx_ring_dma, GFP_KERNEL);
++	p->tx_scratch = dmam_alloc_coherent(dev, MTS_TX_SCRATCH_SIZE,
++					    &p->tx_scratch_dma, GFP_KERNEL);
++	p->rx_pool = dmam_alloc_coherent(dev, MTS_RX_POOL_SIZE,
++					 &p->rx_pool_dma, GFP_KERNEL);
++
++	if (!p->tx_ring || !p->rx_ring || !p->tx_scratch || !p->rx_pool)
++		return -ENOMEM;
++	return 0;
++}
++
++static void mts_tx_complete(struct mts_priv *p)
++{
++	unsigned int tail = p->tx_tail;
++
++	while (tail != p->tx_head) {
++		struct mts_desc *d = &p->tx_ring[tail];
++		u32 w2 = le32_to_cpu(d->word2);
++
++		if (!(le32_to_cpu(d->flags) & MTS_DESC_DONE))
++			break;
++		if (w2 >= MTS_DESC_W2_FREE)
++			break;
++
++		d->word2 = cpu_to_le32(w2 | MTS_DESC_W2_FREE);
++		tail = (tail + 1) % MTS_TX_RING_SIZE;
++	}
++	p->tx_tail = tail;
++
++	if (netif_queue_stopped(p->netdev))
++		netif_wake_queue(p->netdev);
++}
++
++static int mts_rx_poll(struct mts_priv *p, int budget)
++{
++	struct net_device *dev = p->netdev;
++	unsigned int i = p->rx_head;
++	int done = 0;
++
++	while (done < budget &&
++	       (le32_to_cpu(p->rx_ring[i].flags) & MTS_DESC_DONE)) {
++		u32 len = le32_to_cpu(p->rx_ring[i].flags) & MTS_DESC_RX_LEN_MASK;
++		const u8 *src = (const u8 *)p->rx_pool + i * MTS_DESC_RX_LEN;
++		struct sk_buff *skb;
++
++		dma_rmb();
++
++		if (len < ETH_ZLEN || len > MTS_DESC_RX_LEN) {
++			dev->stats.rx_length_errors++;
++			dev->stats.rx_errors++;
++		} else {
++			skb = napi_alloc_skb(&p->napi, len);
++			if (skb) {
++				skb_put_data(skb, src, len);
++				skb->protocol = eth_type_trans(skb, dev);
++				napi_gro_receive(&p->napi, skb);
++				dev->stats.rx_packets++;
++				dev->stats.rx_bytes += len;
++			} else {
++				dev->stats.rx_dropped++;
++			}
++		}
++
++		mts_rx_give(p, i);
++		done++;
++		i = (i + 1) % MTS_RX_RING_SIZE;
++	}
++	p->rx_head = i;
++
++	if (done)
++		mts_set(p, MTS_REG_RX_DMA_CTRL, MTS_DMA_KICK);
++
++	return done;
++}
++
++static netdev_tx_t mts_xmit(struct sk_buff *skb, struct net_device *dev)
++{
++	struct mts_priv *p = netdev_priv(dev);
++	unsigned int len = max_t(unsigned int, skb->len, ETH_ZLEN);
++	unsigned int head, off, size;
++	unsigned long flags;
++
++	if (len > MTS_TX_MAX_LEN) {
++		dev->stats.tx_dropped++;
++		dev_kfree_skb_any(skb);
++		return NETDEV_TX_OK;
++	}
++
++	spin_lock_irqsave(&p->lock, flags);
++
++	mts_tx_complete(p);
++
++	head = p->tx_head;
++	if ((head + 1) % MTS_TX_RING_SIZE == p->tx_tail) {
++		netif_stop_queue(dev);
++		spin_unlock_irqrestore(&p->lock, flags);
++		return NETDEV_TX_BUSY;
++	}
++
++	size = ALIGN(len, 128);
++	off = p->tx_scratch_off;
++	if (off + size > MTS_TX_SCRATCH_SIZE)
++		off = 0;
++	p->tx_scratch_off = (off + size) % MTS_TX_SCRATCH_SIZE;
++
++	skb_copy_bits(skb, 0, (u8 *)p->tx_scratch + off, skb->len);
++	if (len > skb->len)
++		memset((u8 *)p->tx_scratch + off + skb->len, 0, len - skb->len);
++
++	p->tx_ring[head].buf_addr = cpu_to_le32(p->tx_scratch_dma + off);
++	p->tx_ring[head].word2 = cpu_to_le32(MTS_DESC_W2_TX);
++	p->tx_ring[head].word3 = 0;
++	dma_wmb();
++	p->tx_ring[head].flags = cpu_to_le32((len & MTS_DESC_LEN_MASK) |
++		MTS_DESC_SOP | MTS_DESC_EOP |
++		(head == MTS_TX_RING_SIZE - 1 ? MTS_DESC_WRAP : 0));
++
++	p->tx_head = (head + 1) % MTS_TX_RING_SIZE;
++
++	mts_set(p, MTS_REG_TX_DMA_CTRL, MTS_DMA_KICK);
++
++	dev->stats.tx_packets++;
++	dev->stats.tx_bytes += len;
++
++	spin_unlock_irqrestore(&p->lock, flags);
++	dev_consume_skb_any(skb);
++	return NETDEV_TX_OK;
++}
++
++static int mts_set_mac_address(struct net_device *dev, void *addr)
++{
++	struct mts_priv *p = netdev_priv(dev);
++	struct sockaddr *sa = addr;
++
++	if (!is_valid_ether_addr(sa->sa_data))
++		return -EADDRNOTAVAIL;
++
++	eth_hw_addr_set(dev, sa->sa_data);
++	mts_write_mac(p, dev->dev_addr);
++	return 0;
++}
++
++static u32 mts_mc_hash(const u8 *addr)
++{
++	u8 rev[ETH_ALEN];
++	u32 crc;
++	int i;
++
++	for (i = 0; i < ETH_ALEN; i++)
++		rev[i] = bitrev8(addr[i]);
++
++	crc = crc32_be(~0, rev, ETH_ALEN);
++	return (crc & 7) + (crc >> 27) * 8;
++}
++
++static void mts_set_rx_mode(struct net_device *dev)
++{
++	struct mts_priv *p = netdev_priv(dev);
++	struct netdev_hw_addr *ha;
++	u32 val;
++	int i;
++
++	if (dev->flags & IFF_PROMISC) {
++		mts_set(p, MTS_REG_MODE, MTS_MODE_PROMISC);
++		return;
++	}
++
++	mts_clr(p, MTS_REG_MODE, MTS_MODE_PROMISC);
++
++	if (dev->flags & IFF_ALLMULTI) {
++		for (i = 0; i < MTS_MC_HASH_BITS; i++)
++			mts_wr(p, MTS_REG_MC_HASH, MTS_MC_HASH_SET | i);
++		return;
++	}
++
++	mts_wr(p, MTS_REG_MC_HASH, MTS_MC_HASH_CLEAR);
++	if (readl_poll_timeout_atomic(p->base + MTS_REG_MC_HASH, val,
++				      val & MTS_MC_HASH_CLEARED, 1, 10000))
++		netdev_warn(dev, "multicast hash clear timeout\n");
++
++	netdev_for_each_mc_addr(ha, dev) {
++		mts_wr(p, MTS_REG_MC_HASH, MTS_MC_HASH_SET | mts_mc_hash(ha->addr));
++		if (readl_poll_timeout_atomic(p->base + MTS_REG_MC_HASH, val,
++					      !(val & MTS_MC_HASH_BUSY), 1, 10000))
++			netdev_warn(dev, "multicast hash set timeout\n");
++	}
++}
++
++static void mts_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *info)
++{
++	struct mts_priv *p = netdev_priv(dev);
++
++	strscpy(info->driver, KBUILD_MODNAME, sizeof(info->driver));
++	strscpy(info->bus_info, pci_name(p->pdev), sizeof(info->bus_info));
++}
++
++static const struct ethtool_ops mts_ethtool_ops = {
++	.get_drvinfo	= mts_get_drvinfo,
++	.get_link	= ethtool_op_get_link,
++};
++
++static void mts_link_change(struct mts_priv *p)
++{
++	u32 link = mts_rd(p, MTS_REG_LINK);
++	bool up = link & MTS_LINK_UP;
++	int speed;
++	bool full;
++
++	if (up == p->link_up)
++		return;
++
++	p->link_up = up;
++	if (!up) {
++		netif_carrier_off(p->netdev);
++		netdev_info(p->netdev, "link down\n");
++		return;
++	}
++
++	mts_phy_resolve(p, &speed, &full);
++	link &= ~(MTS_LINK_SPEED | MTS_LINK_FULL_DPX);
++	link |= FIELD_PREP(MTS_LINK_SPEED, speed == SPEED_1000 ? MTS_LINK_SPEED_1000 :
++			   speed == SPEED_100 ? MTS_LINK_SPEED_100 : MTS_LINK_SPEED_10);
++	if (full)
++		link |= MTS_LINK_FULL_DPX;
++	mts_wr(p, MTS_REG_LINK, link);
++
++	netif_carrier_on(p->netdev);
++	netdev_info(p->netdev, "link up %d Mbps %s duplex (%#x)\n", speed,
++		    full ? "full" : "half", mts_rd(p, MTS_REG_LINK));
++}
++
++static void mts_link_poll_work(struct work_struct *work)
++{
++	struct mts_priv *p = container_of(to_delayed_work(work),
++					  struct mts_priv, link_poll);
++
++	mts_link_change(p);
++
++	p->netdev->stats.rx_missed_errors += mts_rd(p, MTS_REG_MIB_RX_DROP);
++	p->netdev->stats.rx_crc_errors += mts_rd(p, MTS_REG_MIB_RX_CRC);
++
++	if (p->irq_count == p->irq_seen)
++		napi_schedule(&p->napi);
++	p->irq_seen = p->irq_count;
++
++	schedule_delayed_work(&p->link_poll, HZ);
++}
++
++static void mts_tx_rebuild(struct mts_priv *p)
++{
++	mts_init_tx_ring(p);
++	dma_wmb();
++	mts_wr(p, MTS_REG_TX_RING_BASE, p->tx_ring_dma);
++	mts_wr(p, MTS_REG_TX_RING_CUR, p->tx_ring_dma);
++	mts_set(p, MTS_REG_TX_DMA_CTRL, MTS_DMA_START);
++}
++
++static void mts_handle_status(struct mts_priv *p, u32 status)
++{
++	p->irq_count++;
++
++	if (status & MTS_ISR_LINK)
++		mts_link_change(p);
++
++	if (status & MTS_ISR_ERRORS) {
++		net_err_ratelimited("%s: hardware error %#x\n",
++				    netdev_name(p->netdev),
++				    status & MTS_ISR_ERRORS);
++		p->netdev->stats.rx_errors++;
++	}
++
++	if (status & MTS_ISR_LSO_RECOVER)
++		set_bit(MTS_ST_LSO_RECOVER, &p->state);
++	if (status & MTS_ISR_RX_EMPTY)
++		set_bit(MTS_ST_RX_RESTART, &p->state);
++}
++
++static int mts_poll(struct napi_struct *napi, int budget)
++{
++	struct mts_priv *p = container_of(napi, struct mts_priv, napi);
++	unsigned int tail;
++	bool tx_busy;
++	int rx_done;
++	u32 isr;
++
++	spin_lock(&p->lock);
++	if (test_and_clear_bit(MTS_ST_LSO_RECOVER, &p->state)) {
++		netdev_warn(p->netdev, "LSO error, rebuilding TX ring\n");
++		mts_tx_rebuild(p);
++		netif_wake_queue(p->netdev);
++	}
++	tail = p->tx_tail;
++	mts_tx_complete(p);
++	tx_busy = tail != p->tx_tail;
++	if (p->tx_tail != p->tx_head)
++		mts_set(p, MTS_REG_TX_DMA_CTRL, MTS_DMA_KICK);
++	spin_unlock(&p->lock);
++
++	rx_done = mts_rx_poll(p, budget);
++
++	if (test_and_clear_bit(MTS_ST_RX_RESTART, &p->state))
++		mts_set(p, MTS_REG_RX_DMA_CTRL, MTS_DMA_KICK);
++
++	if (rx_done >= budget)
++		return budget;
++
++	if (!napi_complete_done(napi, rx_done))
++		return rx_done;
++
++	if (tx_busy || rx_done) {
++		if (!p->coal_on) {
++			mts_wr(p, MTS_REG_COAL, MTS_COAL_EN | MTS_COAL_TICK);
++			p->coal_on = true;
++		}
++		mts_wr(p, MTS_REG_IMR, MTS_IMR_TIMER);
++		return rx_done;
++	}
++
++	if (p->coal_on) {
++		mts_wr(p, MTS_REG_COAL, 0);
++		p->coal_on = false;
++		mts_wr(p, MTS_REG_ISR, MTS_ISR_TIMER);
++	}
++	mts_wr(p, MTS_REG_IMR, MTS_IMR_NORMAL);
++
++	isr = mts_rd(p, MTS_REG_ISR) & ~(MTS_IMR_NORMAL | MTS_ISR_TIMER);
++	if (isr) {
++		mts_wr(p, MTS_REG_ISR, isr);
++		mts_handle_status(p, isr);
++		if ((isr & MTS_ISR_WORK) && napi_schedule_prep(napi)) {
++			mts_wr(p, MTS_REG_IMR, MTS_IMR_ALL);
++			__napi_schedule(napi);
++		}
++	}
++
++	return rx_done;
++}
++
++static irqreturn_t mts_isr(int irq, void *data)
++{
++	struct mts_priv *p = data;
++	u32 status = mts_rd(p, MTS_REG_ISR);
++
++	if (!(status & ~MTS_IMR_NORMAL))
++		return IRQ_NONE;
++
++	mts_wr(p, MTS_REG_ISR, status);
++	mts_handle_status(p, status);
++
++	if (napi_schedule_prep(&p->napi)) {
++		mts_wr(p, MTS_REG_IMR, MTS_IMR_ALL);
++		__napi_schedule(&p->napi);
++	}
++
++	return IRQ_HANDLED;
++}
++
++static int mts_open(struct net_device *dev)
++{
++	struct mts_priv *p = netdev_priv(dev);
++	int ret;
++
++	ret = request_irq(p->irq, mts_isr, IRQF_SHARED, dev->name, p);
++	if (ret)
++		return ret;
++
++	p->link_up = false;
++	p->state = 0;
++	netif_carrier_off(dev);
++
++	mts_init_hw(p);
++	mts_init_tx_ring(p);
++	mts_init_rx_ring(p);
++	mts_start_dma(p);
++	mts_phy_autoneg(p);
++
++	napi_enable(&p->napi);
++	netif_start_queue(dev);
++
++	mts_link_change(p);
++	schedule_delayed_work(&p->link_poll, HZ);
++	return 0;
++}
++
++static int mts_stop(struct net_device *dev)
++{
++	struct mts_priv *p = netdev_priv(dev);
++
++	netif_stop_queue(dev);
++	netif_carrier_off(dev);
++	cancel_delayed_work_sync(&p->link_poll);
++	napi_disable(&p->napi);
++	mts_stop_dma(p);
++	free_irq(p->irq, p);
++	return 0;
++}
++
++static void mts_tx_timeout(struct net_device *dev, unsigned int txqueue)
++{
++	struct mts_priv *p = netdev_priv(dev);
++	u32 val;
++
++	netdev_warn(dev, "TX timeout, head %u tail %u\n", p->tx_head, p->tx_tail);
++
++	spin_lock_bh(&p->lock);
++	mts_set(p, MTS_REG_TX_DMA_CTRL, MTS_DMA_STOP);
++	readl_poll_timeout_atomic(p->base + MTS_REG_TX_DMA_CTRL, val,
++				  !(val & MTS_DMA_STOP), 1, 1000);
++	mts_tx_rebuild(p);
++	netif_wake_queue(dev);
++	spin_unlock_bh(&p->lock);
++}
++
++static const struct net_device_ops mts_netdev_ops = {
++	.ndo_open		= mts_open,
++	.ndo_stop		= mts_stop,
++	.ndo_start_xmit		= mts_xmit,
++	.ndo_tx_timeout		= mts_tx_timeout,
++	.ndo_set_mac_address	= mts_set_mac_address,
++	.ndo_set_rx_mode	= mts_set_rx_mode,
++	.ndo_validate_addr	= eth_validate_addr,
++};
++
++static int mts_probe(struct pci_dev *pdev, const struct pci_device_id *id)
++{
++	struct net_device *netdev;
++	struct mts_priv *p;
++	u8 mac[ETH_ALEN];
++	int ret;
++
++	ret = pcim_enable_device(pdev);
++	if (ret)
++		return ret;
++
++	netdev = devm_alloc_etherdev(&pdev->dev, sizeof(*p));
++	if (!netdev)
++		return -ENOMEM;
++	SET_NETDEV_DEV(netdev, &pdev->dev);
++
++	p = netdev_priv(netdev);
++	p->netdev = netdev;
++	p->pdev = pdev;
++	spin_lock_init(&p->lock);
++
++	p->base = pcim_iomap_region(pdev, 0, KBUILD_MODNAME);
++	if (IS_ERR(p->base))
++		return PTR_ERR(p->base);
++
++	pci_set_master(pdev);
++
++	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
++	if (ret)
++		return ret;
++
++	if (pcie_get_readrq(pdev) == 512)
++		pcie_set_readrq(pdev, MTS_READRQ_SONY);
++
++	ret = mts_alloc_rings(p);
++	if (ret)
++		return ret;
++
++	ret = mts_glue_map(p);
++	if (ret)
++		return dev_err_probe(&pdev->dev, ret, "Baikal glue BAR4 not found\n");
++
++	mts_read_mac(p, mac);
++	if (is_valid_ether_addr(mac)) {
++		eth_hw_addr_set(netdev, mac);
++	} else {
++		eth_hw_addr_random(netdev);
++		dev_warn(&pdev->dev, "no MAC address from firmware, using %pM\n",
++			 netdev->dev_addr);
++	}
++
++	ret = bpcie_assign_irqs(pdev, 1);
++	if (ret < 0) {
++		mts_glue_unmap(p);
++		return ret == -ENODEV ? -EPROBE_DEFER : ret;
++	}
++	p->irq = pci_irq_vector(pdev, 0);
++
++	netdev->netdev_ops = &mts_netdev_ops;
++	netdev->ethtool_ops = &mts_ethtool_ops;
++	netdev->watchdog_timeo = 5 * HZ;
++	netdev->min_mtu = ETH_MIN_MTU;
++	netdev->max_mtu = ETH_DATA_LEN;
++
++	netif_napi_add(netdev, &p->napi, mts_poll);
++	INIT_DELAYED_WORK(&p->link_poll, mts_link_poll_work);
++	pci_set_drvdata(pdev, netdev);
++
++	ret = register_netdev(netdev);
++	if (ret) {
++		netif_napi_del(&p->napi);
++		pci_free_irq_vectors(pdev);
++		mts_glue_unmap(p);
++		return ret;
++	}
++
++	netif_carrier_off(netdev);
++	netdev_info(netdev, "Baikal GbE at %s, irq %d, MAC %pM\n",
++		    pci_name(pdev), p->irq, netdev->dev_addr);
++	return 0;
++}
++
++static void mts_remove(struct pci_dev *pdev)
++{
++	struct net_device *netdev = pci_get_drvdata(pdev);
++	struct mts_priv *p = netdev_priv(netdev);
++
++	unregister_netdev(netdev);
++	netif_napi_del(&p->napi);
++	pci_free_irq_vectors(pdev);
++	mts_glue_unmap(p);
++}
++
++static const struct pci_device_id mts_pci_tbl[] = {
++	{ PCI_DEVICE(PCI_VENDOR_ID_SONY, PCI_DEVICE_ID_SONY_BAIKAL_GBE) },
++	{ }
++};
++MODULE_DEVICE_TABLE(pci, mts_pci_tbl);
++
++static struct pci_driver mts_driver = {
++	.name		= KBUILD_MODNAME,
++	.id_table	= mts_pci_tbl,
++	.probe		= mts_probe,
++	.remove		= mts_remove,
++};
++module_pci_driver(mts_driver);
++
++MODULE_LICENSE("GPL");
++MODULE_AUTHOR("Armandas Kvietkus");
++MODULE_DESCRIPTION("PlayStation 4 Baikal Gigabit Ethernet driver");
+diff --git a/drivers/net/ethernet/sony/mts/mts_phy.c b/drivers/net/ethernet/sony/mts/mts_phy.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..6cc5e2664912bedce4c274372e2aaedd6e303868
+--- /dev/null
++++ b/drivers/net/ethernet/sony/mts/mts_phy.c
+@@ -0,0 +1,256 @@
++// SPDX-License-Identifier: GPL-2.0-only
++
++#include <linux/delay.h>
++#include <linux/mii.h>
++#include <linux/minmax.h>
++#include <linux/netdevice.h>
++
++#include "mts.h"
++
++#define MTS_SMI_DONE		BIT(15)
++#define MTS_SMI_ARM		BIT(15)
++#define MTS_SMI_CL22_WRITE	0x2000
++#define MTS_SMI_CL22_READ	0x4000
++#define MTS_SMI_CL45_ADDR	0x20
++#define MTS_SMI_CL45_WRITE	0x60
++#define MTS_SMI_CL45_READ	0xe0
++#define MTS_SMI_TIMEOUT		10000
++
++#define MTS_MMD(devad, reg)	(((u32)(reg) << 16) | (devad))
++#define MTS_DEV_PMA		0x1e
++#define MTS_DEV_VEND2		0x1f
++#define MTS_DEV_AN		0x07
++
++#define MTS_PHY_PAGE		0x1f
++#define MTS_PHY_PAGE_TR		0x52b5
++#define MTS_PHY_PAGE_3		0x0003
++#define MTS_PHY_TR_ADDR		0x10
++#define MTS_PHY_TR_LOW		0x11
++#define MTS_PHY_TR_HIGH		0x12
++
++#define MTS_FUSE_LOCK		0x80800000
++
++static const u8 mts_cal_lut[64] = {
++	0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f,
++	0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f,
++	0x7b, 0x7a, 0x75, 0x73, 0x70, 0x67, 0x64, 0x62,
++	0x57, 0x55, 0x53, 0x51, 0x48, 0x46, 0x44, 0x42,
++	0x40, 0x37, 0x35, 0x34, 0x32, 0x31, 0x30, 0x26,
++	0x24, 0x23, 0x22, 0x21, 0x20, 0x16, 0x15, 0x14,
++	0x13, 0x12, 0x11, 0x10, 0x07, 0x06, 0x05, 0x04,
++	0x03, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
++};
++
++static u32 mts_fuse(struct mts_priv *p, u32 off)
++{
++	return readl(p->fuse + off);
++}
++
++static int mts_smi_cmd(struct mts_priv *p, u32 cmd)
++{
++	int i;
++
++	mts_wr(p, MTS_REG_SMI, MTS_SMI_ARM);
++	mts_wr(p, MTS_REG_SMI, cmd);
++	for (i = 0; i < MTS_SMI_TIMEOUT; i++) {
++		if (mts_rd(p, MTS_REG_SMI) & MTS_SMI_DONE)
++			return 0;
++		udelay(1);
++	}
++	netdev_warn_once(p->netdev, "SMI timeout, cmd %#x\n", cmd);
++	return -ETIMEDOUT;
++}
++
++static u16 mts_mdio_read(struct mts_priv *p, u8 reg)
++{
++	if (mts_smi_cmd(p, ((reg & 0x1f) << 8) | MTS_SMI_CL22_READ))
++		return 0;
++	return mts_rd(p, MTS_REG_SMI) >> 16;
++}
++
++static void mts_mdio_write(struct mts_priv *p, u8 reg, u16 val)
++{
++	mts_smi_cmd(p, ((u32)val << 16) | ((reg & 0x1f) << 8) |
++		    MTS_SMI_CL22_WRITE);
++}
++
++static int mts_mmd_addr(struct mts_priv *p, u32 sel)
++{
++	return mts_smi_cmd(p, (sel & 0xffff0000) | ((sel & 0x1f) << 8) |
++			   MTS_SMI_CL45_ADDR);
++}
++
++static u16 mts_mmd_read(struct mts_priv *p, u32 sel)
++{
++	if (mts_mmd_addr(p, sel))
++		return 0;
++	if (mts_smi_cmd(p, ((sel & 0x1f) << 8) | MTS_SMI_CL45_READ))
++		return 0;
++	return mts_rd(p, MTS_REG_SMI) >> 16;
++}
++
++static void mts_mmd_write(struct mts_priv *p, u32 sel, u16 val)
++{
++	if (mts_mmd_addr(p, sel))
++		return;
++	mts_smi_cmd(p, ((u32)val << 16) | ((sel & 0x1f) << 8) |
++		    MTS_SMI_CL45_WRITE);
++}
++
++static void mts_mmd_modify(struct mts_priv *p, u32 sel, u16 mask, u16 set)
++{
++	mts_mmd_write(p, sel, (mts_mmd_read(p, sel) & mask) | set);
++}
++
++static void mts_phy_tr_write(struct mts_priv *p, u16 low, u16 high, u16 addr)
++{
++	u16 page = mts_mdio_read(p, MTS_PHY_PAGE);
++
++	mts_mdio_write(p, MTS_PHY_PAGE, MTS_PHY_PAGE_TR);
++	mts_mdio_write(p, MTS_PHY_TR_LOW, low);
++	mts_mdio_write(p, MTS_PHY_TR_HIGH, high);
++	mts_mdio_write(p, MTS_PHY_TR_ADDR, addr);
++	mts_mdio_write(p, MTS_PHY_PAGE, page);
++}
++
++static u8 mts_cal_value(u32 field)
++{
++	u32 b = field & 0x7f;
++
++	if (b < 2)
++		b = 1;
++	if (b > 0x3f)
++		return mts_cal_lut[0x3f];
++	return mts_cal_lut[b - 1];
++}
++
++static void mts_cal_high(struct mts_priv *p, u32 sel, u32 field)
++{
++	mts_mmd_modify(p, sel, 0x00ff, (mts_cal_value(field) << 8) | 0x8000);
++}
++
++static void mts_cal_low(struct mts_priv *p, u32 sel, u32 field)
++{
++	mts_mmd_modify(p, sel, 0xff00, mts_cal_value(field) | 0x0080);
++}
++
++static void mts_cal_pair(struct mts_priv *p, u32 reg_a, u32 reg_b, u32 v, int shift)
++{
++	v &= 0x3f;
++	mts_mmd_write(p, MTS_MMD(MTS_DEV_PMA, reg_a), (v << shift) | v);
++	mts_mmd_write(p, MTS_MMD(MTS_DEV_PMA, reg_b),
++		      ((min_t(u32, v, 0x3c) + 3) << shift) | v);
++}
++
++static void mts_phy_calibrate(struct mts_priv *p)
++{
++	u32 f5c = mts_fuse(p, 0x5c);
++	u32 f60 = mts_fuse(p, 0x60);
++	u32 f64 = mts_fuse(p, 0x64);
++	u32 f68 = mts_fuse(p, 0x68);
++
++	mts_mmd_write(p, MTS_MMD(MTS_DEV_PMA, 0x00e0), (f68 & 0x3f) << 8);
++	mts_mmd_write(p, MTS_MMD(MTS_DEV_VEND2, 0x0115), (f68 >> 6) & 7);
++
++	mts_cal_high(p, MTS_MMD(MTS_DEV_PMA, 0x0174), f60);
++	mts_cal_low(p, MTS_MMD(MTS_DEV_PMA, 0x0174), f60 >> 19);
++	mts_cal_high(p, MTS_MMD(MTS_DEV_PMA, 0x0175), f64 >> 6);
++	mts_cal_low(p, MTS_MMD(MTS_DEV_PMA, 0x0175), f64 >> 25);
++
++	mts_mmd_modify(p, MTS_MMD(MTS_DEV_PMA, 0x0172), 0xc0ff, (f5c >> 12) & 0x3f00);
++	mts_mmd_modify(p, MTS_MMD(MTS_DEV_PMA, 0x0172), 0xffc0, (f60 >> 7) & 0x3f);
++	mts_mmd_modify(p, MTS_MMD(MTS_DEV_PMA, 0x0173), 0xc0ff, (f60 >> 18) & 0x3f00);
++	mts_mmd_modify(p, MTS_MMD(MTS_DEV_PMA, 0x0173), 0xffc0, (f64 >> 13) & 0x3f);
++
++	mts_cal_pair(p, 0x0012, 0x0016, f5c >> 26, 10);
++	mts_cal_pair(p, 0x0017, 0x0018, f60 >> 13, 8);
++	mts_cal_pair(p, 0x0019, 0x0020, f64, 8);
++	mts_cal_pair(p, 0x0021, 0x0022, f64 >> 19, 8);
++
++	mts_mmd_write(p, MTS_MMD(MTS_DEV_PMA, 0x0096), 0x8000);
++	mts_mmd_write(p, MTS_MMD(MTS_DEV_PMA, 0x0037), 0x0033);
++	mts_mmd_modify(p, MTS_MMD(MTS_DEV_PMA, 0x0039), 0xb7ff, 0);
++	mts_mmd_modify(p, MTS_MMD(MTS_DEV_VEND2, 0x0107), 0xefff, 0);
++	mts_mmd_modify(p, MTS_MMD(MTS_DEV_PMA, 0x0171), 0xffff, 0x0180);
++	mts_mmd_modify(p, MTS_MMD(MTS_DEV_PMA, 0x0039), 0xffff, 0x2000);
++	mts_mmd_modify(p, MTS_MMD(MTS_DEV_PMA, 0x0039), 0xdfff, 0);
++	udelay(50);
++	mts_mmd_modify(p, MTS_MMD(MTS_DEV_PMA, 0x0171), 0xfe7f, 0);
++}
++
++void mts_phy_init(struct mts_priv *p)
++{
++	u32 link;
++
++	mts_mdio_read(p, MII_PHYSID1);
++	mts_mdio_read(p, MII_PHYSID2);
++
++	mts_wr(p, MTS_REG_RESET, MTS_RESET_VAL);
++	mts_mmd_write(p, MTS_MMD(MTS_DEV_PMA, 0x0147), 0);
++
++	if ((mts_fuse(p, 0x6c) & MTS_FUSE_LOCK) == MTS_FUSE_LOCK)
++		mts_phy_calibrate(p);
++	else
++		netdev_info(p->netdev, "fuse calibration not valid, skipped\n");
++
++	link = mts_rd(p, MTS_REG_LINK);
++
++	mts_mmd_write(p, MTS_MMD(MTS_DEV_PMA, 0x0189), 0x0110);
++	mts_phy_tr_write(p, 0xb90a, 0x006f, 0x8f82);
++	mts_phy_tr_write(p, 0xbaef, 0x002e, 0x968c);
++
++	mts_mdio_write(p, MTS_PHY_PAGE, MTS_PHY_PAGE_3);
++	mts_mdio_write(p, 0x1c, 0x0c92);
++	mts_mdio_write(p, MTS_PHY_PAGE, 0);
++
++	mts_wr(p, MTS_REG_CLK_FREQ, MTS_CLK_FREQ_HZ);
++	mts_mmd_write(p, MTS_MMD(MTS_DEV_PMA, 0x0122), 0xffff);
++	mts_phy_tr_write(p, 0x704d, 0x0000, 0x9698);
++	mts_phy_tr_write(p, 0x344f, 0x0002, 0x969a);
++	mts_mmd_write(p, MTS_MMD(MTS_DEV_VEND2, 0x0268), 0x07f4);
++	mts_phy_tr_write(p, 0x0004, 0x0000, 0x9686);
++	mts_phy_tr_write(p, 0x0671, 0x0006, 0x8fae);
++
++	mts_mdio_write(p, MII_ADVERTISE, mts_mdio_read(p, MII_ADVERTISE) & 0xf3ff);
++	mts_wr(p, MTS_REG_LINK, link & MTS_LINK_KEEP);
++	mts_clr(p, MTS_REG_RX_PCODE, BIT(0));
++	mts_mmd_write(p, MTS_MMD(MTS_DEV_AN, 0x003c), 0);
++	mts_mmd_modify(p, MTS_MMD(MTS_DEV_PMA, 0x0033), 0xefff, 0);
++	mts_mdio_write(p, MII_BMCR, mts_mdio_read(p, MII_BMCR) |
++		       BMCR_ANENABLE | BMCR_ANRESTART);
++}
++
++void mts_phy_resolve(struct mts_priv *p, int *speed, bool *full)
++{
++	u16 ctrl1000 = mts_mdio_read(p, MII_CTRL1000);
++	u16 stat1000 = mts_mdio_read(p, MII_STAT1000);
++	u16 common = mts_mdio_read(p, MII_ADVERTISE) & mts_mdio_read(p, MII_LPA);
++
++	if ((ctrl1000 & ADVERTISE_1000FULL) && (stat1000 & LPA_1000FULL)) {
++		*speed = SPEED_1000;
++		*full = true;
++	} else if (common & (ADVERTISE_100FULL | ADVERTISE_100HALF)) {
++		*speed = SPEED_100;
++		*full = common & ADVERTISE_100FULL;
++	} else {
++		*speed = SPEED_10;
++		*full = common & ADVERTISE_10FULL;
++	}
++}
++
++void mts_phy_autoneg(struct mts_priv *p)
++{
++	u16 adv = mts_mdio_read(p, MII_ADVERTISE);
++	u16 ctrl1000 = mts_mdio_read(p, MII_CTRL1000);
++
++	mts_mdio_write(p, MII_ADVERTISE, adv | ADVERTISE_ALL);
++	mts_mdio_write(p, MII_CTRL1000, (ctrl1000 & 0xfcff) | ADVERTISE_1000FULL);
++	mts_mdio_write(p, MII_BMCR, BMCR_ANENABLE | BMCR_ANRESTART |
++		       BMCR_FULLDPLX | BMCR_SPEED1000);
++
++	netdev_info(p->netdev,
++		    "phy %04x:%04x bmcr %04x bmsr %04x adv %04x ctrl1000 %04x\n",
++		    mts_mdio_read(p, MII_PHYSID1), mts_mdio_read(p, MII_PHYSID2),
++		    mts_mdio_read(p, MII_BMCR), mts_mdio_read(p, MII_BMSR),
++		    mts_mdio_read(p, MII_ADVERTISE), mts_mdio_read(p, MII_CTRL1000));
++}

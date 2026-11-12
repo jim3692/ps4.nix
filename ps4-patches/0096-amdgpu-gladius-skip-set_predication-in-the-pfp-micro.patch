@@ -1,0 +1,30 @@
+From a044295a1d29cfda1faff14db2b5b0b73cf1619b Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sun, 8 Nov 2026 16:06:41 +0100
+Subject: [PATCH 096/124] amdgpu: gladius: skip set_predication in the pfp
+ microcode
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ extra_firmware/amdgpu/gladius_a_pfp.bin | Bin 17024 -> 17024 bytes
+ extra_firmware/amdgpu/gladius_b_pfp.bin | Bin 17024 -> 17024 bytes
+ 2 files changed, 0 insertions(+), 0 deletions(-)
+
+diff --git a/extra_firmware/amdgpu/gladius_a_pfp.bin b/extra_firmware/amdgpu/gladius_a_pfp.bin
+index c0f8a38003442416a28bb0269004e395d642531f..e550abf466b506d4bb5f75ab122426e340f75154 100644
+GIT binary patch
+delta 17
+YcmZo@Wo&3=+z{i)^nrhKoTCyW068ZG&;S4c
+
+delta 17
+YcmZo@Wo&3=+z{i)G>Lh0oTCyW05(kpW&i*H
+
+diff --git a/extra_firmware/amdgpu/gladius_b_pfp.bin b/extra_firmware/amdgpu/gladius_b_pfp.bin
+index 6c80f20f612a2812bea0ed554c82b41cea5882dc..dd44b4fb4d15dad38b6e74bb5004110a2e7c9ae6 100644
+GIT binary patch
+delta 17
+YcmZo@Wo&3=+z{i)^nrhKoTCyW068ZG&;S4c
+
+delta 17
+YcmZo@Wo&3=+z{i)B*3yc&QXaG05Zh{<p2Nx
+

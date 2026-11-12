@@ -1,0 +1,22 @@
+From 81a0b974f770dc1eed9f4b97bc420474d6b70228 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Mon, 9 Nov 2026 13:50:24 +0100
+Subject: [PATCH 107/124] docs: ccp and trng are on again
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ README.md | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/README.md b/README.md
+index 06d08ba22bd70bec00bc6113c0355f7d3bc5693f..7b1062c4dbf253b4d20355a4fd7efec8e28dd322 100644
+--- a/README.md
++++ b/README.md
+@@ -26,7 +26,6 @@ tested on baikal slim, baikal pro, belize slim and belize pro. aeolia runs the s
+ - no suspend or hibernate
+ - the gpu clock stays at its top speed, it does not clock down when idle
+ - aeolia ethernet can keep one cpu core busy, fix is in progress
+-- samu ccp and trng are off for now, they break boot on belize slim and aeolia
+ - belize rtc read fails at boot, the loader sets the time instead
+ - dp link training errors in dmesg are harmless, display works
+ 

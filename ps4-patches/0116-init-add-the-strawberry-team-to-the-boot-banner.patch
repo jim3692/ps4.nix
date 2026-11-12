@@ -1,0 +1,37 @@
+From 43c497b137bf30dc0769b3153ef62d5a29832bba Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Tue, 10 Nov 2026 21:20:26 +0100
+Subject: [PATCH 116/124] init: add the strawberry team to the boot banner
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ init/version-timestamp.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/init/version-timestamp.c b/init/version-timestamp.c
+index 6d633498244a9d1bd3823b90cc6a7fd9f56774c1..e3f2acb009b5bb51726934feb695aadaeb6b062c 100644
+--- a/init/version-timestamp.c
++++ b/init/version-timestamp.c
+@@ -37,4 +37,22 @@ const char linux_banner[] =
+ 	"  Builder   : " LINUX_COMPILE_BY "@" LINUX_COMPILE_HOST "\n"
+ 	"  Toolchain : " LINUX_COMPILER "\n"
+ 	"  Build     : " UTS_VERSION "\n"
++	"\n"
++	"  strawberry was here\n"
++	"  also strawberry kernel team was here - rmux\n"
++	"  this kernel is dedicated to my girlfriend, it is named after her\n"
++	"\n"
++	"  Devs      : ArabPixel, feeRnt, bjhabibie\n"
++	"  Coord     : dreams-of-formaldehyde, TheVorkMan, vanillitefroyo\n"
++	"  GPU, BT   : manya4090, Comfy702\n"
++	"  Baikal    : blyadimir., dewaardt, ss6530, isitnull., shyxuo, zarbok.,\n"
++	"              vanixvanixvanix, jhuhblya, mechanical, kingabut, izanhower,\n"
++	"              sgtxkitkat, rodrigo, sudofrontman, fluffysheep\n"
++	"  Belize    : DanielG18, GattoDev-debug, angheloisfish, wondermine,\n"
++	"              nadaman, razzle\n"
++	"  Aeolia    : rmux, diema, lupusetflos\n"
++	"  Logs      : erkki, Bbang, gryoza, fleur, TheGreekOne, felix_suicide,\n"
++	"              tteons, Scrooge\n"
++	"  Thanks    : syrianclippy (emotional support)\n"
++	"  Maintainer: rmux\n"
+ 	"\n";

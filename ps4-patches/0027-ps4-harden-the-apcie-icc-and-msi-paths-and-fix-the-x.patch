@@ -1,0 +1,951 @@
+From b1a0ee45ac3c1ebfbefa4ff59cf03fe7a9e79218 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sun, 26 Apr 2026 21:54:45 +0200
+Subject: [PATCH 027/124] ps4: harden the apcie, icc and msi paths and fix the
+ xhci irqs
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/ps4/aeolia.h              |  13 +-
+ drivers/ps4/ps4-apcie-icc.c       | 260 +++++++++++++++++++-----------
+ drivers/ps4/ps4-apcie-pwrbutton.c |   2 +-
+ drivers/ps4/ps4-apcie.c           | 159 ++++++++++++------
+ drivers/usb/host/xhci-aeolia.c    |  34 ++--
+ 5 files changed, 305 insertions(+), 163 deletions(-)
+
+diff --git a/drivers/ps4/aeolia.h b/drivers/ps4/aeolia.h
+index 7840aec71f28b95bb88fc64913ebecfc00986eb4..0d9bda8df0cd04c8396d3ab46623cbe09cf64087 100644
+--- a/drivers/ps4/aeolia.h
++++ b/drivers/ps4/aeolia.h
+@@ -5,6 +5,8 @@
+ #include <linux/pci.h>
+ #include <linux/i2c.h>
+ 
++struct apcie_msi_domain_ctx;
++
+ enum aeolia_func_id {
+ 	AEOLIA_FUNC_ID_ACPI = 0,
+ 	AEOLIA_FUNC_ID_GBE,
+@@ -142,21 +144,22 @@ struct apcie_icc_dev {
+ struct apcie_dev {
+ 	struct pci_dev *pdev;
+ 	struct irq_domain *irqdomain;
++	struct apcie_msi_domain_ctx *msi_domain_ctx;
+ 	void __iomem *bar0;
+ 	void __iomem *bar2;
+ 	void __iomem *bar4;
+ 
+ 	int nvec;
+-	int8_t irq_map[100];
++	int irq_map[100];
+ 	int serial_line[2];
+ 	struct apcie_icc_dev icc;
+ };
+ 
+-#define sc_err(...) dev_info(&sc->pdev->dev, __VA_ARGS__)
+-#define sc_warn(...) dev_info(&sc->pdev->dev, __VA_ARGS__)
+-#define sc_notice(...) dev_info(&sc->pdev->dev, __VA_ARGS__)
++#define sc_err(...) dev_err(&sc->pdev->dev, __VA_ARGS__)
++#define sc_warn(...) dev_warn(&sc->pdev->dev, __VA_ARGS__)
++#define sc_notice(...) dev_notice(&sc->pdev->dev, __VA_ARGS__)
+ #define sc_info(...) dev_info(&sc->pdev->dev, __VA_ARGS__)
+-#define sc_dbg(...) dev_info(&sc->pdev->dev, __VA_ARGS__)
++#define sc_dbg(...) dev_dbg(&sc->pdev->dev, __VA_ARGS__)
+ 
+ static inline int apcie_irqnum(struct apcie_dev *sc, int index)
+ {
+diff --git a/drivers/ps4/ps4-apcie-icc.c b/drivers/ps4/ps4-apcie-icc.c
+index 442ae9a78d9045abfebcc1a4dc4b9bad9b4853a8..fb33f939d698bd355f8e3b45c10511a4cc30e7cc 100644
+--- a/drivers/ps4/ps4-apcie-icc.c
++++ b/drivers/ps4/ps4-apcie-icc.c
+@@ -1,5 +1,3 @@
+-#define DEBUG
+-
+ #include <linux/kernel.h>
+ #include <linux/sched.h>
+ #include <linux/wait.h>
+@@ -16,6 +14,9 @@
+  * having to get a reference to the device. */
+ static struct apcie_dev *icc_sc;
+ DEFINE_MUTEX(icc_mutex);
++static DEFINE_MUTEX(icc_ioctl_mutex);
++static bool icc_chrdev_registered;
++static int icc_major;
+ 
+ /* The ICC message passing interface seems to be potentially designed to
+  * support multiple outstanding requests at once, but the original PS4 OS never
+@@ -44,7 +45,7 @@ void icc_reboot(void);
+ int apcie_icc_init(struct apcie_dev *sc);
+ void apcie_icc_remove(struct apcie_dev *sc);
+ 
+-#define ICC_MAJOR	'I'
++#define ICC_IOCTL_TYPE	'I'
+ 
+  struct icc_cmd {
+  	u8 major;
+@@ -55,7 +56,7 @@ void apcie_icc_remove(struct apcie_dev *sc);
+  	u16 reply_length;
+  };
+ 
+-#define ICC_IOCTL_CMD _IOWR(ICC_MAJOR, 1, struct icc_cmd)
++#define ICC_IOCTL_CMD _IOWR(ICC_IOCTL_TYPE, 1, struct icc_cmd)
+ 
+ static u16 checksum(const void *p, int length)
+ {
+@@ -172,19 +173,24 @@ static void handle_message(struct apcie_dev *sc)
+ static irqreturn_t icc_interrupt(int irq, void *arg)
+ {
+ 	struct apcie_dev *sc = arg;
++	u32 pending;
+ 	u32 status;
+ 	u32 ret = IRQ_NONE;
++	int loops;
+ 
+-	do {
++	for (loops = 0; loops < 64; loops++) {
+ 		status = ioread32(sc->bar4 + APCIE_REG_ICC_STATUS);
++		pending = status & (APCIE_ICC_SEND | APCIE_ICC_ACK);
++		if (!pending)
++			return ret;
+ 
+-		if (status & APCIE_ICC_ACK) {
++		if (pending & APCIE_ICC_ACK) {
+ 			iowrite32(APCIE_ICC_ACK,
+ 				  sc->bar4 + APCIE_REG_ICC_STATUS);
+ 			ret = IRQ_HANDLED;
+ 		}
+ 
+-		if (status & APCIE_ICC_SEND) {
++		if (pending & APCIE_ICC_SEND) {
+ 			iowrite32(APCIE_ICC_SEND,
+ 				  sc->bar4 + APCIE_REG_ICC_STATUS);
+ 			handle_message(sc);
+@@ -194,7 +200,11 @@ static irqreturn_t icc_interrupt(int irq, void *arg)
+ 				  sc->bar4 + APCIE_REG_ICC_DOORBELL);
+ 			ret = IRQ_HANDLED;
+ 		}
+-	} while (status);
++	}
++
++	dev_warn_ratelimited(&sc->pdev->dev,
++			     "icc: IRQ status stuck after 64 loops (status=0x%08x)\n",
++			     status);
+ 
+ 	return ret;
+ }
+@@ -296,10 +306,12 @@ int apcie_icc_cmd(u8 major, u16 minor, const void *data, u16 length,
+ 	mutex_lock(&icc_mutex);
+ 	if (!icc_sc) {
+ 		pr_err("icc: not ready\n");
+-		return -EAGAIN;
++		ret = -EAGAIN;
++		goto out_unlock;
+ 	}
+ 	ret = _apcie_icc_cmd(icc_sc, major, minor, data, length, reply, reply_length,
+ 		       false);
++out_unlock:
+ 	mutex_unlock(&icc_mutex);
+ 	return ret;
+ }
+@@ -310,24 +322,24 @@ __maybe_unused void resetUsbPort(void)
+ 	u8 off = 0, on = 1;
+ 	u8 resp[20];
+ 	int ret;
+-	
++
+ 	//Turn OFF Usb
+ 	ret = apcie_icc_cmd(5, 0x10, &off, sizeof(off), resp, 20);
+-	printk("Turn OFF USB: ret=%d, reply %02x %02x %02x %02x", ret, resp[0], resp[1], resp[2], resp[3]);
+-	if(ret < 0)
+-	{
+-		printk("Turn off USB failed!");
++	if (ret < 0) {
++		pr_err("icc: USB disable failed: %d\n", ret);
+ 		return;
+ 	}
+-	
++	pr_debug("icc: USB disable ret=%d, reply %02x %02x %02x %02x\n",
++		 ret, resp[0], resp[1], resp[2], resp[3]);
++
+ 	//Turn ON Usb
+ 	ret = apcie_icc_cmd(5, 0x10, &on, sizeof(on), resp, 20);
+-	printk("Turn ON USB: ret=%d, reply %02x %02x %02x %02x", ret, resp[0], resp[1], resp[2], resp[3]);
+-	if(ret < 0)
+-	{
+-		printk("Turn on USB failed");
++	if (ret < 0) {
++		pr_err("icc: USB enable failed: %d\n", ret);
+ 		return;
+ 	}
++	pr_debug("icc: USB enable ret=%d, reply %02x %02x %02x %02x\n",
++		 ret, resp[0], resp[1], resp[2], resp[3]);
+ }
+ 
+ void resetBtWlan(void)
+@@ -340,28 +352,19 @@ void resetBtWlan(void)
+ 
+ 	/* Get bt/wlan status */
+ //	ret = apcie_icc_cmd(5, 1, NULL, 0, resp, 20);
+-//	printk("BT/WLAN status: ret=%d, reply %02x %02x %02x %02x", ret, resp[0], resp[1], resp[2], resp[3]);
+ 
+ 	/** Turn off is done from linux-loader actually, if you want you can remove it from linux-loader and done it here **/
+ 	
+ 	//Turn OFF bt/wlan
+-/*	ret = apcie_icc_cmd(5, 0, &off, sizeof(off), resp, 20);
+-	printk("Turn OFF BT/WLAN: ret=%d, reply %02x %02x %02x %02x", ret, resp[0], resp[1], resp[2], resp[3]);
+-	if(ret < 0)
+-	{
+-		printk("Turn off bt/wlan failed!");
+-		return;
+-	}
+-*/
+ 
+ 	//Turn ON bt/wlan
+ 	ret = apcie_icc_cmd(5, 0, &on, sizeof(on), resp, 20);
+-	printk("Turn ON BT/WLAN: ret=%d, reply %02x %02x %02x %02x", ret, resp[0], resp[1], resp[2], resp[3]);
+-	if(ret < 0)
+-	{
+-		printk("Turn on bt/wlan failed");
++	if (ret < 0) {
++		pr_err("icc: BT/WLAN enable failed: %d\n", ret);
+ 		return;
+ 	}
++	pr_debug("icc: BT/WLAN enable ret=%d, reply %02x %02x %02x %02x\n",
++		 ret, resp[0], resp[1], resp[2], resp[3]);
+ }
+ 
+ void do_icc_init(void) {
+@@ -381,19 +384,28 @@ void do_icc_init(void) {
+ 	int ret;
+ 	// test: get FW version
+ 	ret = apcie_icc_cmd(2, 6, NULL, 0, reply, 0x30);
+-	printk("ret=%d, reply %02x %02x %02x %02x %02x %02x %02x %02x\n", ret,
+-		reply[0], reply[1], reply[2], reply[3],
+-		reply[4], reply[5], reply[6], reply[7]);
++	if (ret < 0)
++		pr_err("icc: firmware query failed: %d\n", ret);
++	else
++		pr_debug("icc: firmware query ret=%d, reply %02x %02x %02x %02x %02x %02x %02x %02x\n",
++			 ret, reply[0], reply[1], reply[2], reply[3],
++			 reply[4], reply[5], reply[6], reply[7]);
+ 	ret = apcie_icc_cmd(1, 0, &svc, 1, reply, 0x30);
+-	printk("ret=%d, reply %02x %02x %02x %02x %02x %02x %02x %02x\n", ret,
+-		reply[0], reply[1], reply[2], reply[3],
+-		reply[4], reply[5], reply[6], reply[7]);
++	if (ret < 0)
++		pr_err("icc: service init failed: %d\n", ret);
++	else
++		pr_debug("icc: service init ret=%d, reply %02x %02x %02x %02x %02x %02x %02x %02x\n",
++			 ret, reply[0], reply[1], reply[2], reply[3],
++			 reply[4], reply[5], reply[6], reply[7]);
+ 
+ 	/* Set the LED to something nice */
+ 	ret = apcie_icc_cmd(9, 0x20, led_config, ARRAY_SIZE(led_config), reply, 0x30);
+-	printk("ret=%d, reply %02x %02x %02x %02x %02x %02x %02x %02x\n", ret,
+-		reply[0], reply[1], reply[2], reply[3],
+-		reply[4], reply[5], reply[6], reply[7]);
++	if (ret < 0)
++		pr_err("icc: LED init failed: %d\n", ret);
++	else
++		pr_debug("icc: LED init ret=%d, reply %02x %02x %02x %02x %02x %02x %02x %02x\n",
++			 ret, reply[0], reply[1], reply[2], reply[3],
++			 reply[4], reply[5], reply[6], reply[7]);
+ }
+ 
+ static void icc_shutdown(void)
+@@ -404,7 +416,7 @@ static void icc_shutdown(void)
+ 	if (apcie_status() != 1)
+ 		return;
+ 	apcie_icc_cmd(4, 1, command, sizeof(command), NULL, 0);
+-	mdelay(3000);
++	msleep(3000);
+ 	WARN_ON(1);
+ }
+ 
+@@ -416,48 +428,87 @@ void icc_reboot(void)
+ 	if (apcie_status() != 1)
+ 		return;
+ 	apcie_icc_cmd(4, 1, command, sizeof(command), NULL, 0);
+-	mdelay(3000);
++	msleep(3000);
+ 	WARN_ON(1);
+ }
+ 
+-static void *ioctl_tmp_buf = NULL;
++static void *ioctl_send_buf;
++static void *ioctl_reply_buf;
+ 
+  static long icc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+  {
+- 	int ret;
+- 	void __user *uap = (void __user *)arg;
+- 	switch (cmd) {
+- 	case ICC_IOCTL_CMD: {
+- 		struct icc_cmd cmd;
+- 		int reply_len;
+- 		ret = copy_from_user(&cmd, uap, sizeof(cmd));
+- 		if (ret) {
+- 			ret = -EFAULT;
+- 			break;
+- 		}
+- 		ret = copy_from_user(ioctl_tmp_buf, cmd.data, cmd.length);
+- 		if (ret) {
+- 			ret = -EFAULT;
+- 			break;
+- 		}
+- 		reply_len = apcie_icc_cmd(cmd.major, cmd.minor, ioctl_tmp_buf,
+- 			cmd.length, ioctl_tmp_buf, cmd.reply_length);
+- 		if (reply_len < 0) {
+- 			ret = reply_len;
+- 			break;
+- 		}
+- 		ret = copy_to_user(cmd.reply, ioctl_tmp_buf, cmd.reply_length);
+- 		if (ret) {
+- 			ret = -EFAULT;
+- 			break;
+- 		}
+- 		ret = reply_len;
+- 		} break;
+- 	default:
+- 		ret = -ENOENT;
+- 		break;
+- 	}
+- 	return ret;
++	int ret;
++	void __user *uap = (void __user *)arg;
++
++	switch (cmd) {
++	case ICC_IOCTL_CMD: {
++		struct icc_cmd cmd;
++		void *reply_buf;
++		const void *send_buf;
++		int reply_len;
++		size_t reply_copy_len;
++
++		ret = copy_from_user(&cmd, uap, sizeof(cmd));
++		if (ret) {
++			ret = -EFAULT;
++			break;
++		}
++		if (cmd.length > ICC_MAX_PAYLOAD) {
++			ret = -E2BIG;
++			break;
++		}
++		if (cmd.reply_length > ICC_MAX_PAYLOAD) {
++			ret = -E2BIG;
++			break;
++		}
++		if (cmd.length && !cmd.data) {
++			ret = -EINVAL;
++			break;
++		}
++		if (cmd.reply_length && !cmd.reply) {
++			ret = -EINVAL;
++			break;
++		}
++
++		if (!ioctl_send_buf || !ioctl_reply_buf) {
++			ret = -ENODEV;
++			break;
++		}
++
++		mutex_lock(&icc_ioctl_mutex);
++		if (cmd.length &&
++		    copy_from_user(ioctl_send_buf, cmd.data, cmd.length)) {
++			ret = -EFAULT;
++			goto out_unlock_ioctl;
++		}
++
++		send_buf = cmd.length ? ioctl_send_buf : NULL;
++		reply_buf = cmd.reply_length ? ioctl_reply_buf : NULL;
++
++		reply_len = apcie_icc_cmd(cmd.major, cmd.minor, send_buf,
++			cmd.length, reply_buf, cmd.reply_length);
++		if (reply_len < 0) {
++			ret = reply_len;
++			goto out_unlock_ioctl;
++		}
++
++		reply_copy_len = min_t(size_t, cmd.reply_length, reply_len);
++		if (reply_copy_len &&
++		    copy_to_user(cmd.reply, reply_buf, reply_copy_len)) {
++			ret = -EFAULT;
++			goto out_unlock_ioctl;
++		}
++
++		ret = reply_len;
++out_unlock_ioctl:
++		mutex_unlock(&icc_ioctl_mutex);
++		break;
++	}
++	default:
++		ret = -ENOENT;
++		break;
++	}
++	return ret;
+  }
+ 
+  static const struct file_operations icc_fops = {
+@@ -465,7 +516,6 @@ static void *ioctl_tmp_buf = NULL;
+  	.unlocked_ioctl = icc_ioctl,
+  };
+ 
+-
+ int apcie_icc_init(struct apcie_dev *sc)
+ {
+ 	int ret;
+@@ -485,10 +535,13 @@ int apcie_icc_init(struct apcie_dev *sc)
+ 				APCIE_RGN_ICC_BASE, APCIE_RGN_ICC_SIZE,
+ 				"apcie.icc")) {
+ 		sc_err("icc: failed to request ICC register region\n");
+-		return -EBUSY;
++		ret = -EBUSY;
++		goto put_mem_dev;
+ 	}
+ 
+ 	sc->icc.spm_base = pci_resource_start(mem_dev, 5) + APCIE_SPM_ICC_BASE;
++	pci_dev_put(mem_dev);
++	mem_dev = NULL;
+ 	if (!request_mem_region(sc->icc.spm_base, APCIE_SPM_ICC_SIZE,
+ 				"spm.icc")) {
+ 		sc_err("icc: failed to request ICC SPM region\n");
+@@ -552,16 +605,31 @@ int apcie_icc_init(struct apcie_dev *sc)
+ 	do_icc_init();
+ 	pm_power_off = &icc_shutdown;
+ 
+-	ioctl_tmp_buf = kzalloc(1 << 16, GFP_KERNEL);
+- 	if (!ioctl_tmp_buf) {
+- 		sc_err("icc: alloc ioctl_tmp_buf failed\n");
+- 		goto done;
+- 	}
+- 	ret = register_chrdev(ICC_MAJOR, "icc", &icc_fops);
+- 	if (ret) {
+- 		sc_err("icc: register_chrdev failed: %d\n", ret);
+- 		goto done;
+- 	}
++	ioctl_send_buf = kzalloc(ICC_MAX_PAYLOAD, GFP_KERNEL);
++	if (!ioctl_send_buf) {
++		sc_warn("icc: alloc ioctl_send_buf failed, leaving /dev/icc disabled\n");
++		goto done;
++	}
++
++	ioctl_reply_buf = kzalloc(ICC_MAX_PAYLOAD, GFP_KERNEL);
++	if (!ioctl_reply_buf) {
++		sc_warn("icc: alloc ioctl_reply_buf failed, leaving /dev/icc disabled\n");
++		kfree(ioctl_send_buf);
++		ioctl_send_buf = NULL;
++		goto done;
++	}
++
++	ret = register_chrdev(0, "icc", &icc_fops);
++	if (ret) {
++		sc_warn("icc: register_chrdev failed: %d\n", ret);
++		kfree(ioctl_reply_buf);
++		kfree(ioctl_send_buf);
++		ioctl_reply_buf = NULL;
++		ioctl_send_buf = NULL;
++		goto done;
++	}
++	icc_major = ret;
++	icc_chrdev_registered = true;
+  done:
+ 
+ 	return 0;
+@@ -580,12 +648,24 @@ release_spm:
+ release_icc:
+ 	release_mem_region(pci_resource_start(sc->pdev, 4) +
+ 			   APCIE_RGN_ICC_BASE, APCIE_RGN_ICC_SIZE);
++put_mem_dev:
++	if (mem_dev)
++		pci_dev_put(mem_dev);
+ 	return ret;
+ }
+ 
+ void apcie_icc_remove(struct apcie_dev *sc)
+ {
+ 	sc_err("apcie_icc_remove: shouldn't normally be called\n");
++	if (icc_chrdev_registered) {
++		unregister_chrdev(icc_major, "icc");
++		icc_major = 0;
++		icc_chrdev_registered = false;
++	}
++	kfree(ioctl_reply_buf);
++	kfree(ioctl_send_buf);
++	ioctl_reply_buf = NULL;
++	ioctl_send_buf = NULL;
+ 	pm_power_off = NULL;
+ 	icc_pwrbutton_remove(sc);
+ 	icc_i2c_remove(sc);
+diff --git a/drivers/ps4/ps4-apcie-pwrbutton.c b/drivers/ps4/ps4-apcie-pwrbutton.c
+index 0fef75c4aae67edbda4c9d2d2f9741c6357765c3..af0f12add6adc6f69e36b14bad60c5c27055ba63 100644
+--- a/drivers/ps4/ps4-apcie-pwrbutton.c
++++ b/drivers/ps4/ps4-apcie-pwrbutton.c
+@@ -70,6 +70,6 @@ int icc_pwrbutton_init(struct apcie_dev *sc)
+ void icc_pwrbutton_remove(struct apcie_dev *sc)
+ {
+ 	if (sc->icc.pwrbutton_dev)
+-		input_free_device(sc->icc.pwrbutton_dev);
++		input_unregister_device(sc->icc.pwrbutton_dev);
+ 	sc->icc.pwrbutton_dev = NULL;
+ }
+diff --git a/drivers/ps4/ps4-apcie.c b/drivers/ps4/ps4-apcie.c
+index 285f25ff8aff7939d8772236562aed5393d8a4c5..a35294ea884f1f57a55f24c20f1397ae8778a364 100644
+--- a/drivers/ps4/ps4-apcie.c
++++ b/drivers/ps4/ps4-apcie.c
+@@ -1,5 +1,3 @@
+-#define DEBUG
+-
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+ #include <linux/pci.h>
+@@ -30,6 +28,16 @@ static const int subfuncs_per_func[AEOLIA_NUM_FUNCS] = {
+ 	4, 4, 4, 4, 31, 2, 2, 4
+ };
+ 
++struct apcie_irq_data {
++	struct apcie_dev *sc;
++	u8 msi_data;
++};
++
++struct apcie_msi_domain_ctx {
++	struct irq_chip controller;
++	struct msi_domain_info info;
++};
++
+ static inline u32 glue_read32(struct apcie_dev *sc, u32 offset) {
+ 	return ioread32(sc->bar4 + offset);
+ }
+@@ -111,7 +119,8 @@ static void apcie_config_msi(struct apcie_dev *sc, u32 func, u32 subfunc,
+ 
+ static void apcie_msi_write_msg(struct irq_data *data, struct msi_msg *msg)
+ {
+-	struct apcie_dev *sc = data->chip_data;
++	struct apcie_irq_data *irq_data = data->chip_data;
++	struct apcie_dev *sc = irq_data->sc;
+ 	u32 func = data->hwirq >> 8;
+ 	u32 subfunc = data->hwirq & 0xff;
+ 
+@@ -136,7 +145,8 @@ static void apcie_msi_write_msg(struct irq_data *data, struct msi_msg *msg)
+ 
+ static void apcie_msi_unmask(struct irq_data *data)
+ {
+-	struct apcie_dev *sc = data->chip_data;
++	struct apcie_irq_data *irq_data = data->chip_data;
++	struct apcie_dev *sc = irq_data->sc;
+ 	u32 func = data->hwirq >> 8;
+ 
+ 	glue_set_mask(sc, APCIE_REG_MSI_MASK(func), data->mask);
+@@ -144,7 +154,8 @@ static void apcie_msi_unmask(struct irq_data *data)
+ 
+ static void apcie_msi_mask(struct irq_data *data)
+ {
+-	struct apcie_dev *sc = data->chip_data;
++	struct apcie_irq_data *irq_data = data->chip_data;
++	struct apcie_dev *sc = irq_data->sc;
+ 	u32 func = data->hwirq >> 8;
+ 
+ 	glue_clear_mask(sc, APCIE_REG_MSI_MASK(func), data->mask);
+@@ -164,31 +175,18 @@ static void apcie_msi_calc_mask(struct irq_data *data) {
+ static void apcie_irq_msi_compose_msg(struct irq_data *data,
+ 				       struct msi_msg *msg)
+ {
++	struct apcie_irq_data *irq_data = data->chip_data;
+ 	struct irq_cfg *cfg __maybe_unused = irqd_cfg(data);
+ 
+ 	memset(msg, 0, sizeof(*msg));
+ 	msg->address_hi = X86_MSI_BASE_ADDRESS_HIGH;
+ 	msg->address_lo = 0xfee00000;// Just do it like this for now
++	msg->data = irq_data ? irq_data->msi_data : data->irq - 1;
+ 
+-	// I know this is absolute horseshit, but it matches a known working kernel
+-	{
+-		struct apcie_dev *sc = data->chip_data;
+-		int i;
+-		msg->data = data->irq - 1;
+-		if (sc) {
+-			for (i = 0; i < 100; i++) {
+-				if (sc->irq_map[i] == data->irq) {
+-					msg->data = i;
+-					break;
+-				}
+-			}
+-		}
+-	}
+-
+-	pr_err("apcie_irq_msi_compose_msg\n");
++	pr_debug("apcie_irq_msi_compose_msg\n");
+ }
+ 
+-static struct irq_chip apcie_msi_controller = {
++static const struct irq_chip apcie_msi_controller_template = {
+ 	.name = "Aeolia-MSI",
+ 	.irq_unmask = apcie_msi_unmask,
+ 	.irq_mask = apcie_msi_mask,
+@@ -211,23 +209,42 @@ static int apcie_msi_init(struct irq_domain *domain,
+ 			 irq_hw_number_t hwirq, msi_alloc_info_t *arg)
+ {
+ 	struct irq_data *data;
+-	pr_err("apcie_msi_init(%p, %p, %d, 0x%lx, %p)\n", domain, info, virq, hwirq, arg);
++	struct apcie_irq_data *irq_data;
++	struct apcie_dev *sc = info->chip_data;
++	int i;
++	int slot = -1;
+ 
+-	data = irq_domain_get_irq_data(domain, virq);
+-	irq_domain_set_info(domain, virq, hwirq, info->chip, info->chip_data,
+-			    handle_edge_irq, NULL, "edge");
+-	apcie_msi_calc_mask(data);
++	pr_debug("apcie_msi_init(%p, %p, %d, 0x%lx, %p)\n",
++		 domain, info, virq, hwirq, arg);
+ 
+-	/* virq in irq_map eintragen */
+-	struct apcie_dev *sc = info->chip_data;
+ 	if (sc) {
+-		int i;
+-		for (i = 0; i < 100; i++) {
++		for (i = 0; i < ARRAY_SIZE(sc->irq_map); i++) {
+ 			if (sc->irq_map[i] == -1) {
+-				sc->irq_map[i] = virq;
++				slot = i;
+ 				break;
+ 			}
+ 		}
++
++		if (slot < 0) {
++			pr_err("apcie_msi_init: no free irq_map entry for virq %u\n", virq);
++			return -ENOSPC;
++		}
++	}
++
++	irq_data = kzalloc(sizeof(*irq_data), GFP_KERNEL);
++	if (!irq_data)
++		return -ENOMEM;
++
++	irq_data->sc = sc;
++	irq_data->msi_data = slot >= 0 ? slot : virq - 1;
++
++	data = irq_domain_get_irq_data(domain, virq);
++	irq_domain_set_info(domain, virq, hwirq, info->chip, irq_data,
++			    handle_edge_irq, NULL, "edge");
++	apcie_msi_calc_mask(data);
++
++	if (sc) {
++		sc->irq_map[slot] = virq;
+ 	}
+ 
+ 	return 0;
+@@ -236,14 +253,34 @@ static int apcie_msi_init(struct irq_domain *domain,
+ static void apcie_msi_free(struct irq_domain *domain,
+ 			  struct msi_domain_info *info, unsigned int virq)
+ {
+-	pr_err("apcie_msi_free(%d)\n", virq);
++	struct irq_data *data;
++	struct apcie_irq_data *irq_data;
++	struct apcie_dev *sc = info->chip_data;
++	int i;
++
++	data = irq_domain_get_irq_data(domain, virq);
++	irq_data = data ? data->chip_data : NULL;
++
++	if (sc) {
++		for (i = 0; i < ARRAY_SIZE(sc->irq_map); i++) {
++			if (sc->irq_map[i] == virq) {
++				sc->irq_map[i] = -1;
++				break;
++			}
++		}
++	}
++
++	pr_debug("apcie_msi_free(%d)\n", virq);
++	kfree(irq_data);
+ }
+ 
+ 
+ static void apcie_set_desc(msi_alloc_info_t *arg, struct msi_desc *desc)
+ {
++	struct pci_dev *device;
++
+ 	arg->desc = desc;
+-	struct pci_dev* device = msi_desc_to_pci_dev(desc);
++	device = msi_desc_to_pci_dev(desc);
+ 
+ 	arg->hwirq = PCI_FUNC(device->devfn) << 8;
+ 
+@@ -259,16 +296,16 @@ static struct msi_domain_ops apcie_msi_domain_ops = {
+ 	.msi_free	= apcie_msi_free,
+ };
+ 
+-static struct msi_domain_info apcie_msi_domain_info = {
++static const struct msi_domain_info apcie_msi_domain_info_template = {
+ 	.flags		= MSI_FLAG_USE_DEF_DOM_OPS | MSI_FLAG_USE_DEF_CHIP_OPS,
+ 	.ops		= &apcie_msi_domain_ops,
+-	.chip		= &apcie_msi_controller,
+ 	.handler	= handle_edge_irq,
+ 	.handler_name	= "edge"
+ };
+ 
+ static struct irq_domain *apcie_create_irq_domain(struct apcie_dev *sc)
+ {
++	struct apcie_msi_domain_ctx *ctx;
+ 	struct irq_domain *domain, *parent;
+ 	struct fwnode_handle *fn;
+ 	struct irq_fwspec fwspec;
+@@ -277,10 +314,18 @@ static struct irq_domain *apcie_create_irq_domain(struct apcie_dev *sc)
+ 	if (x86_vector_domain == NULL)
+ 		return NULL;
+ 
+-	apcie_msi_domain_info.chip_data = (void *)sc;
++	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
++	if (!ctx)
++		return NULL;
+ 
+-	fn = irq_domain_alloc_named_id_fwnode(apcie_msi_controller.name, pci_dev_id(sc->pdev));
++	ctx->controller = apcie_msi_controller_template;
++	ctx->info = apcie_msi_domain_info_template;
++	ctx->info.chip = &ctx->controller;
++	ctx->info.chip_data = sc;
++
++	fn = irq_domain_alloc_named_id_fwnode(ctx->controller.name, pci_dev_id(sc->pdev));
+ 	if (!fn) {
++		kfree(ctx);
+ 		return NULL;
+ 	}
+ 
+@@ -299,16 +344,19 @@ static struct irq_domain *apcie_create_irq_domain(struct apcie_dev *sc)
+ 	} else if (parent == x86_vector_domain) {
+ 		sc_dbg("no parent \n");
+ 	} else {
+-		apcie_msi_domain_info.flags |= MSI_FLAG_MULTI_PCI_MSI;
+-		apcie_msi_controller.name = "IR-Aeolia-MSI";
++		ctx->info.flags |= MSI_FLAG_MULTI_PCI_MSI;
++		ctx->controller.name = "IR-Aeolia-MSI";
+ 	}
+ 
+-	domain = msi_create_irq_domain(fn, &apcie_msi_domain_info, parent);
++	domain = msi_create_irq_domain(fn, &ctx->info, parent);
+ 	if (!domain) {
+ 		irq_domain_free_fwnode(fn);
++		kfree(ctx);
+ 		pr_warn("Failed to initialize Aeolia-MSI irqdomain.\n");
++		return NULL;
+ 	}
+ 
++	sc->msi_domain_ctx = ctx;
+ 	return domain;
+ }
+ 
+@@ -328,7 +376,10 @@ int apcie_assign_irqs(struct pci_dev *dev, int nvec)
+ 	unsigned int sc_devfn;
+ 	struct pci_dev *sc_dev;
+ 	struct apcie_dev *sc;
++	struct device *bare_dev;
++	struct msi_desc *desc;
+ 	struct irq_alloc_info info;
++	unsigned int desc_first;
+ 
+ 	sc_devfn = (dev->devfn & ~7) | AEOLIA_FUNC_ID_PCIE;
+ 	sc_dev = pci_get_slot(dev->bus, sc_devfn);
+@@ -350,10 +401,7 @@ int apcie_assign_irqs(struct pci_dev *dev, int nvec)
+ 	/* IRQs "come from" function 4 as far as the IOMMU/system see */
+ 	//info.msi_dev = sc->pdev;
+ 	info.devid = pci_dev_id(sc->pdev);
+-
+-	/*int i, base = 0; -- unused */
+-	struct msi_desc *desc;
+-	struct device* bare_dev = &sc->pdev->dev;
++	bare_dev = &sc->pdev->dev;
+ 
+ 	/* Our hwirq number is function << 8 plus subfunction.
+ 	 * Subfunction is usually 0 and implicitly increments per hwirq,
+@@ -361,29 +409,37 @@ int apcie_assign_irqs(struct pci_dev *dev, int nvec)
+ 	info.hwirq = PCI_FUNC(dev->devfn) << 8;
+ 
+ #ifndef QEMU_HACK_NO_IOMMU
+-	if (!(apcie_msi_domain_info.flags & MSI_FLAG_MULTI_PCI_MSI)) {
++	if (!(sc->msi_domain_ctx->info.flags & MSI_FLAG_MULTI_PCI_MSI)) {
+ 		nvec = 1;
+ 		info.hwirq |= 0xff; /* Shared IRQ for all subfunctions */
+ 	}
+ #endif
+ 
+ 	desc = msi_alloc_desc(bare_dev, nvec, NULL);
++	if (!desc) {
++		ret = -ENOMEM;
++		goto fail;
++	}
++	desc_first = desc->msi_index;
+ 
+ 	info.desc = desc;
+ 	info.data = sc;
+ 
+-	dev_info(&dev->dev, "apcie_assign_irqs(%d) (%ld)\n", nvec, info.hwirq);
++	dev_dbg(&dev->dev, "apcie_assign_irqs(%d) (%ld)\n", nvec, info.hwirq);
+ 
+ 	ret = irq_domain_alloc_irqs(sc->irqdomain, nvec, NUMA_NO_NODE, &info);
+ 	if (ret >= 0) {
+-		dev_info(&dev->dev, "irq_domain_alloc_irqs = %x\n", ret);
++		dev_dbg(&dev->dev, "irq_domain_alloc_irqs = %x\n", ret);
+ 		dev->irq = ret;
+ 		desc->irq = ret;
+ 		ret = nvec;
++	} else {
++		msi_free_msi_descs_range(bare_dev, desc_first,
++					 desc_first + nvec - 1);
+ 	}
+ 
+ fail:
+-	dev_info(&dev->dev, "apcie_assign_irqs returning %d\n", ret);
++	dev_dbg(&dev->dev, "apcie_assign_irqs returning %d\n", ret);
+ 	if (sc_dev)
+ 		pci_dev_put(sc_dev);
+ 	return ret;
+@@ -483,6 +539,8 @@ static void apcie_glue_remove(struct apcie_dev *sc) {
+ 		irq_domain_remove(sc->irqdomain);
+ 		sc->irqdomain = NULL;
+ 	}
++	kfree(sc->msi_domain_ctx);
++	sc->msi_domain_ctx = NULL;
+ 	release_mem_region(pci_resource_start(sc->pdev, 2) +
+ 			   APCIE_RGN_CHIPID_BASE, APCIE_RGN_CHIPID_SIZE);
+ 	release_mem_region(pci_resource_start(sc->pdev, 4) +
+@@ -558,7 +616,7 @@ static int apcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+ 	if ((ret = apcie_icc_init(sc)) < 0)
+ 		goto remove_glue;
+ 
+-	apcie_initialized = true;
++	WRITE_ONCE(apcie_initialized, true);
+ 	return 0;
+ 
+ /* remove_uart:
+@@ -582,6 +640,7 @@ static void apcie_remove(struct pci_dev *dev) {
+ 	struct apcie_dev *sc;
+ 	sc = pci_get_drvdata(dev);
+ 
++	WRITE_ONCE(apcie_initialized, false);
+ 	apcie_icc_remove(sc);
+ 	apcie_uart_remove(sc);
+ 	apcie_glue_remove(sc);
+diff --git a/drivers/usb/host/xhci-aeolia.c b/drivers/usb/host/xhci-aeolia.c
+index 0b048ca119ad13cfae1ec9e4d835defd60310482..8e24d42945b91f92dad3a2ab94a31d4691bd1a2e 100644
+--- a/drivers/usb/host/xhci-aeolia.c
++++ b/drivers/usb/host/xhci-aeolia.c
+@@ -12,6 +12,7 @@
+ #include <linux/slab.h>
+ #include <linux/module.h>
+ #include <linux/acpi.h>
++#include <linux/delay.h>
+ #include <asm/ps4.h>
+ #include "xhci-aeolia.h"
+ #include "../../ps4/aeolia.h"
+@@ -61,10 +62,8 @@ static int xhci_aeolia_probe_one(struct pci_dev *dev, int index)
+ 	struct xhci_hcd *xhci;
+ 	int irq = (axhci->nr_irqs > 1) ? (dev->irq + index) : dev->irq;
+ 
+-	// ok...adding this printk appears to have introduced a delay that fixed
+-	// bringup of the middle host controller, so w/e for now...
+-
+-	printk("xhci_aeolia_probe_one %d, controller is %x\n", index, dev->device);
++	dev_dbg(&dev->dev, "xhci_aeolia_probe_one %d\n", index);
++	usleep_range(200, 500);
+ 
+ 	hcd = usb_create_hcd(driver, &dev->dev, pci_name(dev));
+ 	pci_set_drvdata(dev, axhci); /* usb_create_hcd clobbers this */
+@@ -139,10 +138,8 @@ static void xhci_aeolia_remove_one(struct pci_dev *dev, int index)
+ 	usb_remove_hcd(hcd);
+ 	usb_put_hcd(xhci->shared_hcd);
+ 
+-	// TODO (ps4patches): Does this really need to be disabled?
+-	if(dev->device == PCI_DEVICE_ID_SONY_BELIZE_XHCI) {
++	if (hcd->regs)
+ 		iounmap(hcd->regs);
+-	}
+ 	usb_put_hcd(hcd);
+ 	axhci->hcd[index] = NULL;
+ }
+@@ -206,7 +203,6 @@ static int ahci_init_one(struct pci_dev *pdev)
+ 		goto put_hpriv;
+ 	}
+ 
+-
+ 	hpriv->mmio = pci_ioremap_bar(pdev, ahci_pci_bar);
+ 	if (hpriv->mmio == NULL) {
+ 		dev_dbg(&pdev->dev, "error mapping memory\n");
+@@ -302,7 +298,6 @@ static int ahci_init_one(struct pci_dev *pdev)
+ 		if (ap->flags & ATA_FLAG_EM)
+ 			ap->em_message_type = hpriv->em_msg_type;
+ 
+-
+ 		/* disabled/not-implemented port */
+ 		if (!(hpriv->port_map & (1 << i)))
+ 			ap->ops = &ata_dummy_port_ops;
+@@ -331,6 +326,7 @@ static int ahci_init_one(struct pci_dev *pdev)
+ 	return 0;
+ 
+ 	host_deactivate:
++		ata_host_detach(host);
+ 	release_host:
+ 	unmap_registers:
+ 		iounmap(hpriv->mmio);
+@@ -363,6 +359,7 @@ static int xhci_aeolia_probe(struct pci_dev *dev, const struct pci_device_id *id
+ {
+ 	int idx;
+ 	int retval;
++	bool ahci_started = false;
+ 	struct aeolia_xhci *axhci;
+ 
+ 	if (apcie_status() == 0)
+@@ -371,7 +368,7 @@ static int xhci_aeolia_probe(struct pci_dev *dev, const struct pci_device_id *id
+ 	if (pci_enable_device(dev) < 0)
+ 		return -ENODEV;
+ 
+-	axhci = devm_kzalloc(&dev->dev, sizeof(*axhci), GFP_KERNEL);
++	axhci = kzalloc(sizeof(*axhci), GFP_KERNEL);
+ 	if (!axhci) {
+ 		retval = -ENOMEM;
+ 		goto disable_device;
+@@ -388,12 +385,15 @@ static int xhci_aeolia_probe(struct pci_dev *dev, const struct pci_device_id *id
+ 	}
+ 
+ 	if (dma_set_mask_and_coherent(&dev->dev, DMA_BIT_MASK(31))) {
+-		return -ENODEV;
++		retval = -ENODEV;
++		goto free_irqs;
+ 	}
+ 
+ 	if(dev->device == PCI_DEVICE_ID_SONY_BELIZE_XHCI) {
+ 		retval = ahci_init_one(dev);
+ 		dev_dbg(&dev->dev, "ahci_init_one returned %d", retval);
++		if (!retval)
++			ahci_started = true;
+ 		if (!bus_master) {
+ 			pci_set_master(dev);
+ 			bus_master = true;
+@@ -414,14 +414,14 @@ static int xhci_aeolia_probe(struct pci_dev *dev, const struct pci_device_id *id
+ remove_hcds:
+ 	while (idx--)
+ 		xhci_aeolia_remove_one(dev, idx);
++	if (ahci_started)
++		ahci_remove_one(dev);
++free_irqs:
+ 	apcie_free_irqs(dev->irq, axhci->nr_irqs);
+ free_axhci:
+-	devm_kfree(&dev->dev, axhci);
++	pci_set_drvdata(dev, NULL);
++	kfree(axhci);
+ 
+-	// TODO (ps4patches): Don't aeolia and baikal also need this?
+-	if(dev->device == PCI_DEVICE_ID_SONY_BELIZE_XHCI) {
+-		pci_set_drvdata(dev, NULL);
+-	}
+ disable_device:
+ 	pci_disable_device(dev);
+ 	return retval;
+@@ -447,7 +447,7 @@ static void xhci_aeolia_remove(struct pci_dev *dev)
+ 
+ 	apcie_free_irqs(dev->irq, axhci->nr_irqs);
+ 
+-	// TODO (ps4patches): Belize, remove in ahci commit
++	pci_set_drvdata(dev, NULL);
+ 	kfree(axhci);
+ 
+ 	pci_disable_device(dev);

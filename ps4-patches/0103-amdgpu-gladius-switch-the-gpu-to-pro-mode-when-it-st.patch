@@ -1,0 +1,31 @@
+From 3455abc339d5f2d26f1dd98243a7547c96df6219 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Mon, 9 Nov 2026 00:33:11 +0100
+Subject: [PATCH 103/124] amdgpu: gladius: switch the gpu to pro mode when it
+ starts in base mode
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c b/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c
+index 02e5dfae4ff21eb8543e5af917fde35a1545aef8..89b58e7614d07ffea39f5103774f77d426da3090 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c
+@@ -1574,6 +1574,15 @@ static int gfx_v7_0_init_microcode(struct amdgpu_device *adev)
+ 
+ 	cp_name = chip_name;
+ 	if (adev->asic_type == CHIP_GLADIUS) {
++		u32 mode = RREG32(0x203e);
++
++		if (!(mode & 0x10)) {
++			WREG32(0x203e, (mode & 0xffffffe4) | 0x10);
++			WREG32(0x341b, RREG32(0x341b) & ~1);
++			WREG32(0x361b, RREG32(0x361b) & ~1);
++			dev_info(adev->dev, "Gladius base mode 0x%08x, switched to pro mode\n",
++				 mode);
++		}
+ 		cp_name = (RREG32(0x203e) & 1) ? "gladius_a" : "gladius_b";
+ 		dev_info(adev->dev, "Gladius cp microcode %s (0x203e 0x%08x)\n",
+ 			 cp_name, RREG32(0x203e));

@@ -1,0 +1,338 @@
+From 79d665c2a436894b36e8200c93ab40346bacd317 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sat, 7 Nov 2026 19:17:05 +0100
+Subject: [PATCH 085/124] docs: move the kheops part to its own file and fix
+ the credit names
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ KHEOPS.md | 135 ++++++++++++++++++++++++++++++++++++++++++++++++
+ README.md | 152 ++++--------------------------------------------------
+ 2 files changed, 145 insertions(+), 142 deletions(-)
+ create mode 100644 KHEOPS.md
+
+diff --git a/KHEOPS.md b/KHEOPS.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..bc4bddc3f437903f7011a3f7fb2f9cbb6bf0f632
+--- /dev/null
++++ b/KHEOPS.md
+@@ -0,0 +1,135 @@
++# About KHEOPS
++
++KHEOPS is saya's kernel pack. it only ever ships prebuilt bzImages, never source. for months saya, seuros and others on their side have told people that i steal their code and that my kernels are vibe coded.
++
++i didnt answer with words. below is whats actually inside their kernels, what they said themselves, and whats inside the kernels that went around with my name swapped out. everything here can be checked.
++
++## The teardown
++
++KHEOPS v2.1 is 14 prebuilt kernels with no source. i took them apart, the 6.15.4 builds in detail. every point below has the addresses and bytes in my notes.
++
++and that was on purpose. on july 27, before the release, someone asked saya "will the source be released with it?". he answered "NEVER". later he said he links the original trees and "le reste c'est mon travail" (the rest is my work). the gpl does not work like that. if you ship a kernel binary you ship the full source of it, your own changes included. linking crashniels tree does not cover the bridge changes he made.
++
++where the code comes from:
++
++- the base is crashniels public 6.15.y tree. their own file names even say it: `6.15.4.src-crashniels_KHEOPS_FullLTO-v2.1_...`. strings that only exist in his tree are in the binary, for example the `apcie_assign_irqs(%d) (%d)` format and the `ps4_bridge_get_modes` print at info level
++- every gpu table in cik.c is byte identical to the public tree. 25 of 25 found, gladius included
++- every ps4 driver string from `arch/x86/platform/ps4` and `drivers/ps4` is in the binary. 0 missing
++- a full string scan against the whole crashniels tree finds no new code. the only new strings are the wifi driver
++- wifi is not theirs either. its the yhpgi mt7668s unstable driver, moved into the tree with amorghus patch for 6.15.4
++- the rest is public stuff: prjc bmq scheduler, ntsync, graysky cpu flags, tkg config patches
++
++what they changed:
++
++- the hdmi bridge. the 4k build offers one mode only, 3840x2160 at 60hz, and accepts nothing else
++- the pci vendor check in the bridge enable is removed
++- one bridge register write (`0x6020 = 0x00`) is dropped from the enable sequence. the rest of the 76 commands is the same as the source
++- thats it. nothing in the gpu, nothing in the southbridge drivers
++
++what is broken:
++
++- the multi resolution builds offer 2160p60 and 4096x2160p60, then their own mode check rejects both. what you can really use is 1080p60, 1080p100, 1080p120, 720p and 2160p30
++- the single resolution builds drop the preferred flag on their only mode, which crashniels added back in august 2025
++- 5 of the builds have no wifi driver but still carry all 9 mt7668 firmware blobs
++
++what is missing:
++
++- hardware video. the binary has no liverpool uvd or vce firmware at all, so the video engines never start and everything decodes and encodes on the cpu. on october 23 GattoDev asked saya "yall got hardware transcoding yet?", he changed the subject to game tests. this tree has both, see the showcase
++- edid. the bridge never reads your tv. it hands out a fixed list of modes and clears the edid. thats why saya tells people to make a fake `edid.bin` for their tv. on october 3 he blamed "the shit edid by bzImage rmux" for a 32" tv showing as 55" in fastfetch. that number comes from the tv itself. this tree reads the real edid from your tv over the hdmi bridge and passes it on
++
++the firmware:
++
++- the built in firmware list is the exact list string from feeRnts tree and mine
++- all 9 mt7668 blobs are md5 identical to the ones in our `extra_firmware`
++
++## The 7.0 kernels
++
++on may 8 2026 vvsx87 posted a "7.0.4 belize" kernel in the ps4linux discord. on may 9 saya showed off a "7.0.4.src-KHEOPS-FullLTO-v2.1_1080p60Hz_aeolia-belize" build. when people asked for the source he wrote "My source ... For you ? Never". he never released that kernel or its source.
++
++on may 10 my baikal 7.0 bringup went into my tree. on may 14 and 15 vvsx87 posted "7.0.6 baikal" and "7.0.7 baikal" kernels. no source, no fork, no credit.
++
++on october 5 saya explained himself how his 7.x would come out:
++
++> Version 7.x will arrive... whether from this source or another. It doesn't matter if it comes from Team Kheops, a contributing member, or someone else entirely... I'll tweak it and implement all my own additions... my personal signature.
++
++in the same message he calls himself "the first to pack a bzImage kernel with so many features: NTFS, Btrfs, full LTO, zram". those are config switches every kernel has.
++
++## The 7.2.3 "Flawless" kernel
++
++on september 5 2026 vvsx87 shared a kernel called `7.2.3-Flawless-NTSync-FullLTO`, built by `vvsx87@cachyos-ps4` that same morning. its own boot log prints my banner:
++
++```
++Strawberry PS4 Linux
++Release   : 7.2.3-Flawless-NTSync-FullLTO
++Builder   : vvsx87@cachyos-ps4
++```
++
++the binary has my code in it. none of this exists in crashniels tree, all of it was in my public tree months before:
++
++- the strawberry banner. `init: add strawberry banner`, in my tree since may 2026
++- `PS4 GPU IRQ: vector`, from `amdgpu: require MSI/MSI-X for PS4 Liverpool IRQs`, may 2026
++- `PS4 fan hwmon ready`, my fan driver, may 2026
++- `ps4-buzzer`, my buzzer driver, may 2026
++- `ps4-cpufreq`, my cpufreq driver, august 2026
++
++two weeks later, on september 18, he showed `7.2.6-Flawless-FullLTO`. the banner is still mine, line for line, he only swapped the word "Strawberry" for "Flawless":
++
++```
++Flawless PS4 Linux
++Platform  : Sony PlayStation 4
++Release   : 7.2.6-Flawless-FullLTO
++Builder   : vvsx87@vvsx87-artix
++```
++
++![flawless 7.2.6](docs/flawless-726-banner.png)
++
++same day his "PS4 LED Control" app shows the exact patterns of my led driver from march 2026: orange white, pulsate orange, orange white blue, violet blue, pink, pink blue, purple.
++
++![flawless led](docs/flawless-726-led.png)
++
++my tree with a new name and a bumped version. thats why i made the source private that same day, and why its public again now with every commit and author in it.
++
++his own screenshot from that morning, running it:
++
++![flawless](docs/flawless-screenshot.png)
++
++his full boot log with my banner: [flawless-bootlog.txt](docs/flawless-bootlog.txt)
++
++## The DDR3 article
++
++[this article](https://ps4linux.com/ps4-pro-ddr3-patch-linux-debarshi/) came out on november 5. it says a KHEOPS member made the ps4 pro ddr3 read speed go from 10.6MB/s to 504MB/s by reverse engineering the os kernel with ai, and that this makes games, shaders and swap faster.
++
++thats not how the hardware works:
++
++- the 1GB ddr3 on the pro belongs to the southbridge. its not the main ram. games and the gpu run from the gddr5 on the apu. fail0verflow already showed this in their [33c3 slides](https://fail0verflow.com/media/33c3-slides/): the southbridge is an arm soc with its own ddr ram, and it runs freebsd in standby mode for the background downloads
++- so speeding up that ddr3 does nothing for games, shader loading or swap
++- the kernel was never released, so nobody could even check the numbers
++- the update in the same article already backs off and says it probably wont help games
++
++and on november 6, when someone asked if the ddr3 patch will get source, seuros answered himself:
++
++> it useless . It more a research exercise than something you can use.
++
++the dev behind it replied "that's true".
++
++the newer build was never released. an earlier one from august 28 (`6.8.12.DEB-neo-WorkStation-GPU-compute-DDR3`) is out there and already has the ddr3 driver. what it really does:
++
++- no dma engine at all. reads and writes are a plain cpu `memcpy`
++- it maps one hardcoded address, `0x80000000`, 1 GiB, as normal cached memory. it does not even ask the pci device where its window is
++- that address is the southbridge memory window. mapping a pcie window as cached memory is why reads look faster
++- it always takes 1 GiB, also on fat and slim consoles where the southbridge only has 256 MB behind that window
++
++## What each side released
++
++- KHEOPS: prebuilt bzImages only. no source, no commits, nothing to review. the code inside comes from public trees
++- the ddr3 patch: no kernel, no source, only an article and a table of numbers
++- seuros: on october 4 he wrote "I'm not releasing anything yet". his github has 482 public repos. every ps4 linux one is a fork of someone elses tree, the only one of his own is a list of offsets. we could not find any ps4 linux code he wrote
++- this tree: every commit is public with its author, every release was booted on real consoles with logs from testers
++
++on october 3 seuros wrote that i "could not make video working". hardware decode and encode both work here, its the first video in the showcase.
++
++on october 4 he also said i cant make progress "while my code is hidden". his code was never public, so it was never in this tree. since then this tree got hardware video, one kernel for all southbridges, the samu crypto, baikal ethernet and flash, and the 7.3 port.
++
++on november 1 MSI_Ins_Dir from their side wrote "our team doesn't have Baikal, and that's why we don't have any Baikal-based development". the next day saya said the same himself: "For Baikal, I haven't moved past kernel 5.4.x yet (which, incidentally, wasn't originally my own work)". so the "7.0.6 baikal" and "7.0.7 baikal" kernels vvsx87 posted in may did not come from them. in his message MSI_Ins_Dir also said we stole their work "in such a way that you can't tell it was stolen". you cant compare against code that was never published.
++
++on october 25 saya wrote "the more we release, the more he will want to steal data and claim it as his own". there is nothing to steal. KHEOPS never published any source, only binaries, and those binaries are built from crashniels public tree. the same tree this one is based on and credits.
+diff --git a/README.md b/README.md
+index 09c8a816cb9eb0af545adc40e84bf285d277217c..5f8d41a5d0e4b3587de20558ce0a6cbe61acb230 100644
+--- a/README.md
++++ b/README.md
+@@ -70,139 +70,7 @@ usb, ethernet, wifi and bluetooth:
+ 
+ ## About KHEOPS
+ 
+-KHEOPS is saya's kernel pack. it only ever ships prebuilt bzImages, never source. for months saya, seuros and others on their side have told people that i steal their code and that my kernels are vibe coded.
+-
+-i didnt answer with words. below is whats actually inside their kernels, what they said themselves, and whats inside the kernels that went around with my name swapped out. everything here can be checked.
+-
+-### The teardown
+-
+-KHEOPS v2.1 is 14 prebuilt kernels with no source. i took them apart, the 6.15.4 builds in detail. every point below has the addresses and bytes in my notes.
+-
+-and that was on purpose. on july 27, before the release, someone asked saya "will the source be released with it?". he answered "NEVER". later he said he links the original trees and "le reste c'est mon travail" (the rest is my work). the gpl does not work like that. if you ship a kernel binary you ship the full source of it, your own changes included. linking crashniels tree does not cover the bridge changes he made.
+-
+-where the code comes from:
+-
+-- the base is crashniels public 6.15.y tree. their own file names even say it: `6.15.4.src-crashniels_KHEOPS_FullLTO-v2.1_...`. strings that only exist in his tree are in the binary, for example the `apcie_assign_irqs(%d) (%d)` format and the `ps4_bridge_get_modes` print at info level
+-- every gpu table in cik.c is byte identical to the public tree. 25 of 25 found, gladius included
+-- every ps4 driver string from `arch/x86/platform/ps4` and `drivers/ps4` is in the binary. 0 missing
+-- a full string scan against the whole crashniels tree finds no new code. the only new strings are the wifi driver
+-- wifi is not theirs either. its the yhpgi mt7668s unstable driver, moved into the tree with amorghus patch for 6.15.4
+-- the rest is public stuff: prjc bmq scheduler, ntsync, graysky cpu flags, tkg config patches
+-
+-what they changed:
+-
+-- the hdmi bridge. the 4k build offers one mode only, 3840x2160 at 60hz, and accepts nothing else
+-- the pci vendor check in the bridge enable is removed
+-- one bridge register write (`0x6020 = 0x00`) is dropped from the enable sequence. the rest of the 76 commands is the same as the source
+-- thats it. nothing in the gpu, nothing in the southbridge drivers
+-
+-what is broken:
+-
+-- the multi resolution builds offer 2160p60 and 4096x2160p60, then their own mode check rejects both. what you can really use is 1080p60, 1080p100, 1080p120, 720p and 2160p30
+-- the single resolution builds drop the preferred flag on their only mode, which crashniels added back in august 2025
+-- 5 of the builds have no wifi driver but still carry all 9 mt7668 firmware blobs
+-
+-what is missing:
+-
+-- hardware video. the binary has no liverpool uvd or vce firmware at all, so the video engines never start and everything decodes and encodes on the cpu. on october 23 GattoDev asked saya "yall got hardware transcoding yet?", he changed the subject to game tests. this tree has both, see the showcase
+-- edid. the bridge never reads your tv. it hands out a fixed list of modes and clears the edid. thats why saya tells people to make a fake `edid.bin` for their tv. on october 3 he blamed "the shit edid by bzImage rmux" for a 32" tv showing as 55" in fastfetch. that number comes from the tv itself. this tree reads the real edid from your tv over the hdmi bridge and passes it on
+-
+-the firmware:
+-
+-- the built in firmware list is the exact list string from feeRnts tree and mine
+-- all 9 mt7668 blobs are md5 identical to the ones in our `extra_firmware`
+-
+-### The 7.0 kernels
+-
+-on may 8 2026 vvsx87 posted a "7.0.4 belize" kernel in the ps4linux discord. on may 9 saya showed off a "7.0.4.src-KHEOPS-FullLTO-v2.1_1080p60Hz_aeolia-belize" build. when people asked for the source he wrote "My source ... For you ? Never". he never released that kernel or its source.
+-
+-on may 10 my baikal 7.0 bringup went into my tree. on may 14 and 15 vvsx87 posted "7.0.6 baikal" and "7.0.7 baikal" kernels. no source, no fork, no credit.
+-
+-on october 5 saya explained himself how his 7.x would come out:
+-
+-> Version 7.x will arrive... whether from this source or another. It doesn't matter if it comes from Team Kheops, a contributing member, or someone else entirely... I'll tweak it and implement all my own additions... my personal signature.
+-
+-in the same message he calls himself "the first to pack a bzImage kernel with so many features: NTFS, Btrfs, full LTO, zram". those are config switches every kernel has.
+-
+-### The 7.2.3 "Flawless" kernel
+-
+-on september 5 2026 vvsx87 shared a kernel called `7.2.3-Flawless-NTSync-FullLTO`, built by `vvsx87@cachyos-ps4` that same morning. its own boot log prints my banner:
+-
+-```
+-Strawberry PS4 Linux
+-Release   : 7.2.3-Flawless-NTSync-FullLTO
+-Builder   : vvsx87@cachyos-ps4
+-```
+-
+-the binary has my code in it. none of this exists in crashniels tree, all of it was in my public tree months before:
+-
+-- the strawberry banner. `init: add strawberry banner`, in my tree since may 2026
+-- `PS4 GPU IRQ: vector`, from `amdgpu: require MSI/MSI-X for PS4 Liverpool IRQs`, may 2026
+-- `PS4 fan hwmon ready`, my fan driver, may 2026
+-- `ps4-buzzer`, my buzzer driver, may 2026
+-- `ps4-cpufreq`, my cpufreq driver, august 2026
+-
+-two weeks later, on september 18, he showed `7.2.6-Flawless-FullLTO`. the banner is still mine, line for line, he only swapped the word "Strawberry" for "Flawless":
+-
+-```
+-Flawless PS4 Linux
+-Platform  : Sony PlayStation 4
+-Release   : 7.2.6-Flawless-FullLTO
+-Builder   : vvsx87@vvsx87-artix
+-```
+-
+-![flawless 7.2.6](docs/flawless-726-banner.png)
+-
+-same day his "PS4 LED Control" app shows the exact patterns of my led driver from march 2026: orange white, pulsate orange, orange white blue, violet blue, pink, pink blue, purple.
+-
+-![flawless led](docs/flawless-726-led.png)
+-
+-my tree with a new name and a bumped version. thats why i made the source private that same day, and why its public again now with every commit and author in it.
+-
+-his own screenshot from that morning, running it:
+-
+-![flawless](docs/flawless-screenshot.png)
+-
+-his full boot log with my banner: [flawless-bootlog.txt](docs/flawless-bootlog.txt)
+-
+-### The DDR3 article
+-
+-[this article](https://ps4linux.com/ps4-pro-ddr3-patch-linux-debarshi/) came out on november 5. it says a KHEOPS member made the ps4 pro ddr3 read speed go from 10.6MB/s to 504MB/s by reverse engineering the os kernel with ai, and that this makes games, shaders and swap faster.
+-
+-thats not how the hardware works:
+-
+-- the 1GB ddr3 on the pro belongs to the southbridge. its not the main ram. games and the gpu run from the gddr5 on the apu. fail0verflow already showed this in their [33c3 slides](https://fail0verflow.com/media/33c3-slides/): the southbridge is an arm soc with its own ddr ram, and it runs freebsd in standby mode for the background downloads
+-- so speeding up that ddr3 does nothing for games, shader loading or swap
+-- the kernel was never released, so nobody could even check the numbers
+-- the update in the same article already backs off and says it probably wont help games
+-
+-and on november 6, when someone asked if the ddr3 patch will get source, seuros answered himself:
+-
+-> it useless . It more a research exercise than something you can use.
+-
+-the dev behind it replied "that's true".
+-
+-the newer build was never released. an earlier one from august 28 (`6.8.12.DEB-neo-WorkStation-GPU-compute-DDR3`) is out there and already has the ddr3 driver. what it really does:
+-
+-- no dma engine at all. reads and writes are a plain cpu `memcpy`
+-- it maps one hardcoded address, `0x80000000`, 1 GiB, as normal cached memory. it does not even ask the pci device where its window is
+-- that address is the southbridge memory window. mapping a pcie window as cached memory is why reads look faster
+-- it always takes 1 GiB, also on fat and slim consoles where the southbridge only has 256 MB behind that window
+-
+-### What each side released
+-
+-- KHEOPS: prebuilt bzImages only. no source, no commits, nothing to review. the code inside comes from public trees
+-- the ddr3 patch: no kernel, no source, only an article and a table of numbers
+-- seuros: on october 4 he wrote "I'm not releasing anything yet". his github has 482 public repos. every ps4 linux one is a fork of someone elses tree, the only one of his own is a list of offsets. we could not find any ps4 linux code he wrote
+-- this tree: every commit is public with its author, every release was booted on real consoles with logs from testers
+-
+-on october 3 seuros wrote that i "could not make video working". hardware decode and encode both work here, its the first video in the showcase.
+-
+-on october 4 he also said i cant make progress "while my code is hidden". his code was never public, so it was never in this tree. since then this tree got hardware video, one kernel for all southbridges, the samu crypto, baikal ethernet and flash, and the 7.3 port.
+-
+-on november 1 MSI_Ins_Dir from their side wrote "our team doesn't have Baikal, and that's why we don't have any Baikal-based development". the next day saya said the same himself: "For Baikal, I haven't moved past kernel 5.4.x yet (which, incidentally, wasn't originally my own work)". so the "7.0.6 baikal" and "7.0.7 baikal" kernels vvsx87 posted in may did not come from them. in his message MSI_Ins_Dir also said we stole their work "in such a way that you can't tell it was stolen". you cant compare against code that was never published.
+-
+-on october 25 saya wrote "the more we release, the more he will want to steal data and claim it as his own". there is nothing to steal. KHEOPS never published any source, only binaries, and those binaries are built from crashniels public tree. the same tree this one is based on and credits.
++people keep saying i stole their code. i wrote down whats really inside their kernels, what they said themselves, and the kernels that went around with my name swapped out. its all in [KHEOPS.md](KHEOPS.md).
+ 
+ ## Credits
+ 
+@@ -214,9 +82,9 @@ on october 25 saya wrote "the more we release, the more he will want to steal da
+ - Package (feeRnt), original 6.15 aeolia and belize source, mt7668 wifi, ci and lots of bridge fixes
+ - Blyadimir, uart, usb, display, endless testing. this work wouldnt exist without him
+ - deWaardt, baikal hardware maintainer, early tests
+-- leg (eclipsed.starr), bzImage uploads, coordination
++- leg (eclipsed.starr, dreams-of-formaldehyde), bzImage uploads, coordination
+ - M H (mircoho), ioremap, ethernet and apcie fixes
+-- Anthony Maniatopoulos, gladius gpu setup and the smu through samu
++- Anthony Maniatopoulos (manya4090, Manya3084), gladius gpu setup and the smu through samu, testing and logs
+ - Regie Vorkman (TheVorkMan, Regus Prime), dmi strings and testing
+ - Comfy702, mt7668 bluetooth on baikal
+ 
+@@ -234,19 +102,19 @@ on october 25 saya wrote "the more we release, the more he will want to steal da
+ 
+ ### Team
+ 
+-- devs: ArabPixel, Package (feeRnt), bzz, bjhabibie
+-- coordination: leg, Regus Prime, froyo
++- devs: arabpixel (ArabPixel), packagebob (feeRnt), professionalcummer, bjhabibie
++- coordination: eclipsed.starr (dreams-of-formaldehyde), hnoobi (TheVorkMan), vanillitefroyo
+ 
+ ### Testers
+ 
+-- baikal: Blyadimir, deWaardt, §§ (ss6530), Is it Null?, shy, Zarbok, vanix, jhuhblya, mechanical, hwangbokgukho, kingabut, izanhower, sgtxkitkat, rodrigo, sudofrontman
+-- belize: DANIELG18, GattoDev, Anghelo, Wonderfiend, Nadaman, Razzle, Regus Prime, froyo, флуффишиип
+-- aeolia: Diema, GMV, bzz
+-- testers and logs: Manya4090, Bozo, ErKkI, secret kejops spying, Bbang, Gryoza, fleur, TheGreekOne, felix_suicide, tteons, Scrooge
++- baikal: blyadimir., dewaardt, ss6530, isitnull., shyxuo, zarbok., vanixidk (vanixvanixvanix), jhuhblya, louisianafriedchicken, hwangbokgukho, kingabut, izanhower, sgtxkitkat, rodrigo, sudofrontman, fluffysheep
++- belize: adanielg18 (angeldanielguerrerocarrera), gattodev_real (GattoDev-debug), angheloisfish, wondermine, nadaman, rzle, hnoobi (TheVorkMan), vanillitefroyo
++- aeolia: diema, lupusetflos, professionalcummer
++- testers and logs: bozo.ozod, erkki_69_men.com, bejolsurviva_66626, Bbang, gryoza, fleur, TheGreekOne, felix_suicide, tteons, Scrooge
+ 
+ ### Special thanks
+ 
+-- SyrianClippy, emotional support
++- syrianclippy, emotional support
+ 
+ ### Maintainer
+ 

@@ -1,0 +1,97 @@
+From 10bc1f581f2a19db5607f22d3f0b0acde1855c19 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Fri, 6 Nov 2026 21:59:28 +0100
+Subject: [PATCH 076/124] ps4: keep the aeolia irq lookup and limit the baikal
+ acpi paths
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ arch/x86/pci/acpi.c    |  5 ++---
+ drivers/acpi/osl.c     |  3 ++-
+ kernel/irq/irqdomain.c | 15 ++++++++++++++-
+ 3 files changed, 18 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/pci/acpi.c b/arch/x86/pci/acpi.c
+index 1d89e457d86b5913dc25db9f26d813ef9b3351fa..e4c2dbab867b40ac10e5b9b965005f4811f1c39a 100644
+--- a/arch/x86/pci/acpi.c
++++ b/arch/x86/pci/acpi.c
+@@ -11,7 +11,7 @@
+ #include <linux/pci-acpi.h>
+ #include <asm/numa.h>
+ #include <asm/pci_x86.h>
+-#include <asm/processor.h>
++#include <asm/ps4.h>
+ 
+ struct pci_root_info {
+ 	struct acpi_pci_root_info common;
+@@ -204,8 +204,7 @@ void __init pci_acpi_crs_quirks(void)
+ 		pci_use_crs = false;
+ 
+ #ifdef CONFIG_X86_PS4
+-	if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD &&
+-	    boot_cpu_data.x86 == 0x16) {
++	if (ps4_is_baikal()) {
+ 		pci_use_crs = false;
+ 		pci_use_e820 = false;
+ 	}
+diff --git a/drivers/acpi/osl.c b/drivers/acpi/osl.c
+index c65cfed8c4822a13fe7b2f23a27658107ea864c8..1901d438ec51dc2fbb4717e93a460188fb967752 100644
+--- a/drivers/acpi/osl.c
++++ b/drivers/acpi/osl.c
+@@ -33,6 +33,7 @@
+ #include <linux/semaphore.h>
+ #include <linux/security.h>
+ 
++#include <asm/ps4.h>
+ #include <asm/io.h>
+ #include <linux/uaccess.h>
+ #include <linux/io-64-nonatomic-lo-hi.h>
+@@ -577,7 +578,7 @@ acpi_os_install_interrupt_handler(u32 gsi, acpi_osd_handler handler,
+ 	if (acpi_irq_handler)
+ 		return AE_ALREADY_ACQUIRED;
+ 
+-	if (gsi == 9 && !boot_cpu_has(X86_FEATURE_HYPERVISOR) && boot_cpu_data.x86_vendor == X86_VENDOR_AMD && boot_cpu_data.x86 == 0x16) {
++	if (gsi == 9 && ps4_is_baikal()) {
+ 		pr_info("ACPI: Bypassing SCI allocation for PS4\n");
+ 		acpi_irq_handler = handler;
+ 		acpi_irq_context = context;
+diff --git a/kernel/irq/irqdomain.c b/kernel/irq/irqdomain.c
+index 57c819da30c21977b90c0825f0b1772c6facc515..9ee7988c60b707bc9f60e418912b6cf9deba2a1e 100644
+--- a/kernel/irq/irqdomain.c
++++ b/kernel/irq/irqdomain.c
+@@ -18,6 +18,10 @@
+ #include <linux/seq_file.h>
+ #include <linux/slab.h>
+ #include <linux/smp.h>
++
++#ifdef CONFIG_X86_PS4
++#include <asm/ps4.h>
++#endif
+ #include <linux/fs.h>
+ 
+ #include "proc.h"
+@@ -522,6 +526,15 @@ EXPORT_SYMBOL_GPL(irq_domain_create_legacy);
+  * @fwspec: FW specifier for an interrupt
+  * @bus_token: domain-specific data
+  */
++static bool irq_select_on_any_bus(void)
++{
++#ifdef CONFIG_X86_PS4
++	return !ps4_is_baikal();
++#else
++	return false;
++#endif
++}
++
+ struct irq_domain *irq_find_matching_fwspec(struct irq_fwspec *fwspec,
+ 					    enum irq_domain_bus_token bus_token)
+ {
+@@ -541,7 +554,7 @@ struct irq_domain *irq_find_matching_fwspec(struct irq_fwspec *fwspec,
+ 	 */
+ 	mutex_lock(&irq_domain_mutex);
+ 	list_for_each_entry(h, &irq_domain_list, link) {
+-		if (h->ops->select && bus_token != DOMAIN_BUS_ANY)
++		if (h->ops->select && (bus_token != DOMAIN_BUS_ANY || irq_select_on_any_bus()))
+ 			rc = h->ops->select(h, fwspec, bus_token);
+ 		else if (h->ops->match)
+ 			rc = h->ops->match(h, to_of_node(fwnode), bus_token);

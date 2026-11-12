@@ -1,0 +1,650 @@
+From f1e78c8553f17af7521ceabb4d18546ebc615e33 Mon Sep 17 00:00:00 2001
+From: Anthony Maniatopoulos <manya3084@gmail.com>
+Date: Wed, 30 Sep 2026 23:04:55 +1000
+Subject: [PATCH 046/124] ps4: route Gladius SMU through SAMU
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/Makefile        |   2 +-
+ drivers/gpu/drm/amd/amdgpu/amdgpu_device.c |  12 +
+ drivers/gpu/drm/amd/amdgpu/cik.c           |  38 ++-
+ drivers/gpu/drm/amd/amdgpu/liverpool_clk.c | 122 +++++++++
+ drivers/gpu/drm/amd/amdgpu/liverpool_clk.h |   4 +
+ drivers/gpu/drm/amd/amdgpu/liverpool_smu.c | 281 +++++++++++++++++++++
+ drivers/gpu/drm/amd/amdgpu/liverpool_smu.h |  33 +++
+ 7 files changed, 485 insertions(+), 7 deletions(-)
+ create mode 100644 drivers/gpu/drm/amd/amdgpu/liverpool_smu.c
+ create mode 100644 drivers/gpu/drm/amd/amdgpu/liverpool_smu.h
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/Makefile b/drivers/gpu/drm/amd/amdgpu/Makefile
+index 9f95aea12985fe3033a7d0498b47a8195f7247aa..3f6b17f8b9e848ad80d6f80a68deaa7656ec61d3 100644
+--- a/drivers/gpu/drm/amd/amdgpu/Makefile
++++ b/drivers/gpu/drm/amd/amdgpu/Makefile
+@@ -81,7 +81,7 @@ amdgpu-$(CONFIG_PERF_EVENTS) += amdgpu_pmu.o
+ # add asic specific block
+ amdgpu-$(CONFIG_DRM_AMDGPU_CIK)+= cik.o cik_ih.o \
+ 	dce_v8_0.o gfx_v7_0.o cik_sdma.o uvd_v4_2.o vce_v2_0.o \
+-	liverpool_clk.o
++	liverpool_clk.o liverpool_smu.o
+ 
+ amdgpu-$(CONFIG_DRM_AMDGPU_SI)+= si.o gmc_v6_0.o gfx_v6_0.o si_ih.o si_dma.o dce_v6_0.o \
+ 	uvd_v3_1.o vce_v1_0.o
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+index a84422d618e9d53224aeb9ff4d80da9ca7eb5ca5..b98c4c9f3c6191344a0e2bb678cd408d141d0a89 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+@@ -4907,6 +4907,16 @@ bool amdgpu_device_should_recover_gpu(struct amdgpu_device *adev)
+ 	if (amdgpu_gpu_recovery == 0)
+ 		goto disabled;
+ 
++	/*
++	 * No RAS poison on PS4 APUs, so the next check would return
++	 * true and skip the CIK auto-off list. Decide first. Recovery
++	 * resume re-enters the SMU program (gladius_spll_911).
++	 */
++	if (amdgpu_gpu_recovery == -1 &&
++	    (adev->asic_type == CHIP_LIVERPOOL ||
++	     adev->asic_type == CHIP_GLADIUS))
++		goto disabled;
++
+ 	/* Skip soft reset check in fatal error mode */
+ 	if (!amdgpu_ras_is_poison_mode_supported(adev))
+ 		return true;
+@@ -4927,6 +4937,8 @@ bool amdgpu_device_should_recover_gpu(struct amdgpu_device *adev)
+ 		case CHIP_KAVERI:
+ 		case CHIP_KABINI:
+ 		case CHIP_MULLINS:
++		case CHIP_LIVERPOOL:
++		case CHIP_GLADIUS:
+ #endif
+ 		case CHIP_CARRIZO:
+ 		case CHIP_STONEY:
+diff --git a/drivers/gpu/drm/amd/amdgpu/cik.c b/drivers/gpu/drm/amd/amdgpu/cik.c
+index bd9b3199574d6d091d8251e2a118e7a93bebec15..30f4f7bb0df56e1d1323bb43ae0cbbf56c447519 100644
+--- a/drivers/gpu/drm/amd/amdgpu/cik.c
++++ b/drivers/gpu/drm/amd/amdgpu/cik.c
+@@ -45,6 +45,7 @@
+ #include "gfx_v7_0.h"
+ #include "cik_sdma.h"
+ #include "liverpool_clk.h"
++#include "liverpool_smu.h"
+ #include "uvd_v4_2.h"
+ #include "vce_v2_0.h"
+ #include "cik_dpm.h"
+@@ -1819,6 +1820,14 @@ static int cik_set_uvd_clocks(struct amdgpu_device *adev, u32 vclk, u32 dclk)
+ {
+ 	int r = 0;
+ 
++	/*
++	 * Liverpool/Gladius have no kv_smu/pp_smu block. Orbis clocks this
++	 * engine through the SAMU GCK proxy, not the CIK SMC_IND VCLK/DCLK
++	 * path below. A raw SMC_IND mailbox access powers a Baikal Pro off.
++	 */
++	if (adev->asic_type == CHIP_LIVERPOOL || adev->asic_type == CHIP_GLADIUS)
++		return 0;
++
+ 	r = cik_set_uvd_clock(adev, vclk, ixCG_VCLK_CNTL, ixCG_VCLK_STATUS);
+ 	if (r)
+ 		return r;
+@@ -1833,6 +1842,10 @@ static int cik_set_vce_clocks(struct amdgpu_device *adev, u32 evclk, u32 ecclk)
+ 	struct atom_clock_dividers dividers;
+ 	u32 tmp;
+ 
++	/* Same raw SMC_IND landmine as cik_set_uvd_clocks(). */
++	if (adev->asic_type == CHIP_LIVERPOOL || adev->asic_type == CHIP_GLADIUS)
++		return 0;
++
+ 	r = amdgpu_atombios_get_clock_dividers(adev,
+ 					       COMPUTE_GPUCLK_INPUT_FLAG_DEFAULT_GPUCLK,
+ 					       ecclk, false, &dividers);
+@@ -2540,7 +2553,8 @@ static int cik_common_early_init(struct amdgpu_ip_block *ip_block)
+ 	return 0;
+ }
+ 
+-static int cik_common_hw_init(struct amdgpu_ip_block *ip_block)
++/* Golden, ASPM, and reported clocks. No SPLL program. */
++static int cik_common_hw_init_no_smu(struct amdgpu_ip_block *ip_block)
+ {
+ 	struct amdgpu_device *adev = ip_block->adev;
+ 
+@@ -2554,10 +2568,6 @@ static int cik_common_hw_init(struct amdgpu_ip_block *ip_block)
+ 	else
+ 		cik_program_aspm(adev);
+ 
+-	if (adev->asic_type == CHIP_LIVERPOOL ||
+-	    adev->asic_type == CHIP_GLADIUS)
+-		liverpool_clk_force_max(adev);
+-
+ 	if (adev->asic_type == CHIP_LIVERPOOL) {
+ 		adev->clock.default_sclk = 80000;
+ 		adev->clock.default_mclk = 137500;
+@@ -2569,6 +2579,21 @@ static int cik_common_hw_init(struct amdgpu_ip_block *ip_block)
+ 	return 0;
+ }
+ 
++static int cik_common_hw_init(struct amdgpu_ip_block *ip_block)
++{
++	struct amdgpu_device *adev = ip_block->adev;
++
++	cik_common_hw_init_no_smu(ip_block);
++
++	if (adev->asic_type == CHIP_LIVERPOOL ||
++	    adev->asic_type == CHIP_GLADIUS) {
++		liverpool_clk_force_max(adev);
++		liverpool_smu_sysfs_init(adev);
++	}
++
++	return 0;
++}
++
+ static int cik_common_hw_fini(struct amdgpu_ip_block *ip_block)
+ {
+ 	return 0;
+@@ -2576,7 +2601,8 @@ static int cik_common_hw_fini(struct amdgpu_ip_block *ip_block)
+ 
+ static int cik_common_resume(struct amdgpu_ip_block *ip_block)
+ {
+-	return cik_common_hw_init(ip_block);
++	/* First boot only: gladius_spll_911 / liverpool_clk_force_max. */
++	return cik_common_hw_init_no_smu(ip_block);
+ }
+ 
+ static bool cik_common_is_idle(struct amdgpu_ip_block *ip_block)
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_clk.c b/drivers/gpu/drm/amd/amdgpu/liverpool_clk.c
+index a73aa65403ca405d48e79a48b8eba409937bc35e..851ac450655fd01da81c13dd1e009a8e418e5252 100644
+--- a/drivers/gpu/drm/amd/amdgpu/liverpool_clk.c
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_clk.c
+@@ -3,6 +3,7 @@
+ #include <linux/delay.h>
+ #include "amdgpu.h"
+ #include "liverpool_clk.h"
++#include "liverpool_smu.h"
+ 
+ #define GCK_SCLK_FUSES                  0xc0500004
+ #define   STARTUP_SCLK_DID_SHIFT          0
+@@ -15,6 +16,8 @@
+ #define   SPLL_FREQ_ID_MAX_MASK           (0x3f << 7)
+ 
+ #define CG_SCLK_CNTL                    0xc050008c
++#define CG_SCLK_CNTL_80                 0xc0500080
++#define CG_SCLK_STATUS_84               0xc0500084
+ #define   SCLK_DIVIDER_SHIFT              0
+ #define   SCLK_DIVIDER_MASK               (0x7f << 0)
+ #define   SCLK_DIRCNTL_EN                 BIT(8)
+@@ -45,6 +48,122 @@
+ #define LIVERPOOL_CLK_TIMEOUT_US        10
+ #define LIVERPOOL_CLK_TIMEOUT_ITER      1000
+ 
++#define GLADIUS_GCK_SCLK_HI		0x400000
++
++static void gladius_log_sclk_pair(struct amdgpu_device *adev, const char *when)
++{
++	u32 r80 = RREG32_SMC(CG_SCLK_CNTL_80);
++	u32 r84 = RREG32_SMC(CG_SCLK_STATUS_84);
++	u32 r8c = RREG32_SMC(CG_SCLK_CNTL);
++	u32 r90 = RREG32_SMC(CG_SCLK_STATUS);
++
++	dev_info(adev->dev,
++		 "Gladius SCLK 0x80 %s: 0x80=0x%08x (DID=%u EN=%u TOG=%u DIV=%u) 0x84=0x%08x 0x8c=0x%08x 0x90=0x%08x\n",
++		 when, r80,
++		 (r80 & SCLK_DIVIDER_MASK) >> SCLK_DIVIDER_SHIFT,
++		 !!(r80 & SCLK_DIRCNTL_EN),
++		 !!(r80 & SCLK_DIRCNTL_TOG),
++		 (r80 & SCLK_DIRCNTL_DIV_MASK) >> SCLK_DIRCNTL_DIV_SHIFT,
++		 r84, r8c, r90);
++}
++
++static void gladius_spll_911(struct amdgpu_device *adev)
++{
++	u32 fb = (911u * 0x28f5c3u) >> 10;
++	u32 st = 0;
++	int i, r;
++
++	r = liverpool_smu_samu_read(adev, 0xc05002e4, &st);
++	dev_info(adev->dev,
++		 "Gladius SPLL before 2e4 r=%d val=0x%08x want=0x%08x\n",
++		 r, st, fb);
++
++	r = liverpool_smu_samu_write(adev, 0xc05002e4, fb);
++	dev_info(adev->dev, "Gladius SPLL wr 2e4=0x%08x r=%d\n", fb, r);
++	liverpool_smu_samu_write(adev, 0xc05002b4, 0x100);
++	liverpool_smu_samu_write(adev, 0xc05002dc, 0x14009);
++	liverpool_smu_samu_write(adev, 0xc05002b0, 0x19);
++	liverpool_smu_samu_write(adev, 0xc05002c0, 0x8000082);
++	liverpool_smu_samu_write(adev, 0xc05002c4, 0x64000000);
++	liverpool_smu_samu_write(adev, 0xc05002ac, 0x60840000);
++
++	for (i = 0; i < 1000; i++) {
++		st = 0;
++		liverpool_smu_samu_read(adev, 0xc05002e0, &st);
++		if (!(st & 4))
++			break;
++		udelay(10);
++	}
++	dev_info(adev->dev, "Gladius SPLL 2e0 wait-clr i=%d val=0x%08x\n", i, st);
++
++	liverpool_smu_samu_write(adev, 0xc05002ac, 0x40840000);
++
++	for (i = 0; i < 1000; i++) {
++		st = 0;
++		liverpool_smu_samu_read(adev, 0xc05002e0, &st);
++		if (st & 4)
++			break;
++		udelay(10);
++	}
++	dev_info(adev->dev, "Gladius SPLL 2e0 wait-set i=%d val=0x%08x\n", i, st);
++}
++
++static int gladius_gck_mailbox(struct amdgpu_device *adev)
++{
++	static const u32 addrs[] = {
++		0xc0500080, 0xc050008c,
++		0xc050009c, 0xc05000a0,
++		0xc05000a4, 0xc05000a8,
++		0xc05000dc,
++	};
++	static const char *names[] = {
++		"80", "8c", "9c", "a0", "a4", "a8", "dc"
++	};
++	u32 v[7], smc80;
++	int i, r;
++
++	gladius_log_sclk_pair(adev, "mb before");
++	gladius_spll_911(adev);
++	smc80 = RREG32_SMC(CG_SCLK_CNTL_80);
++
++	for (i = 0; i < 7; i++) {
++		v[i] = 0;
++		r = liverpool_smu_samu_read(adev, addrs[i], &v[i]);
++		dev_info(adev->dev,
++			 "Gladius GCK mb rd %s: r=%d val=0x%08x\n",
++			 names[i], r, v[i]);
++	}
++
++	dev_info(adev->dev,
++		 "Gladius GCK mb: SMC_IND 0x80=0x%08x mb 0x80=0x%08x DIV=%u (leave strap)\n",
++		 smc80, v[0],
++		 (v[0] & SCLK_DIRCNTL_DIV_MASK) >> SCLK_DIRCNTL_DIV_SHIFT);
++	gladius_log_sclk_pair(adev, "mb after");
++	return 0;
++}
++
++int liverpool_clk_gladius_set_div(struct amdgpu_device *adev, unsigned int div)
++{
++	u32 cur = 0, want, after = 0;
++	int r, wr;
++
++	if (adev->asic_type != CHIP_GLADIUS)
++		return -EINVAL;
++
++	r = liverpool_smu_samu_read(adev, CG_SCLK_CNTL_80, &cur);
++	want = cur | GLADIUS_GCK_SCLK_HI;
++	want &= ~SCLK_DIRCNTL_DIV_MASK;
++	want |= (div << SCLK_DIRCNTL_DIV_SHIFT) & SCLK_DIRCNTL_DIV_MASK;
++	want |= SCLK_DIRCNTL_EN;
++	want ^= SCLK_DIRCNTL_TOG;
++	wr = liverpool_smu_samu_write(adev, CG_SCLK_CNTL_80, want);
++	liverpool_smu_samu_read(adev, CG_SCLK_CNTL_80, &after);
++	dev_info(adev->dev,
++		 "Gladius GCK set DIV=%u rd=%d wr=%d cur=0x%08x want=0x%08x after=0x%08x\n",
++		 div, r, wr, cur, want, after);
++	return wr;
++}
++
+ int liverpool_clk_force_max(struct amdgpu_device *adev)
+ {
+ 	u32 spll_fuses, sclk_fuses, spll_cntl, spll_fb;
+@@ -87,6 +206,9 @@ int liverpool_clk_force_max(struct amdgpu_device *adev)
+ 			 "Liverpool CLK: SPLL unlock sticky set (0x%08x)\n",
+ 			 status);
+ 
++	if (adev->asic_type == CHIP_GLADIUS)
++		return gladius_gck_mailbox(adev);
++
+ 	cntl = RREG32_SMC(CG_SCLK_CNTL);
+ 	dev_info(adev->dev,
+ 		 "Liverpool CLK: CG_SCLK_CNTL=0x%08x DIVIDER=%u DIRCNTLEN=%u DIRCNTLDIV=%u\n",
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_clk.h b/drivers/gpu/drm/amd/amdgpu/liverpool_clk.h
+index 4a5b6f93773c85545b9cd0a7ce02eba3c3354d77..9ab161c3a4e09d87e34b7c56e98c3cee8ea7d57f 100644
+--- a/drivers/gpu/drm/amd/amdgpu/liverpool_clk.h
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_clk.h
+@@ -6,9 +6,13 @@ struct amdgpu_device;
+ 
+ #ifdef CONFIG_DRM_AMDGPU_CIK
+ int liverpool_clk_force_max(struct amdgpu_device *adev);
++int liverpool_clk_gladius_set_div(struct amdgpu_device *adev, unsigned int div);
+ #else
+ static inline int liverpool_clk_force_max(struct amdgpu_device *adev)
+ { return 0; }
++static inline int liverpool_clk_gladius_set_div(struct amdgpu_device *adev,
++						unsigned int div)
++{ return -EIO; }
+ #endif
+ 
+ #endif
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_smu.c b/drivers/gpu/drm/amd/amdgpu/liverpool_smu.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..7cc076da24f573b78c55e610df9ee5ad28efadc0
+--- /dev/null
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_smu.c
+@@ -0,0 +1,281 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * PlayStation 4 SMU mailbox driver
++ *
++ * Based on the SMU7 mailbox protocol (smu_7_0_1_d.h).
++ *
++ * Mailbox commands go through the SAMU GCK proxy (GPU BAR 0x22070,
++ * doorbell idx 0x32 / poll idx 0x4a). Raw SMC_IND access to the
++ * 0xc2100000 mailbox powers a Baikal Pro off. This file does not
++ * export an SMC_IND read/write. liverpool_clk.c uses
++ * liverpool_smu_samu_read/write for the Gladius SPLL.
++ */
++
++#include <linux/delay.h>
++#include <linux/io.h>
++#include <linux/mutex.h>
++
++#include "amdgpu.h"
++#include "liverpool_smu.h"
++
++#define LIVERPOOL_SMU_MSG_REG		0xc2100000
++#define LIVERPOOL_SMU_RESP_REG		0xc2100004
++#define LIVERPOOL_SMU_ARG_REG		0xc210003c
++
++#define LIVERPOOL_SMU_RESP_READY	BIT(0)
++#define LIVERPOOL_SMU_RESP_DONE		BIT(1)
++
++#define LIVERPOOL_SMU_MSG_MASK		0xfffe0001
++#define LIVERPOOL_SMU_MSG_VALID		BIT(0)
++
++#define LIVERPOOL_SMU_ARG_TIMEOUT	(500 << 16)
++
++#define LIVERPOOL_SMU_POLL_US		10
++#define LIVERPOOL_SMU_POLL_ITER		100000
++
++static const u8 liverpool_smu_mempstate_msg[] = {
++	[0] = 0x58,
++	[1] = 0x57,
++	[2] = 0x59,
++};
++
++/* Orbis GCK helpers: byte offsets from GPU BAR, not SMC_IND. */
++#define LIVERPOOL_SAMU_IDX		0x22000
++#define LIVERPOOL_SAMU_DAT		0x22004
++#define LIVERPOOL_SAMU_CMD		0x22070
++#define LIVERPOOL_SAMU_ADDR		0x22074
++#define LIVERPOOL_SAMU_DATA		0x22078
++#define LIVERPOOL_SAMU_STAT		0x2207c
++#define LIVERPOOL_SAMU_DOOR_IDX		0x32
++#define LIVERPOOL_SAMU_POLL_IDX		0x4a
++#define LIVERPOOL_SAMU_OP_WRITE		0xa505
++#define LIVERPOOL_SAMU_OP_READ		0xa404
++#define LIVERPOOL_SAMU_POLL_US		10
++#define LIVERPOOL_SAMU_POLL_ITER	10000
++
++static DEFINE_MUTEX(liverpool_samu_mutex);
++
++static bool liverpool_samu_mapped(struct amdgpu_device *adev)
++{
++	return adev->rmmio && adev->rmmio_size >= 0x22080;
++}
++
++static void liverpool_samu_idx_w(struct amdgpu_device *adev, u32 idx, u32 val)
++{
++	writel(idx, adev->rmmio + LIVERPOOL_SAMU_IDX);
++	writel(val, adev->rmmio + LIVERPOOL_SAMU_DAT);
++}
++
++static u32 liverpool_samu_idx_r(struct amdgpu_device *adev, u32 idx)
++{
++	writel(idx, adev->rmmio + LIVERPOOL_SAMU_IDX);
++	return readl(adev->rmmio + LIVERPOOL_SAMU_DAT);
++}
++
++static int liverpool_samu_doorbell(struct amdgpu_device *adev)
++{
++	u32 i;
++
++	liverpool_samu_idx_w(adev, LIVERPOOL_SAMU_DOOR_IDX, 1);
++	for (i = 0; i < LIVERPOOL_SAMU_POLL_ITER; i++) {
++		if (!(liverpool_samu_idx_r(adev, LIVERPOOL_SAMU_POLL_IDX) & 1))
++			return 0;
++		udelay(LIVERPOOL_SAMU_POLL_US);
++	}
++	return -ETIMEDOUT;
++}
++
++int liverpool_smu_samu_read(struct amdgpu_device *adev, u32 reg, u32 *val)
++{
++	u32 stat;
++	int r;
++
++	if (!liverpool_samu_mapped(adev) || !val)
++		return -EIO;
++
++	mutex_lock(&liverpool_samu_mutex);
++	writel(LIVERPOOL_SAMU_OP_READ, adev->rmmio + LIVERPOOL_SAMU_CMD);
++	writel(reg, adev->rmmio + LIVERPOOL_SAMU_ADDR);
++	r = liverpool_samu_doorbell(adev);
++	if (r) {
++		mutex_unlock(&liverpool_samu_mutex);
++		return r;
++	}
++	stat = readl(adev->rmmio + LIVERPOOL_SAMU_STAT);
++	if (!stat)
++		*val = readl(adev->rmmio + LIVERPOOL_SAMU_DATA);
++	else
++		*val = 0;
++	mutex_unlock(&liverpool_samu_mutex);
++	return stat ? -EIO : 0;
++}
++
++int liverpool_smu_samu_write(struct amdgpu_device *adev, u32 reg, u32 val)
++{
++	u32 stat;
++	int r;
++
++	if (!liverpool_samu_mapped(adev))
++		return -EIO;
++
++	mutex_lock(&liverpool_samu_mutex);
++	writel(LIVERPOOL_SAMU_OP_WRITE, adev->rmmio + LIVERPOOL_SAMU_CMD);
++	writel(reg, adev->rmmio + LIVERPOOL_SAMU_ADDR);
++	writel(val, adev->rmmio + LIVERPOOL_SAMU_DATA);
++	r = liverpool_samu_doorbell(adev);
++	if (r) {
++		mutex_unlock(&liverpool_samu_mutex);
++		return r;
++	}
++	stat = readl(adev->rmmio + LIVERPOOL_SAMU_STAT);
++	mutex_unlock(&liverpool_samu_mutex);
++	return stat ? -EIO : 0;
++}
++
++/*
++ * PS4 (ps4patches): route SMU mailbox commands through the SAMU proxy
++ * (2026-09-19, ported from the 7.3-rc2 bfbbe3da worktree). This used to go
++ * through RREG32_SMC/WREG32_SMC directly, i.e. mmSMC_IND_INDEX_0/DATA_0
++ * unproxied -- confirmed via kernel.elf disassembly (cail_smc_ind_read/
++ * write, see Kernel decomiple/SMU.md) that Sony's own kernel never issues
++ * a raw SMU mailbox command that way; every access goes through this exact
++ * SAMU command/doorbell proxy instead (liverpool_smu_samu_read/write,
++ * already used correctly by every real access in liverpool_clk.c).
++ * This is a known Baikal PS4 community issue: a direct SMU
++ * read/write/command instantly powers off the console, behaving like a
++ * tamper/protection circuit, not a power fault. This function is only
++ * reachable via the diagnostic mempstate sysfs node (not automatically
++ * invoked), but was still a live landmine as written.
++ */
++int liverpool_smu_cmd(struct amdgpu_device *adev, u32 msg, u32 arg)
++{
++	u32 resp, tmp;
++	int i, r;
++
++	for (i = 0; i < LIVERPOOL_SMU_POLL_ITER; i++) {
++		r = liverpool_smu_samu_read(adev, LIVERPOOL_SMU_RESP_REG, &resp);
++		if (r)
++			return r;
++		if (resp & LIVERPOOL_SMU_RESP_DONE)
++			break;
++		udelay(LIVERPOOL_SMU_POLL_US);
++	}
++	if (i == LIVERPOOL_SMU_POLL_ITER)
++		return -ETIMEDOUT;
++
++	r = liverpool_smu_samu_write(adev, LIVERPOOL_SMU_ARG_REG,
++				      LIVERPOOL_SMU_ARG_TIMEOUT | arg);
++	if (r)
++		return r;
++
++	r = liverpool_smu_samu_read(adev, LIVERPOOL_SMU_MSG_REG, &tmp);
++	if (r)
++		return r;
++	tmp &= LIVERPOOL_SMU_MSG_MASK;
++	tmp |= msg << 1;
++	tmp ^= LIVERPOOL_SMU_MSG_VALID;
++	r = liverpool_smu_samu_write(adev, LIVERPOOL_SMU_MSG_REG, tmp);
++	if (r)
++		return r;
++
++	for (i = 0; i < LIVERPOOL_SMU_POLL_ITER; i++) {
++		r = liverpool_smu_samu_read(adev, LIVERPOOL_SMU_RESP_REG, &resp);
++		if (r)
++			return r;
++		if (resp & LIVERPOOL_SMU_RESP_READY)
++			break;
++		udelay(LIVERPOOL_SMU_POLL_US);
++	}
++	if (i == LIVERPOOL_SMU_POLL_ITER)
++		return -ETIMEDOUT;
++
++	for (i = 0; i < LIVERPOOL_SMU_POLL_ITER; i++) {
++		r = liverpool_smu_samu_read(adev, LIVERPOOL_SMU_RESP_REG, &resp);
++		if (r)
++			return r;
++		if (resp & LIVERPOOL_SMU_RESP_DONE)
++			break;
++		udelay(LIVERPOOL_SMU_POLL_US);
++	}
++	if (i == LIVERPOOL_SMU_POLL_ITER)
++		return -ETIMEDOUT;
++
++	return 0;
++}
++
++int liverpool_smu_set_mempstate(struct amdgpu_device *adev, u32 idx)
++{
++	int r;
++
++	if (idx >= ARRAY_SIZE(liverpool_smu_mempstate_msg))
++		return -EINVAL;
++
++	if (idx != 1) {
++		r = liverpool_smu_cmd(adev, liverpool_smu_mempstate_msg[1], 0);
++		if (r)
++			return r;
++	}
++
++	return liverpool_smu_cmd(adev, liverpool_smu_mempstate_msg[idx], 0);
++}
++
++static ssize_t liverpool_smu_mempstate_store(struct device *dev,
++					     struct device_attribute *attr,
++					     const char *buf, size_t count)
++{
++	struct amdgpu_device *adev =
++		drm_to_adev(pci_get_drvdata(to_pci_dev(dev)));
++	u32 idx;
++	int r;
++
++	r = kstrtou32(buf, 0, &idx);
++	if (r)
++		return r;
++
++	r = liverpool_smu_set_mempstate(adev, idx);
++	if (r)
++		return r;
++
++	return count;
++}
++static DEVICE_ATTR_WO(liverpool_smu_mempstate);
++
++static ssize_t liverpool_smu_cmd_store(struct device *dev,
++				       struct device_attribute *attr,
++				       const char *buf, size_t count)
++{
++	struct amdgpu_device *adev =
++		drm_to_adev(pci_get_drvdata(to_pci_dev(dev)));
++	u32 msg, arg;
++	int r, n;
++
++	n = sscanf(buf, "%u %u", &msg, &arg);
++	if (n != 2)
++		return -EINVAL;
++
++	r = liverpool_smu_cmd(adev, msg, arg);
++	if (r)
++		return r;
++
++	return count;
++}
++static DEVICE_ATTR_WO(liverpool_smu_cmd);
++
++static struct attribute *liverpool_smu_attrs[] = {
++	&dev_attr_liverpool_smu_cmd.attr,
++	&dev_attr_liverpool_smu_mempstate.attr,
++	NULL,
++};
++
++static const struct attribute_group liverpool_smu_attr_group = {
++	.attrs = liverpool_smu_attrs,
++};
++
++int liverpool_smu_sysfs_init(struct amdgpu_device *adev)
++{
++	return devm_device_add_group(adev->dev, &liverpool_smu_attr_group);
++}
++
++MODULE_LICENSE("GPL");
++MODULE_AUTHOR("Armandas Kvietkus");
++MODULE_DESCRIPTION("PlayStation 4 SMU mailbox driver");
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_smu.h b/drivers/gpu/drm/amd/amdgpu/liverpool_smu.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..50d10c240948fbd17279bb681e5d5af6befe9e8d
+--- /dev/null
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_smu.h
+@@ -0,0 +1,33 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#ifndef LIVERPOOL_SMU_H
++#define LIVERPOOL_SMU_H
++
++struct amdgpu_device;
++
++/* SMU7 mailbox message IDs (smu_7_0_1_d.h). Sent via liverpool_smu_cmd(). */
++#define PPSMC_MSG_ForceHigh			0x42
++
++#ifdef CONFIG_DRM_AMDGPU_CIK
++int liverpool_smu_samu_read(struct amdgpu_device *adev, u32 reg, u32 *val);
++int liverpool_smu_samu_write(struct amdgpu_device *adev, u32 reg, u32 val);
++int liverpool_smu_cmd(struct amdgpu_device *adev, u32 msg, u32 arg);
++int liverpool_smu_set_mempstate(struct amdgpu_device *adev, u32 idx);
++int liverpool_smu_sysfs_init(struct amdgpu_device *adev);
++#else
++static inline int liverpool_smu_samu_read(struct amdgpu_device *adev, u32 reg,
++					  u32 *val)
++{ return -EIO; }
++static inline int liverpool_smu_samu_write(struct amdgpu_device *adev, u32 reg,
++					   u32 val)
++{ return -EIO; }
++static inline int liverpool_smu_cmd(struct amdgpu_device *adev, u32 msg,
++				    u32 arg)
++{ return -EIO; }
++static inline int liverpool_smu_set_mempstate(struct amdgpu_device *adev,
++					      u32 idx)
++{ return -EINVAL; }
++static inline int liverpool_smu_sysfs_init(struct amdgpu_device *adev)
++{ return 0; }
++#endif
++
++#endif

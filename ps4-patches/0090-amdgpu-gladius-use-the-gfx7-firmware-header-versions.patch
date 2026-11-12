@@ -1,0 +1,130 @@
+From 3372c6a10f37b8f7b8e632405f85f90a48911abc Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sat, 7 Nov 2026 23:12:26 +0100
+Subject: [PATCH 090/124] amdgpu: gladius: use the gfx7 firmware header
+ versions
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ extra_firmware/amdgpu/gladius_a_ce.bin   | Bin 8832 -> 8832 bytes
+ extra_firmware/amdgpu/gladius_a_me.bin   | Bin 17024 -> 17024 bytes
+ extra_firmware/amdgpu/gladius_a_mec.bin  | Bin 17024 -> 17024 bytes
+ extra_firmware/amdgpu/gladius_a_mec2.bin | Bin 17024 -> 17024 bytes
+ extra_firmware/amdgpu/gladius_a_pfp.bin  | Bin 17024 -> 17024 bytes
+ extra_firmware/amdgpu/gladius_b_ce.bin   | Bin 8832 -> 8832 bytes
+ extra_firmware/amdgpu/gladius_b_me.bin   | Bin 17024 -> 17024 bytes
+ extra_firmware/amdgpu/gladius_b_mec.bin  | Bin 17024 -> 17024 bytes
+ extra_firmware/amdgpu/gladius_b_mec2.bin | Bin 17024 -> 17024 bytes
+ extra_firmware/amdgpu/gladius_b_pfp.bin  | Bin 17024 -> 17024 bytes
+ extra_firmware/amdgpu/gladius_sdma.bin   | Bin 4456 -> 4456 bytes
+ extra_firmware/amdgpu/gladius_sdma1.bin  | Bin 4456 -> 4456 bytes
+ 12 files changed, 0 insertions(+), 0 deletions(-)
+
+diff --git a/extra_firmware/amdgpu/gladius_a_ce.bin b/extra_firmware/amdgpu/gladius_a_ce.bin
+index 2986d54d5db279368657cde9e47ae246b050ddc9..bd2afaf2f524105b194aef72ec16f0633368640b 100644
+GIT binary patch
+delta 42
+tcmZp0ZE#g=P-0-vVPIfjWME)mXJBEdVqjosP=pAGNWQg~-KZF^1OS9%25SHS
+
+delta 42
+tcmZp0ZE#g=P-0-vVPIfjWME)mXJBFwU|?WqP=pAaQCAih-KZF^1OR)@1<L>c
+
+diff --git a/extra_firmware/amdgpu/gladius_a_me.bin b/extra_firmware/amdgpu/gladius_a_me.bin
+index bcee321449c08a9b8149eb78c2e6a9f8e0578c03..5ab440966a5317346b67d8f24150d21b7db4bc3c 100644
+GIT binary patch
+delta 44
+vcmZo@Wo&3=RBUi!V9;S;U|?imU|?rpVc5;Uz|i0b5xBK{VYTc=#ds$GvUCX2
+
+delta 44
+vcmZo@Wo&3=RBUi!V9;S;U|?imU|?rpVh~_pU}$iJ2(T`A<1e~VG2RIPoo5GN
+
+diff --git a/extra_firmware/amdgpu/gladius_a_mec.bin b/extra_firmware/amdgpu/gladius_a_mec.bin
+index a9a244c7b81ae26e9e19c4a8f8569d9851a0d00e..b6f497dd4d8295efc7a9d1ee05cbe479dc1a79c7 100644
+GIT binary patch
+delta 44
+vcmZo@Wo&3=RBUi!V9;S;U|?imU|?rpVpz(^z|i0b5!iNQmWS*{#ds$GuFVK~
+
+delta 44
+vcmZo@Wo&3=RBUi!V9;S;U|?imU|?rpVh~_pU}$iJ2xK0<UL(3uG2RIPqJ9Ve
+
+diff --git a/extra_firmware/amdgpu/gladius_a_mec2.bin b/extra_firmware/amdgpu/gladius_a_mec2.bin
+index a9a244c7b81ae26e9e19c4a8f8569d9851a0d00e..20dadc5ee18ac9835b56cce6f96f777a05ea90e8 100644
+GIT binary patch
+delta 44
+vcmZo@Wo&3=RBUi!V9;S;U|?imU|?rpVpz(^z|i0b5%|^CE-A55G2RIPt%(RZ
+
+delta 44
+vcmZo@Wo&3=RBUi!V9;S;U|?imU|?rpVh~_pU}$iJ2xK0<UL(3uG2RIPqJ9Ve
+
+diff --git a/extra_firmware/amdgpu/gladius_a_pfp.bin b/extra_firmware/amdgpu/gladius_a_pfp.bin
+index 353e1fb65c865e3da5dc7031a6667ec2a94c27ea..c0f8a38003442416a28bb0269004e395d642531f 100644
+GIT binary patch
+delta 44
+vcmZo@Wo&3=RBUi!V9;S;U|?imU|?rpVR*{Gz|i0b5wJSkVI#XyG2RIPuKfrg
+
+delta 44
+vcmZo@Wo&3=RBUi!V9;S;U|?imU|?rpVh~_pU}$iJ2s}M<ltXl*V!RUoqpSz^
+
+diff --git a/extra_firmware/amdgpu/gladius_b_ce.bin b/extra_firmware/amdgpu/gladius_b_ce.bin
+index e5b2522cfa76244f8393dace7ff0521ae0a43e59..155a24af5b17f732701ac98ee177b59ce97ad030 100644
+GIT binary patch
+delta 42
+tcmZp0ZE#g=P-0-vVPIfjWME)mXJBEdVqjosP=pBdhs)Z?Zd8m{0sw^M22lV2
+
+delta 42
+tcmZp0ZE#g=P-0-vVPIfjWME)mXJBFwU|?WqP=pACXI>T&-KZF^1OR@121Nh>
+
+diff --git a/extra_firmware/amdgpu/gladius_b_me.bin b/extra_firmware/amdgpu/gladius_b_me.bin
+index 97afd2aecd9e64c7edc73f4eeb0f46bb875f7d02..222473d38664f403b9bf614f75a5649958d46acf 100644
+GIT binary patch
+delta 44
+vcmZo@Wo&3=RBUi!V9;S;U|?imU|?rpVc5;Uz|i0b5wKtP@U`ql#ds$Gv6%?&
+
+delta 44
+vcmZo@Wo&3=RBUi!V9;S;U|?imU|?rpVh~_pU}$iJ2s~K1=Dz4g#ds$GrveC+
+
+diff --git a/extra_firmware/amdgpu/gladius_b_mec.bin b/extra_firmware/amdgpu/gladius_b_mec.bin
+index 3eae0d7c0e29aacd8207df702faab999314f73e2..48bb7e5649a754103d15031a7397ca4300e4ddf3 100644
+GIT binary patch
+delta 44
+vcmZo@Wo&3=RBUi!V9;S;U|?imU|?rpVpz(^z|i0b5vcio@PO<_#ds$GvOEbA
+
+delta 44
+vcmZo@Wo&3=RBUi!V9;S;U|?imU|?rpVh~_pU}$iJ2rT~4^F?%{V!RUorn3l>
+
+diff --git a/extra_firmware/amdgpu/gladius_b_mec2.bin b/extra_firmware/amdgpu/gladius_b_mec2.bin
+index 3eae0d7c0e29aacd8207df702faab999314f73e2..0f5b7c3486df9b29a99f99169461b1b0db33c64b 100644
+GIT binary patch
+delta 44
+vcmZo@Wo&3=RBUi!V9;S;U|?imU|?rpVpz(^z|i0b5ir<#XQISL#ds$GtqKTh
+
+delta 44
+vcmZo@Wo&3=RBUi!V9;S;U|?imU|?rpVh~_pU}$iJ2rT~4^F?%{V!RUorn3l>
+
+diff --git a/extra_firmware/amdgpu/gladius_b_pfp.bin b/extra_firmware/amdgpu/gladius_b_pfp.bin
+index 9b8867b8eafc074232e2b7606c74780e4b894faa..6c80f20f612a2812bea0ed554c82b41cea5882dc 100644
+GIT binary patch
+delta 44
+vcmZo@Wo&3=RBUi!V9;S;U|?imU|?rpVR*{Gz|i0b5jbM-EkSmpV!RUovl$4f
+
+delta 44
+vcmZo@Wo&3=RBUi!V9;S;U|?imU|?rpVh~_pU}$iJ2uPdn4iVj`81DoCnXCrk
+
+diff --git a/extra_firmware/amdgpu/gladius_sdma.bin b/extra_firmware/amdgpu/gladius_sdma.bin
+index 8b6f05d0c88445688dab30af46f039f3fbd6150c..d691078a1e5c49cdfa61eca797536378424d5ed4 100644
+GIT binary patch
+delta 26
+hcmaE%^g>B6Ly&>NfPsO5k%57MiGh*9XQN=aAOJ_C1W5n@
+
+delta 26
+hcmaE%^g>B6Ly&>NfPsO5k%57MiGh(pV54BTAOJ>q1PuTH
+
+diff --git a/extra_firmware/amdgpu/gladius_sdma1.bin b/extra_firmware/amdgpu/gladius_sdma1.bin
+index 5d6357715947309252ebedce33e3df07213f32e9..371d9ae8516c9e7c675edaed6c9211cf75246311 100644
+GIT binary patch
+delta 26
+hcmaE%^g>B6Ly&>NfPsO5k%57MiGh*9XQN=aAOJ_C1W5n@
+
+delta 26
+hcmaE%^g>B6Ly&>NfPsO5k%57MiGh(pV54BTAOJ>q1PuTH
+

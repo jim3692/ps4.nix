@@ -1,0 +1,243 @@
+From 941e4e2897ce4229e76083f51a1599fd388b2b4a Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sun, 15 Mar 2026 18:37:19 +0100
+Subject: [PATCH 014/124] ps4: fix the bridge and mt76x8 builds
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/ps4_bridge.c       |  3 +-
+ .../drv_wlan/MT6632/wlan/os/linux/gl_init.c   |  2 +-
+ .../drv_wlan/MT6632/wlan/os/linux/gl_kal.c    |  2 +-
+ .../drv_wlan/MT6632/wlan/os/linux/gl_p2p.c    | 46 +++++++++----------
+ 4 files changed, 26 insertions(+), 27 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+index 925986f2bdb876d4a3bff2922306d2750c31f681..6d2a86c0b3a0a7f00bf1027ec01028428ff2b0f7 100644
+--- a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
++++ b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+@@ -796,7 +796,8 @@ enum drm_mode_status ps4_bridge_mode_valid(struct drm_connector *connector,
+ }
+ 
+ static int ps4_bridge_attach(struct drm_bridge *bridge,
+-			     enum drm_bridge_attach_flags flags)
++							struct drm_encoder *encoder,
++			     			enum drm_bridge_attach_flags flags)
+ {
+ 	/* struct ps4_bridge *mn_bridge = bridge_to_ps4_bridge(bridge); */
+ 
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_init.c b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_init.c
+index 895c0e53781297cc6167475b83cc878f3905f5e2..89447c9b3941dbf58c50b078fc224447e4a989a1 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_init.c
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_init.c
+@@ -559,7 +559,7 @@ unsigned int _cfg80211_classify8021d(struct sk_buff *skb)
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
+ static void legacy_timer_emu_func(struct timer_list *t)
+ {
+-	struct legacy_timer_emu *lt = from_timer(lt, t, t);
++	struct legacy_timer_emu *lt = container_of(t, struct legacy_timer_emu, t);
+ 	lt->function(lt->data);
+ }
+ #endif
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_kal.c b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_kal.c
+index 96a899621d702ea618bb9fa0c6697ba52979a2fd..e32015543c01f0c2b4d8464a7515103b71099996 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_kal.c
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_kal.c
+@@ -3527,7 +3527,7 @@ UINT_32 kalGetTxPendingCmdCount(IN P_GLUE_INFO_T prGlueInfo)
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
+ static void legacy_timer_emu_func(struct timer_list *t)
+ {
+-	struct legacy_timer_emu *lt = from_timer(lt, t, t);
++	struct legacy_timer_emu *lt = container_of(t, struct legacy_timer_emu, t);
+ 	lt->function(lt->data);
+ }
+ #endif
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p.c b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p.c
+index cf8d7a5c682789b6d5067339081a4a92e95d068f..c1ef7b8194bd7d49c9ac45272811dc604d7b510e 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p.c
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p.c
+@@ -60,7 +60,6 @@
+ *    Wireless LAN Adapters.
+ */
+ 
+-
+ /*******************************************************************************
+ *                         C O M P I L E R   F L A G S
+ ********************************************************************************
+@@ -75,7 +74,6 @@
+ 
+ #include <linux/kmod.h>
+ 
+-
+ #include "gl_os.h"
+ #include "debug.h"
+ #include "wlan_lib.h"
+@@ -115,7 +113,6 @@
+ ********************************************************************************
+ */
+ 
+-
+ /*******************************************************************************
+ *                           P R I V A T E   D A T A
+ ********************************************************************************
+@@ -127,6 +124,25 @@ struct wireless_dev *gprP2pRoleWdev[KAL_P2P_NUM];
+ struct net_device *gPrP2pDev[KAL_P2P_NUM];
+ 
+ #if CFG_ENABLE_WIFI_DIRECT_CFG_80211
++
++static int mtk_p2p_cfg80211_set_wiphy_params_adapter(struct wiphy *wiphy, int param, u32 val)
++{
++	return mtk_p2p_cfg80211_set_wiphy_params(wiphy, val);
++}
++
++static int mtk_p2p_cfg80211_set_txpower_adapter(struct wiphy *wiphy, struct wireless_dev *wdev,
++	int ifindex, enum nl80211_tx_power_setting type, int dbm)
++{
++	return mtk_p2p_cfg80211_set_txpower(wiphy, wdev, type, dbm);
++}
++
++static int mtk_p2p_cfg80211_get_txpower_adapter(struct wiphy *wiphy, struct wireless_dev *wdev,
++	int ifindex, unsigned int dbm, int *type)
++{
++	unsigned int out = dbm;
++	return mtk_p2p_cfg80211_get_txpower(wiphy, wdev, ifindex, &out);
++}
++
+ static struct cfg80211_ops mtk_p2p_ops = {
+ #if (CFG_ENABLE_WIFI_DIRECT_CFG_80211 != 0)
+ 	/* Froyo */
+@@ -146,7 +162,7 @@ static struct cfg80211_ops mtk_p2p_ops = {
+ 	.start_ap = mtk_p2p_cfg80211_start_ap,
+ 	.change_beacon = mtk_p2p_cfg80211_change_beacon,
+ 	.stop_ap = mtk_p2p_cfg80211_stop_ap,
+-	.set_wiphy_params = mtk_p2p_cfg80211_set_wiphy_params,
++	.set_wiphy_params = mtk_p2p_cfg80211_set_wiphy_params_adapter,
+ 	.del_station = mtk_p2p_cfg80211_del_station,
+ 	.set_bitrate_mask = mtk_p2p_cfg80211_set_bitrate_mask,
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0))
+@@ -162,8 +178,8 @@ static struct cfg80211_ops mtk_p2p_ops = {
+ 	.set_default_mgmt_key = mtk_p2p_cfg80211_set_mgmt_key,
+ 	.join_ibss = mtk_p2p_cfg80211_join_ibss,
+ 	.leave_ibss = mtk_p2p_cfg80211_leave_ibss,
+-	.set_tx_power = mtk_p2p_cfg80211_set_txpower,
+-	.get_tx_power = mtk_p2p_cfg80211_get_txpower,
++	.set_tx_power = mtk_p2p_cfg80211_set_txpower_adapter,
++	.get_tx_power = mtk_p2p_cfg80211_get_txpower_adapter,
+ 	.set_power_mgmt = mtk_p2p_cfg80211_set_power_mgmt,
+ #if (CFG_SUPPORT_DFS_MASTER == 1)
+ 	.start_radar_detection = mtk_p2p_cfg80211_start_radar_detection,
+@@ -242,7 +258,6 @@ mtk_cfg80211_default_mgmt_stypes[NUM_NL80211_IFTYPES] = {
+ 
+ #endif
+ 
+-
+ static const struct iw_priv_args rP2PIwPrivTable[] = {
+ #if 0
+ 	{
+@@ -404,7 +419,6 @@ mtk_iface_combinations_p2p[] = {
+ #endif
+ };
+ 
+-
+ const struct ieee80211_iface_combination *p_mtk_iface_combinations_sta = mtk_iface_combinations_sta;
+ const INT_32 mtk_iface_combinations_sta_num = ARRAY_SIZE(mtk_iface_combinations_sta);
+ 
+@@ -436,7 +450,6 @@ static int p2pSetMACAddress(IN struct net_device *prDev, void *addr);
+ 
+ static int p2pDoIOCTL(struct net_device *prDev, struct ifreq *prIFReq, int i4Cmd);
+ 
+-
+ /*----------------------------------------------------------------------------*/
+ /*!
+ * \brief A function for prDev->init
+@@ -568,8 +581,6 @@ static BOOLEAN p2PAllocInfo(IN P_GLUE_INFO_T prGlueInfo, IN UINT_8 ucIdex)
+ 	else
+ 		DBGLOG(P2P, INFO, "prP2PInfo ok\n");
+ 
+-
+-
+ 	/* chk if alloc successful or not */
+ 	if (prGlueInfo->prP2PInfo[ucIdex] && prGlueInfo->prP2PDevInfo && prAdapter->prP2pInfo &&
+ 		prWifiVar->prP2PConnSettings[ucIdex] &&
+@@ -577,7 +588,6 @@ static BOOLEAN p2PAllocInfo(IN P_GLUE_INFO_T prGlueInfo, IN UINT_8 ucIdex)
+ 	    prWifiVar->prP2pSpecificBssInfo[ucIdex])
+ 		return TRUE;
+ 
+-
+ 	DBGLOG(P2P, ERROR, "[fail!]p2PAllocInfo :fail\n");
+ 
+ 	if (prWifiVar->prP2pSpecificBssInfo[ucIdex]) {
+@@ -680,8 +690,6 @@ BOOLEAN p2PFreeInfo(P_GLUE_INFO_T prGlueInfo)
+ 
+ }
+ 
+-
+-
+ BOOLEAN p2pNetRegister(P_GLUE_INFO_T prGlueInfo, BOOLEAN fgIsRtnlLockAcquired)
+ {
+ 	BOOLEAN fgDoRegister = FALSE;
+@@ -743,7 +751,6 @@ BOOLEAN p2pNetRegister(P_GLUE_INFO_T prGlueInfo, BOOLEAN fgIsRtnlLockAcquired)
+ 			ret = TRUE;
+ 		}
+ 
+-
+ 		DBGLOG(P2P, INFO, "P2P 2nd interface work\n");
+ 	}
+ 	if (fgRollbackRtnlLock)
+@@ -908,9 +915,6 @@ BOOLEAN glRegisterP2P(P_GLUE_INFO_T prGlueInfo, const char *prDevName, const cha
+ 		if (!prGlueInfo->prAdapter->fgEnable5GBand)
+ 			prP2pWdev->wiphy->bands[BAND_5G] = NULL;
+ 
+-
+-
+-
+ 		/* 2.2 wdev initialization */
+ 		if (fgIsApMode)
+ 			prP2pWdev->iftype = NL80211_IFTYPE_AP;
+@@ -919,7 +923,6 @@ BOOLEAN glRegisterP2P(P_GLUE_INFO_T prGlueInfo, const char *prDevName, const cha
+ 
+ #endif /* CFG_ENABLE_WIFI_DIRECT_CFG_80211 */
+ 
+-
+ 		/* 3. allocate netdev */
+ #if KERNEL_VERSION(3, 17, 0) <= CFG80211_VERSION_CODE
+ 		prGlueInfo->prP2PInfo[i]->prDevHandler =
+@@ -983,7 +986,6 @@ BOOLEAN glRegisterP2P(P_GLUE_INFO_T prGlueInfo, const char *prDevName, const cha
+ 
+ 		kalResetStats(prGlueInfo->prP2PInfo[i]->prDevHandler);
+ 
+-
+ #if 0
+ 		/* 7. net device initialize */
+ 		netif_carrier_off(prGlueInfo->prP2PInfo->prDevHandler);
+@@ -1010,7 +1012,6 @@ BOOLEAN glRegisterP2P(P_GLUE_INFO_T prGlueInfo, const char *prDevName, const cha
+ 
+ 		prGlueInfo->prP2PInfo[i]->aprRoleHandler = prGlueInfo->prP2PInfo[i]->prDevHandler;
+ 
+-
+ 		DBGLOG(P2P, INFO, "check prDevHandler = %p\n", prGlueInfo->prP2PInfo[i]->prDevHandler);
+ 		DBGLOG(P2P, INFO, "aprRoleHandler = %p\n", prGlueInfo->prP2PInfo[i]->aprRoleHandler);
+ 
+@@ -1039,7 +1040,6 @@ BOOLEAN glRegisterP2P(P_GLUE_INFO_T prGlueInfo, const char *prDevName, const cha
+ 	else
+ 		prGlueInfo->prAdapter->prP2pInfo->u4DeviceNum = 1;
+ 
+-
+ 	return TRUE;
+ #if 0
+ err_reg_netdev:
+@@ -1049,7 +1049,6 @@ err_alloc_netdev:
+ 	return FALSE;
+ }				/* end of glRegisterP2P() */
+ 
+-
+ BOOLEAN glP2pCreateWirelessDevice(P_GLUE_INFO_T prGlueInfo)
+ {
+ 	struct wiphy *prWiphy = NULL;
+@@ -1783,7 +1782,6 @@ int p2pDoIOCTL(struct net_device *prDev, struct ifreq *prIfReq, int i4Cmd)
+ 	return ret;
+ }				/* end of p2pDoIOCTL() */
+ 
+-
+ /*----------------------------------------------------------------------------*/
+ /*!
+  * \brief To override p2p interface address

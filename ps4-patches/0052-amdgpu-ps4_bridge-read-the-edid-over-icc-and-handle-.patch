@@ -1,0 +1,416 @@
+From 10a21ce1d40c2adab5726aaf83936ce19baff0df Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Fri, 6 Nov 2026 01:36:37 +0100
+Subject: [PATCH 052/124] amdgpu: ps4_bridge: read the edid over icc and handle
+ hotplug
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/ps4_bridge.c | 289 +++++++++++++++++++++---
+ 1 file changed, 259 insertions(+), 30 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+index 0e0e71f5d0f8b5d0a17389d93cdb254028cdf02a..5b2648b3c185cf74de59cae99255cbb14e86ed19 100644
+--- a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
++++ b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+@@ -40,10 +40,11 @@
+ #include <drm/drm_encoder.h>
+ 
+ #include <linux/err.h>
++#include <linux/slab.h>
++#include <linux/unaligned.h>
+ #include <linux/delay.h>
+ #include <linux/i2c.h>
+ #include <linux/i2c-algo-bit.h>
+-#include <linux/firmware.h>
+ 
+ #include "amdgpu.h"
+ #include "amdgpu_i2c.h"
+@@ -115,6 +116,20 @@
+ #define AKESTA_BUSY BIT(0)
+ 
+ #define AKESRST 0x7a88
++#define EDIDCTRL0 0x7a80
++#define EDIDCTRL1 0x7a81
++#define EDIDCTRL2 0x7a82
++#define EDIDCTRL3 0x7a83
++#define EDIDCTRL4 0x7a9c
++#define EDIDFIFO0 0x7c00
++#define EDIDFIFO1 0x7c80
++#define EDID_REPLY_SKIP 3
++#define PS4_BRIDGE_MAX_CLOCK 297000
++#define PS4_BRIDGE_ICC_SERVICE 0x10
++#define PS4_BRIDGE_EVENT_HEADER_SIZE 4
++#define PS4_BRIDGE_EVENT_UNPLUG 1
++#define PS4_BRIDGE_EVENT_PLUG 2
++#define PS4_BRIDGE_EVENT_MAX_BLOCKS 4
+ 
+ #define HDCPEN 0x7a8b
+ #define HDCPEN_NONE 0x00
+@@ -165,8 +180,15 @@ struct ps4_bridge {
+ 	struct mutex mutex;
+ 
+ 	int mode;
++	bool has_mode;
+ 	bool enabled;
+ 	bool enabling;
++
++	bool hdmi_events;
++	bool hdmi_event_seen;
++	enum drm_connector_status hdmi_status;
++	u8 *hdmi_edid;
++	size_t hdmi_edid_size;
+ };
+ 
+ /* this should really be taken care of by the connector, but that is currently
+@@ -432,10 +454,8 @@ void ps4_bridge_mode_set(struct drm_bridge *bridge,
+ 	/* This gets called before pre_enable/enable, so we just stash
+ 	 * the vic ID for later */
+ 	mn_bridge->mode = drm_match_cea_mode(adjusted_mode);
++	mn_bridge->has_mode = true;
+ 	DRM_DEBUG_KMS("vic mode: %d\n", mn_bridge->mode);
+-	if (!mn_bridge->mode) {
+-		DRM_ERROR("attempted to set non-CEA mode\n");
+-	}
+ }
+ 
+ static void ps4_bridge_pre_enable(struct drm_bridge *bridge)
+@@ -655,7 +675,7 @@ static void ps4_bridge_enable(struct drm_bridge *bridge)
+ 	mn_bridge->enabling = true;
+ 	mutex_unlock(&mn_bridge->mutex);
+ 
+-	if (!mn_bridge->mode) {
++	if (!mn_bridge->has_mode) {
+ 		DRM_ERROR("mode not available\n");
+ 		goto out;
+ 	}
+@@ -857,7 +877,7 @@ static void ps4_bridge_post_disable(struct drm_bridge *bridge)
+ 	mutex_lock(&mn_bridge->mutex);
+ 	mn_bridge->enabled = false;
+ 	mn_bridge->enabling = false;
+-	if (!mn_bridge->mode) {
++	if (!mn_bridge->has_mode) {
+ 		mutex_unlock(&mn_bridge->mutex);
+ 		return;
+ 	}
+@@ -871,6 +891,7 @@ static void ps4_bridge_post_disable(struct drm_bridge *bridge)
+ 		DRM_ERROR("Failed to reset bridge in post_disable\n");
+ 
+ 	mn_bridge->mode = 0;
++	mn_bridge->has_mode = false;
+ 	mutex_unlock(&mn_bridge->mutex);
+ }
+ 
+@@ -916,6 +937,192 @@ static const struct drm_display_mode mode_1080p120 __maybe_unused = {
+ 	  .picture_aspect_ratio = HDMI_PICTURE_ASPECT_16_9
+ };
+ 
++static int ps4_bridge_edid_fetch(struct ps4_bridge *mn_bridge, u8 seq, u8 *out)
++{
++	struct i2c_cmdqueue *q = &mn_bridge->cq;
++	unsigned int i;
++	int ret;
++
++	cq_init(q, 4);
++	cq_writereg(q, AKESRST, 0xff);
++	cq_writereg(q, EDIDCTRL3, 0x88);
++	cq_wait_set(q, AKESTA, 0xa0);
++	cq_wait_clear(q, AKESTA, AKESTA_BUSY);
++	cq_writereg(q, EDIDCTRL4, 0x0a);
++	cq_writereg(q, EDIDCTRL0, seq);
++	cq_writereg(q, EDIDCTRL1, 0x00);
++	cq_writereg(q, EDIDCTRL2, 0xff);
++	cq_writereg(q, EDIDCTRL3, 0x82);
++	cq_wait_set(q, AKESTA, 0xa0);
++	cq_wait_clear(q, AKESTA, AKESTA_BUSY);
++	ret = cq_exec(q);
++	if (ret < 0)
++		return ret;
++
++	for (i = 0; i < 2; i++) {
++		cq_init(q, 4);
++		cq_read(q, i ? EDIDFIFO1 : EDIDFIFO0, EDID_LENGTH);
++		ret = cq_exec(q);
++		if (ret >= (int)(sizeof(q->reply) - sizeof(q->reply.databuf)) +
++			   EDID_REPLY_SKIP + EDID_LENGTH) {
++			memcpy(out + i * EDID_LENGTH,
++			       q->reply.databuf + EDID_REPLY_SKIP, EDID_LENGTH);
++			continue;
++		}
++		goto small_reads;
++	}
++	return 0;
++
++small_reads:
++	for (i = 0; i < 2 * EDID_LENGTH / 8; i++) {
++		cq_init(q, 4);
++		cq_read(q, i ? EDIDFIFO1 : EDIDFIFO0, 8);
++		ret = cq_exec(q);
++		if (ret < 0)
++			return ret;
++		memcpy(out + i * 8, q->reply.databuf + EDID_REPLY_SKIP, 8);
++	}
++	return 0;
++}
++
++static int ps4_bridge_read_edid_block_icc(void *data, u8 *buf,
++					  unsigned int block, size_t len)
++{
++	struct ps4_bridge *mn_bridge = data;
++	u8 seg[2 * EDID_LENGTH];
++	int ret;
++
++	if (!mn_bridge || len > EDID_LENGTH)
++		return -EINVAL;
++
++	mutex_lock(&mn_bridge->mutex);
++	ret = ps4_bridge_edid_fetch(mn_bridge, block / 2, seg);
++	mutex_unlock(&mn_bridge->mutex);
++	if (ret < 0)
++		return ret;
++
++	memcpy(buf, seg + (block % 2) * EDID_LENGTH, len);
++	return 0;
++}
++
++static int ps4_bridge_set_event_control(struct ps4_bridge *mn_bridge, u8 enable)
++{
++	struct i2c_cmdqueue *q = &mn_bridge->cq;
++	int ret;
++
++	mutex_lock(&mn_bridge->mutex);
++	cq_init(q, 4);
++	cq_cmd(q, 5, 4);
++	*q->p++ = enable;
++	ret = cq_exec(q);
++	mutex_unlock(&mn_bridge->mutex);
++	return ret < 0 ? ret : 0;
++}
++
++static bool ps4_bridge_edid_blocks_valid(const u8 *edid, unsigned int blocks)
++{
++	unsigned int block, i;
++	u8 sum;
++
++	for (block = 0; block < blocks; block++) {
++		sum = 0;
++		for (i = 0; i < EDID_LENGTH; i++)
++			sum += edid[block * EDID_LENGTH + i];
++		if (sum)
++			return false;
++	}
++	return true;
++}
++
++static void ps4_bridge_hdmi_event(void *ctx, u16 minor, const u8 *data,
++				  u16 length)
++{
++	struct ps4_bridge *mn_bridge = ctx;
++	const u8 *edid = data + PS4_BRIDGE_EVENT_HEADER_SIZE;
++	unsigned int blocks;
++	u16 edid_size;
++	u8 *copy;
++	u8 code;
++
++	if (length < PS4_BRIDGE_EVENT_HEADER_SIZE ||
++	    data[0] != PS4_BRIDGE_ICC_SERVICE)
++		return;
++
++	code = data[1];
++	edid_size = get_unaligned_le16(data + 2);
++	if (edid_size > length - PS4_BRIDGE_EVENT_HEADER_SIZE)
++		return;
++
++	switch (code) {
++	case PS4_BRIDGE_EVENT_UNPLUG:
++		mutex_lock(&mn_bridge->mutex);
++		kfree(mn_bridge->hdmi_edid);
++		mn_bridge->hdmi_edid = NULL;
++		mn_bridge->hdmi_edid_size = 0;
++		mn_bridge->hdmi_status = connector_status_disconnected;
++		mn_bridge->hdmi_event_seen = true;
++		mutex_unlock(&mn_bridge->mutex);
++		DRM_DEBUG_KMS("ps4_bridge: hdmi unplug\n");
++		break;
++	case PS4_BRIDGE_EVENT_PLUG:
++		blocks = edid_size / EDID_LENGTH;
++		if (!blocks || blocks > PS4_BRIDGE_EVENT_MAX_BLOCKS ||
++		    edid_size % EDID_LENGTH ||
++		    !ps4_bridge_edid_blocks_valid(edid, blocks)) {
++			DRM_ERROR("ps4_bridge: hdmi plug with a bad edid (%u bytes)\n",
++				  edid_size);
++			return;
++		}
++		copy = kmemdup(edid, edid_size, GFP_KERNEL);
++		if (!copy)
++			return;
++		mutex_lock(&mn_bridge->mutex);
++		kfree(mn_bridge->hdmi_edid);
++		mn_bridge->hdmi_edid = copy;
++		mn_bridge->hdmi_edid_size = edid_size;
++		mn_bridge->hdmi_status = connector_status_connected;
++		mn_bridge->hdmi_event_seen = true;
++		mutex_unlock(&mn_bridge->mutex);
++		DRM_DEBUG_KMS("ps4_bridge: hdmi plug, %u edid blocks\n", blocks);
++		break;
++	default:
++		DRM_DEBUG_KMS("ps4_bridge: hdmi event %u ignored\n", code);
++		return;
++	}
++
++	drm_kms_helper_connector_hotplug_event(mn_bridge->connector);
++}
++
++static void ps4_bridge_events_stop(void *data)
++{
++	struct ps4_bridge *mn_bridge = data;
++
++	if (!mn_bridge->hdmi_events)
++		return;
++	ps4_bridge_set_event_control(mn_bridge, 0);
++	bpcie_icc_unregister_event_handler(PS4_BRIDGE_ICC_SERVICE);
++	mn_bridge->hdmi_events = false;
++	kfree(mn_bridge->hdmi_edid);
++	mn_bridge->hdmi_edid = NULL;
++	mn_bridge->hdmi_edid_size = 0;
++}
++
++static void ps4_bridge_events_start(struct device *dev,
++				    struct ps4_bridge *mn_bridge)
++{
++	if (bpcie_status() <= 0)
++		return;
++	if (bpcie_icc_register_event_handler(PS4_BRIDGE_ICC_SERVICE,
++					     ps4_bridge_hdmi_event, mn_bridge))
++		return;
++	mn_bridge->hdmi_events = true;
++	mn_bridge->hdmi_status = connector_status_unknown;
++	if (devm_add_action_or_reset(dev, ps4_bridge_events_stop, mn_bridge))
++		return;
++	if (ps4_bridge_set_event_control(mn_bridge, 1))
++		DRM_ERROR("ps4_bridge: failed to enable hdmi events\n");
++}
++
+ int ps4_bridge_get_modes(struct drm_connector *connector)
+ {
+ 	struct drm_device *dev = connector->dev;
+@@ -935,25 +1142,23 @@ int ps4_bridge_get_modes(struct drm_connector *connector)
+ 	amdgpu_connector->edid = NULL;
+ 	drm_connector_update_edid_property(connector, NULL);
+ 
+-	{
+-		const struct firmware *fw = NULL;
+-
+-		if (request_firmware(&fw, "edid/my_edid.bin",
+-				      connector->dev->dev) == 0 && fw) {
+-			DRM_DEBUG_KMS("ps4_bridge_get_modes: using firmware EDID "
+-				      "(%zu bytes)\n", fw->size);
+-			drm_edid = drm_edid_alloc(fw->data, fw->size);
+-			release_firmware(fw);
+-		} else {
+-			DRM_DEBUG_KMS("ps4_bridge_get_modes: no firmware EDID "
+-				      "(edid/my_edid.bin), falling back to DDC\n");
+-		}
++	if (g_bridge) {
++		mutex_lock(&g_bridge->mutex);
++		if (g_bridge->hdmi_edid)
++			drm_edid = drm_edid_alloc(g_bridge->hdmi_edid,
++						  g_bridge->hdmi_edid_size);
++		mutex_unlock(&g_bridge->mutex);
+ 	}
+-
+-	if (drm_edid)
+-		goto edid_ready;
++	if (!drm_edid && g_bridge)
++		drm_edid = drm_edid_read_custom(connector,
++						ps4_bridge_read_edid_block_icc,
++						g_bridge);
++	DRM_DEBUG_KMS("ps4_bridge_get_modes: ICC EDID %s\n",
++		      drm_edid ? "ok" : "failed, trying DDC");
+ 
+ 	if (!amdgpu_connector->ddc_bus) {
++		if (drm_edid)
++			goto edid_ready;
+ 		DRM_DEBUG_KMS("ps4_bridge_get_modes: no DDC bus, using fallback modes\n");
+ 		goto fallback_modes;
+ 	}
+@@ -975,6 +1180,9 @@ int ps4_bridge_get_modes(struct drm_connector *connector)
+ 			      dig_connector ? dig_connector->dp_clock : 0);
+ 	}
+ 
++	if (drm_edid)
++		goto edid_ready;
++
+ 	drm_connector_for_each_possible_encoder(connector, encoder) {
+ 		amdgpu_atombios_encoder_setup_ext_encoder_ddc(encoder);
+ 		break;
+@@ -1020,11 +1228,6 @@ edid_ready:
+ 		amdgpu_connector->edid = drm_edid_duplicate(raw_edid);
+ 		drm_edid_connector_update(connector, drm_edid);
+ 		count = drm_edid_connector_add_modes(connector);
+-		newmode = drm_mode_duplicate(dev, &mode_1080p);
+-		if (newmode) {
+-			drm_mode_probed_add(connector, newmode);
+-			count++;
+-		}
+ 		DRM_DEBUG_KMS("ps4_bridge_get_modes: EDID ok, %d modes, extensions=%u\n",
+ 			      count, raw_edid ? raw_edid->extensions : 0);
+ 		drm_edid_free(drm_edid);
+@@ -1065,6 +1268,9 @@ enum drm_connector_status ps4_bridge_detect(struct drm_connector *connector,
+ 	if (!mn_bridge)
+ 		return connector_status_disconnected;
+ 
++	if (READ_ONCE(mn_bridge->hdmi_event_seen))
++		return READ_ONCE(mn_bridge->hdmi_status);
++
+ 	if (!force)
+ 		return connector->status;
+ 
+@@ -1092,14 +1298,36 @@ enum drm_connector_status ps4_bridge_detect(struct drm_connector *connector,
+ 	       connector_status_disconnected;
+ }
+ 
++static bool ps4_bridge_vic_supported(u8 vic)
++{
++	switch (vic) {
++	case 1 ... 6:
++	case 16 ... 21:
++	case 31 ... 34:
++	case 46 ... 49:
++	case 63:
++	case 64:
++	case 96:
++	case 97:
++	case 101:
++	case 102:
++		return true;
++	default:
++		return false;
++	}
++}
++
+ enum drm_mode_status ps4_bridge_mode_valid(struct drm_connector *connector,
+ 				  const struct drm_display_mode *mode)
+ {
+-	int vic = drm_match_cea_mode(mode);
++	u8 vic = drm_match_cea_mode(mode);
+ 
+-	if (!vic || (vic != 16 && vic != 4 && vic != 63)) {
++	if (mode->flags & DRM_MODE_FLAG_INTERLACE)
++		return MODE_NO_INTERLACE;
++	if (mode->clock > PS4_BRIDGE_MAX_CLOCK)
++		return MODE_CLOCK_HIGH;
++	if (!ps4_bridge_vic_supported(vic))
+ 		return MODE_BAD;
+-	}
+ 	return MODE_OK;
+ }
+ 
+@@ -1162,6 +1390,7 @@ int ps4_bridge_register(struct drm_connector *connector,
+ 	}
+ 
+ 	g_bridge = mn_bridge;
++	ps4_bridge_events_start(dev, mn_bridge);
+ 
+ 	return 0;
+ }

@@ -1,0 +1,22 @@
+From cad4547d9ea8f5337ed9787a06e0f5ef6a00e7dc Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Tue, 10 Nov 2026 21:47:37 +0100
+Subject: [PATCH 120/124] docs: add the todo to document every engine
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ README.md | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/README.md b/README.md
+index 85a53644a6224205192989982bea83a8a92b7532..8aad4c134599d15d43957287460cc840bdf9f5ce 100644
+--- a/README.md
++++ b/README.md
+@@ -35,6 +35,7 @@ tested on aeolia, baikal slim, baikal pro, belize fat, belize slim and belize pr
+ ## TODO
+ 
+ - document the liverpool and gladius uvd and vce work properly: the native packets, the firmware, the gameos captures it is based on and how it was tested. right now it only lives in my notes and in my head, and i wont be around forever
++- document every engine the same way (gpu, samu crypto and rng, uvd, vce, hdmi bridge, emc and icc, southbridges, clocks) and how each one was done: what was reversed from the system kernel, the captures, the tools and the live tests
+ 
+ ## Install
+ 

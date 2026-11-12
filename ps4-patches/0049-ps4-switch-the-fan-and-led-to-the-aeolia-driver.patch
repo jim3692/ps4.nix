@@ -1,0 +1,346 @@
+From 57e70e6b3add0d25e359534cd62f302c18ff860a Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Wed, 4 Nov 2026 19:28:54 +0100
+Subject: [PATCH 049/124] ps4: switch the fan and led to the aeolia driver
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/ps4/ps4-fan.c | 138 ++++++++++++++----------------------------
+ drivers/ps4/ps4-fan.h |  10 +--
+ drivers/ps4/ps4-led.c |  40 +++++++++++-
+ 3 files changed, 83 insertions(+), 105 deletions(-)
+
+diff --git a/drivers/ps4/ps4-fan.c b/drivers/ps4/ps4-fan.c
+index 53f0d336b4f90c066f36a1d865f5620a81059b03..ebc4f08fcb45470c8803d49a367503c4dafc051b 100644
+--- a/drivers/ps4/ps4-fan.c
++++ b/drivers/ps4/ps4-fan.c
+@@ -16,13 +16,10 @@ struct ps4_fan_priv {
+ 	struct mutex lock;
+ 	long temp_mc;
+ 	long thresh_mc;
+-	long rpm;
+ 	unsigned long temp_updated;
+ 	unsigned long thresh_updated;
+-	unsigned long rpm_updated;
+ 	bool temp_valid;
+ 	bool thresh_valid;
+-	bool rpm_valid;
+ };
+ 
+ static bool ps4_fan_cache_valid(unsigned long updated, bool valid)
+@@ -103,51 +100,17 @@ static int icc_write_fan_threshold(long thresh_mc)
+ 	return 0;
+ }
+ 
+-static int icc_read_fan_rpm(long *rpm)
+-{
+-	u8 reply[PS4_FAN_STATUS_REPLY_LEN];
+-	u32 raw;
+-	int ret;
+-
+-	memset(reply, 0, sizeof(reply));
+-	ret = apcie_icc_cmd(PS4_FAN_ICC_MAJOR, PS4_FAN_ICC_MINOR_STATUS,
+-			    NULL, 0, reply, sizeof(reply));
+-	if (ret < 0)
+-		return ret;
+-	if (reply[PS4_ICC_STATUS_BYTE] != 0x00)
+-		return -EIO;
+-
+-	raw = le32_to_cpup((__le32 *)(reply + PS4_FAN_RPM_OFFSET));
+-
+-	if (raw == PS4_FAN_RPM_INVALID_1 || raw == PS4_FAN_RPM_INVALID_2)
+-		*rpm = 0;
+-	else
+-		*rpm = (long)(raw / PS4_FAN_RPM_SCALE);
+-
+-	return 0;
+-}
+-
+ static umode_t ps4_fan_is_visible(const void *drvdata,
+ 				   enum hwmon_sensor_types type,
+ 				   u32 attr, int channel)
+ {
+-	switch (type) {
+-	case hwmon_temp:
+-		if (channel != 0)
+-			return 0;
+-		switch (attr) {
+-		case hwmon_temp_input: return 0444;
+-		case hwmon_temp_crit:  return 0644;
+-		default:               return 0;
+-		}
+-	case hwmon_fan:
+-		if (channel != 0)
+-			return 0;
+-		if (attr == hwmon_fan_input)
+-			return 0444;
+-		return 0;
+-	default:
++	if (type != hwmon_temp || channel != 0)
+ 		return 0;
++
++	switch (attr) {
++	case hwmon_temp_input: return 0444;
++	case hwmon_temp_crit:  return 0644;
++	default:               return 0;
+ 	}
+ }
+ 
+@@ -157,59 +120,36 @@ static int ps4_fan_read(struct device *dev, enum hwmon_sensor_types type,
+ 	struct ps4_fan_priv *priv = dev_get_drvdata(dev);
+ 	int ret;
+ 
++	if (type != hwmon_temp || channel != 0)
++		return -EOPNOTSUPP;
++
+ 	mutex_lock(&priv->lock);
+ 
+-	switch (type) {
+-	case hwmon_temp:
+-		if (channel != 0) { ret = -EOPNOTSUPP; break; }
+-		switch (attr) {
+-		case hwmon_temp_input:
+-			if (ps4_fan_cache_valid(priv->temp_updated,
+-						priv->temp_valid)) {
+-				*val = priv->temp_mc;
+-				ret = 0;
+-				break;
+-			}
+-			ret = icc_read_apu_temp(val);
+-			if (!ret) {
+-				priv->temp_mc = *val;
+-				priv->temp_updated = jiffies;
+-				priv->temp_valid = true;
+-			}
+-			break;
+-		case hwmon_temp_crit:
+-			if (ps4_fan_cache_valid(priv->thresh_updated,
+-						priv->thresh_valid)) {
+-				*val = priv->thresh_mc;
+-				ret = 0;
+-				break;
+-			}
+-			ret = icc_read_fan_threshold(val);
+-			if (!ret) {
+-				priv->thresh_mc = *val;
+-				priv->thresh_updated = jiffies;
+-				priv->thresh_valid = true;
+-			}
++	switch (attr) {
++	case hwmon_temp_input:
++		if (ps4_fan_cache_valid(priv->temp_updated, priv->temp_valid)) {
++			*val = priv->temp_mc;
++			ret = 0;
+ 			break;
+-		default:
+-			ret = -EOPNOTSUPP;
+ 		}
+-		break;
+-	case hwmon_fan:
+-		if (channel != 0 || attr != hwmon_fan_input) {
+-			ret = -EOPNOTSUPP;
+-			break;
++		ret = icc_read_apu_temp(val);
++		if (!ret) {
++			priv->temp_mc = *val;
++			priv->temp_updated = jiffies;
++			priv->temp_valid = true;
+ 		}
+-		if (ps4_fan_cache_valid(priv->rpm_updated, priv->rpm_valid)) {
+-			*val = priv->rpm;
++		break;
++	case hwmon_temp_crit:
++		if (ps4_fan_cache_valid(priv->thresh_updated, priv->thresh_valid)) {
++			*val = priv->thresh_mc;
+ 			ret = 0;
+ 			break;
+ 		}
+-		ret = icc_read_fan_rpm(val);
++		ret = icc_read_fan_threshold(val);
+ 		if (!ret) {
+-			priv->rpm = *val;
+-			priv->rpm_updated = jiffies;
+-			priv->rpm_valid = true;
++			priv->thresh_mc = *val;
++			priv->thresh_updated = jiffies;
++			priv->thresh_valid = true;
+ 		}
+ 		break;
+ 	default:
+@@ -252,8 +192,6 @@ static int ps4_fan_write(struct device *dev, enum hwmon_sensor_types type,
+ static const struct hwmon_channel_info * const ps4_fan_channel_info[] = {
+ 	HWMON_CHANNEL_INFO(temp,
+ 		HWMON_T_INPUT | HWMON_T_CRIT),
+-	HWMON_CHANNEL_INFO(fan,
+-		HWMON_F_INPUT),
+ 	NULL,
+ };
+ 
+@@ -272,6 +210,8 @@ static int ps4_fan_probe(struct platform_device *pdev)
+ {
+ 	struct ps4_fan_priv *priv;
+ 	struct device *hwmon_dev;
++	long temp_mc = 0, thresh_mc = 0;
++	int ret;
+ 
+ 	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
+ 	if (!priv)
+@@ -286,10 +226,20 @@ static int ps4_fan_probe(struct platform_device *pdev)
+ 	if (IS_ERR(hwmon_dev))
+ 		return PTR_ERR(hwmon_dev);
+ 
++	mutex_lock(&priv->lock);
++
++	ret = icc_write_fan_threshold(PS4_FAN_THRESH_DEFAULT_MC);
++	if (ret)
++		dev_warn(&pdev->dev, "failed to set fan threshold: %d\n", ret);
++
++	icc_read_apu_temp(&temp_mc);
++	icc_read_fan_threshold(&thresh_mc);
++
++	mutex_unlock(&priv->lock);
++
+ 	dev_info(&pdev->dev,
+-		 "PS4 fan hwmon ready — "
+-		 "temp1_input, temp1_crit (%d–%d°C), fan1_input\n",
+-		 PS4_FAN_THRESH_MIN_C, PS4_FAN_THRESH_MAX_C);
++		 "PS4 fan hwmon ready: temp=%ldC threshold=%ldC\n",
++		 temp_mc / 1000, thresh_mc / 1000);
+ 	return 0;
+ }
+ 
+@@ -336,6 +286,6 @@ module_init(ps4_fan_init);
+ module_exit(ps4_fan_exit);
+ 
+ MODULE_LICENSE("GPL");
+-MODULE_AUTHOR("rmux <armandas.kvietkus@proton.me>");
+-MODULE_DESCRIPTION("PS4 Aeolia/Belize fan threshold and RPM hwmon driver");
++MODULE_AUTHOR("Armandas Kvietkus <armandas.kvietkus@proton.me>");
++MODULE_DESCRIPTION("PS4 Aeolia/Belize fan threshold hwmon driver");
+ MODULE_ALIAS("platform:ps4-fan");
+diff --git a/drivers/ps4/ps4-fan.h b/drivers/ps4/ps4-fan.h
+index 101d95e91eb431c1a4f071bb8d79af9400b20955..52343acad68a87305f2d543e157307c0f89c664e 100644
+--- a/drivers/ps4/ps4-fan.h
++++ b/drivers/ps4/ps4-fan.h
+@@ -6,29 +6,21 @@
+ #define PS4_FAN_ICC_MAJOR               0x0A
+ #define PS4_FAN_ICC_MINOR_GET           0x07
+ #define PS4_FAN_ICC_MINOR_SET           0x06
+-#define PS4_FAN_ICC_MINOR_STATUS        0x08
+ 
+ #define PS4_FAN_TEMP_ICC_MAJOR          0x0B
+ #define PS4_FAN_TEMP_ICC_MINOR          0x01
+ 
+ #define PS4_FAN_CONFIG_LEN              0x34
+ #define PS4_FAN_CONFIG_REPLY_LEN        0x52
+-#define PS4_FAN_STATUS_REPLY_LEN        0x52
+ #define PS4_FAN_TEMP_REPLY_LEN          0x10
+ 
+ #define PS4_ICC_STATUS_BYTE             0
+ #define PS4_FAN_THRESH_BYTE             5
+-#define PS4_FAN_RPM_OFFSET              8
+-#define PS4_FAN_TEMP_ALT_OFFSET         16
+ #define PS4_FAN_TEMP_BYTE               3
+ 
+-#define PS4_FAN_RPM_SCALE               65536U
+-#define PS4_FAN_RPM_INVALID_1           0xFFFFFFFFU
+-#define PS4_FAN_RPM_INVALID_2           0x0FFFFFFFU
+-
+ #define PS4_FAN_THRESH_MIN_C            20
+ #define PS4_FAN_THRESH_MAX_C            85
+-#define PS4_FAN_THRESH_DEFAULT_C        79
++#define PS4_FAN_THRESH_DEFAULT_C        75
+ 
+ #define PS4_FAN_THRESH_MIN_MC           ((long)(PS4_FAN_THRESH_MIN_C) * 1000L)
+ #define PS4_FAN_THRESH_MAX_MC           ((long)(PS4_FAN_THRESH_MAX_C) * 1000L)
+diff --git a/drivers/ps4/ps4-led.c b/drivers/ps4/ps4-led.c
+index 85d8bc2e919abbee0332ad118688e8008501dbcf..cf9d43a2d8eb288a47bdd666bb696ac15135256c 100644
+--- a/drivers/ps4/ps4-led.c
++++ b/drivers/ps4/ps4-led.c
+@@ -39,6 +39,7 @@ static const u8 led_orange[] = {
+ 	0x05, 0x01, 0x00
+ };
+ 
++
+ static const u8 led_orange_blue[] = {
+ 	0x03, 0x01, 0x00, 0x00, 0x10, 0x01, 0x02, 0xff,
+ 	0x02, 0x01, 0x00, 0x11, 0x01, 0x02, 0x00, 0x02,
+@@ -103,6 +104,14 @@ static const u8 led_pink_blue[] = {
+ 	0x05, 0x01, 0x00
+ };
+ 
++static const u8 led_purple[] = {
++	0x03, 0x01, 0x00, 0x00, 0x10, 0x01, 0x02, 0xff,
++	0x02, 0x01, 0x00, 0x11, 0x01, 0x02, 0x00, 0x02,
++	0x01, 0x00, 0x02, 0x03, 0x01, 0x00, 0x04, 0x01,
++	0xbf, 0x02, 0x80, 0x05, 0x01, 0xff, 0x02, 0x00,
++	0x05, 0x01, 0xff
++};
++
+ struct ps4_led_node {
+ 	struct led_classdev cdev;
+ 	const u8 *payload;
+@@ -134,8 +143,15 @@ static int ps4_led_set_blocking(struct led_classdev *led_cdev,
+ 			    reply, sizeof(reply));
+ 	if (ret < 0) {
+ 		mutex_unlock(&ps4_led_lock);
++		dev_err(led_cdev->dev, "icc: LED command failed: %d\n", ret);
+ 		return ret;
+ 	}
++	if (reply[0] != 0 || reply[1] != 0) {
++		mutex_unlock(&ps4_led_lock);
++		dev_err(led_cdev->dev, "icc: LED command reported failure: %d, %d\n",
++			reply[0], reply[1]);
++		return -EIO;
++	}
+ 
+ 	ps4_led_current_payload = data;
+ 	mutex_unlock(&ps4_led_lock);
+@@ -232,10 +248,19 @@ static struct ps4_led_node ps4_led_nodes[] = {
+ 		},
+ 		.payload = led_pink_blue,
+ 	},
++	{
++		.cdev = {
++			.name = "ps4:purple:status",
++			.max_brightness = 255,
++			.brightness_set_blocking = ps4_led_set_blocking,
++		},
++		.payload = led_purple,
++	},
+ };
+ 
+ static int ps4_led_probe(struct platform_device *pdev)
+ {
++	u8 reply[0x30];
+ 	int i, ret;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(ps4_led_nodes); i++) {
+@@ -249,7 +274,18 @@ static int ps4_led_probe(struct platform_device *pdev)
+ 		}
+ 	}
+ 
+-	dev_info(&pdev->dev, "PS4 LED driver ready.\n");
++	memset(reply, 0, sizeof(reply));
++	ret = apcie_icc_cmd(PS4_LED_ICC_MAJOR, PS4_LED_ICC_MINOR,
++			    led_purple, PS4_LED_PAYLOAD_LEN,
++			    reply, sizeof(reply));
++	if (ret < 0 || reply[0] != 0 || reply[1] != 0)
++		dev_warn(&pdev->dev, "boot LED set failed: ret=%d reply=[%02x %02x]\n",
++			 ret, reply[0], reply[1]);
++	else
++		ps4_led_current_payload = led_purple;
++
++	dev_info(&pdev->dev, "PS4 LED driver ready: %zu colors, boot color: purple\n",
++		 ARRAY_SIZE(ps4_led_nodes));
+ 
+ 	return 0;
+ }
+@@ -300,6 +336,6 @@ module_init(ps4_led_init);
+ module_exit(ps4_led_exit);
+ 
+ MODULE_LICENSE("GPL");
+-MODULE_AUTHOR("rmux <armandas.kvietkus@proton.me>");
++MODULE_AUTHOR("Armandas Kvietkus <armandas.kvietkus@proton.me>");
+ MODULE_DESCRIPTION("PS4 Aeolia front panel LED driver");
+ MODULE_ALIAS("platform:ps4-led");

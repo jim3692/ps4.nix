@@ -1,0 +1,1079 @@
+From aa68165aa706fb2dc12c31d3488a55d22aebfae0 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Fri, 6 Nov 2026 17:09:57 +0100
+Subject: [PATCH 057/124] ps4: port to linux 7.1.7
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ .gitignore                                    |   6 +
+ README.md                                     |   2 +-
+ build.sh                                      |   5 +-
+ config                                        |   1 -
+ drivers/gpu/drm/amd/amdgpu/ps4_bridge.c       |   4 +-
+ .../MT6632/wlan/os/linux/gl_cfg80211.c        | 277 ++++++++++++++++--
+ .../drv_wlan/MT6632/wlan/os/linux/gl_p2p.c    |  21 ++
+ .../MT6632/wlan/os/linux/gl_p2p_cfg80211.c    | 127 +++++++-
+ .../MT6632/wlan/os/linux/gl_p2p_kal.c         |   6 +-
+ .../wlan/os/linux/include/gl_cfg80211.h       |  40 ++-
+ .../wlan/os/linux/include/gl_p2p_ioctl.h      |  36 ++-
+ drivers/usb/host/xhci-aeolia.c                |  10 +-
+ 12 files changed, 488 insertions(+), 47 deletions(-)
+
+diff --git a/.gitignore b/.gitignore
+index f9f261ac2fc44e377d72f0d287efe29bfc6b5668..a42ff10ad165ea948d7887bf8d71666d2d2f69eb 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -199,3 +199,9 @@ sphinx_*/
+ 
+ # bc language scripts (not LLVM bitcode)
+ !kernel/time/timeconst.bc
++
++# Added
++!.github
++!.dockerignore
++!.Dockerfile*
++/include/ksym/
+diff --git a/README.md b/README.md
+index a52aefa0a0a201cd740c115417448ae8d769c254..f1b5a4dedc7a9bd467f87de594c6c6039e358407 100644
+--- a/README.md
++++ b/README.md
+@@ -201,7 +201,7 @@ GitHub Actions:
+ Profile summary:
+ 
+ - `Server`: headless/services-oriented, `HZ=250`, `PREEMPT_VOLUNTARY`, performance governor, and container/netfilter stack kept enabled.
+-- `General`: desktop/gaming-oriented, `HZ=250`, full `PREEMPT`, BORE enabled, schedutil/reflex path, cgroup and namespace support enabled, `DMI`/`fw_cfg` sysfs enabled, and netfilter stack stripped.
++- `General`: desktop/gaming-oriented, `HZ=250`, full `PREEMPT`, schedutil/reflex path, cgroup and namespace support enabled, `DMI`/`fw_cfg` sysfs enabled, and netfilter stack stripped.
+ 
+ Local build:
+ 
+diff --git a/build.sh b/build.sh
+index 3a58bbb9e0eed9b56ce9c9f15170b3050cd0a207..503386f4b4da661e640d8c41fd1c5593c56e8ca7 100755
+--- a/build.sh
++++ b/build.sh
+@@ -3,7 +3,7 @@
+ # PS4-Linux Strawberry Builder
+ # Supports two PS4-focused build profiles, two LTO flavors, and an optional Baikal southbridge target:
+ #   server  — headless/services, HZ=250, PREEMPT_VOLUNTARY, performance governor
+-#   general — desktop/gaming, HZ=250, PREEMPT=y, BORE, schedutil/reflex
++#   general — desktop/gaming, HZ=250, PREEMPT=y, schedutil/reflex
+ #   ThinLTO / FullLTO selectable via lto=ThinLTO or lto=FullLTO
+ #   southbridge=AeoliaBelize or southbridge=Baikal
+ #
+@@ -600,7 +600,6 @@ if [[ "$DO_BUILD" == "1" ]]; then
+     if [[ "$PROFILE" == "server" ]]; then
+         echo -e "\e[1;34m[*]\e[0m Applying server profile..."
+ 
+-        scripts/config --disable CONFIG_SCHED_BORE
+         scripts/config --disable CONFIG_SCHED_AUTOGROUP
+         scripts/config --disable CONFIG_CPU_FREQ_GOV_REFLEX
+ 
+@@ -661,8 +660,6 @@ if [[ "$DO_BUILD" == "1" ]]; then
+         scripts/config --enable  CONFIG_DMI_SYSFS
+         scripts/config --enable  CONFIG_FW_CFG_SYSFS
+ 
+-        scripts/config --enable  CONFIG_SCHED_BORE
+-        scripts/config --set-val CONFIG_MIN_BASE_SLICE_NS 2000000
+ 
+         scripts/config --enable  CONFIG_CPU_FREQ_GOV_REFLEX
+         scripts/config --enable  CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL
+diff --git a/config b/config
+index a366d049790194d66cad00c97f74eb95b29df188..9ceac958c1759a0e68d5558575f2e9d004649465 100644
+--- a/config
++++ b/config
+@@ -452,7 +452,6 @@ CONFIG_HZ_250=y
+ # CONFIG_HZ_1000 is not set
+ CONFIG_HZ=250
+ CONFIG_SCHED_HRTICK=y
+-CONFIG_MIN_BASE_SLICE_NS=2000000
+ CONFIG_ARCH_SUPPORTS_KEXEC=y
+ CONFIG_ARCH_SUPPORTS_KEXEC_FILE=y
+ CONFIG_ARCH_SELECTS_KEXEC_FILE=y
+diff --git a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+index 5b2648b3c185cf74de59cae99255cbb14e86ed19..f92b7f6def40798421cb0f9e5ae65e7fcff8d734 100644
+--- a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
++++ b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+@@ -1138,7 +1138,7 @@ int ps4_bridge_get_modes(struct drm_connector *connector)
+ 
+ 	DRM_DEBUG_KMS("ps4_bridge_get_modes\n");
+ 
+-	kfree(amdgpu_connector->edid);
++	drm_edid_free(amdgpu_connector->edid);
+ 	amdgpu_connector->edid = NULL;
+ 	drm_connector_update_edid_property(connector, NULL);
+ 
+@@ -1225,7 +1225,7 @@ int ps4_bridge_get_modes(struct drm_connector *connector)
+ edid_ready:
+ 	if (drm_edid) {
+ 		raw_edid = drm_edid_raw(drm_edid);
+-		amdgpu_connector->edid = drm_edid_duplicate(raw_edid);
++		amdgpu_connector->edid = drm_edid_dup(drm_edid);
+ 		drm_edid_connector_update(connector, drm_edid);
+ 		count = drm_edid_connector_add_modes(connector);
+ 		DRM_DEBUG_KMS("ps4_bridge_get_modes: EDID ok, %d modes, extensions=%u\n",
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_cfg80211.c b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_cfg80211.c
+index 65217e97ffc75781c38fdfdc53aa333fd27a1330..32c0203ece2086e299aea2302093f4578b62ae77 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_cfg80211.c
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_cfg80211.c
+@@ -60,7 +60,6 @@
+ *    Wireless LAN Adapters.
+ */
+ 
+-
+ /*******************************************************************************
+ *                         C O M P I L E R   F L A G S
+ ********************************************************************************
+@@ -196,10 +195,17 @@ mtk_cfg80211_change_iface(struct wiphy *wiphy,
+ 
+ /* TODO: link_id 's in this file were added only after Linux 6.0.
+  * Add #if preprocessor directives here. See os/linux/gl_cfg80211.c ; */
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++int
++mtk_cfg80211_add_key(struct wiphy *wiphy,
++		     struct wireless_dev *wdev, int link_id,
++		     u8 key_index, bool pairwise, const u8 *mac_addr, struct key_params *params)
++#else
+ int
+ mtk_cfg80211_add_key(struct wiphy *wiphy,
+ 		     struct net_device *ndev, int link_id,
+ 		     u8 key_index, bool pairwise, const u8 *mac_addr, struct key_params *params)
++#endif
+ {
+ 	PARAM_KEY_T rKey;
+ 	P_GLUE_INFO_T prGlueInfo = NULL;
+@@ -354,6 +360,15 @@ mtk_cfg80211_add_key(struct wiphy *wiphy,
+  *         others:  failure
+  */
+ /*----------------------------------------------------------------------------*/
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++int
++mtk_cfg80211_get_key(struct wiphy *wiphy,
++		     struct wireless_dev *wdev, int link_id,
++		     u8 key_index,
++		     bool pairwise,
++		     const u8 *mac_addr, void *cookie, void (*callback) (void *cookie, struct key_params *)
++)
++#else
+ int
+ mtk_cfg80211_get_key(struct wiphy *wiphy,
+ 		     struct net_device *ndev, int link_id,
+@@ -361,6 +376,7 @@ mtk_cfg80211_get_key(struct wiphy *wiphy,
+ 		     bool pairwise,
+ 		     const u8 *mac_addr, void *cookie, void (*callback) (void *cookie, struct key_params *)
+ )
++#endif
+ {
+ 	P_GLUE_INFO_T prGlueInfo = NULL;
+ 
+@@ -386,7 +402,11 @@ mtk_cfg80211_get_key(struct wiphy *wiphy,
+  *         others:  failure
+  */
+ /*----------------------------------------------------------------------------*/
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++int mtk_cfg80211_del_key(struct wiphy *wiphy, struct wireless_dev *wdev, int link_id, u8 key_index, bool pairwise, const u8 *mac_addr)
++#else
+ int mtk_cfg80211_del_key(struct wiphy *wiphy, struct net_device *ndev, int link_id, u8 key_index, bool pairwise, const u8 *mac_addr)
++#endif
+ {
+ 	P_GLUE_INFO_T prGlueInfo = NULL;
+ 	WLAN_STATUS rStatus = WLAN_STATUS_SUCCESS;
+@@ -495,7 +515,100 @@ mtk_cfg80211_set_default_key(struct wiphy *wiphy, struct net_device *ndev, int l
+  *         others:  failure
+  */
+ /*----------------------------------------------------------------------------*/
+-#if KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++int mtk_cfg80211_get_station(struct wiphy *wiphy, struct wireless_dev *wdev, const u8 *mac, struct station_info *sinfo)
++{
++	struct net_device *ndev = wdev->netdev;
++	P_GLUE_INFO_T prGlueInfo = NULL;
++	WLAN_STATUS rStatus;
++	PARAM_MAC_ADDRESS arBssid;
++	UINT_32 u4BufLen, u4Rate;
++	INT_32 i4Rssi;
++	PARAM_GET_STA_STA_STATISTICS rQueryStaStatistics;
++	UINT_32 u4TotalError;
++	struct net_device_stats *prDevStats;
++
++	prGlueInfo = (P_GLUE_INFO_T) wiphy_priv(wiphy);
++	ASSERT(prGlueInfo);
++
++	kalMemZero(arBssid, MAC_ADDR_LEN);
++	wlanQueryInformation(prGlueInfo->prAdapter, wlanoidQueryBssid, &arBssid[0], sizeof(arBssid), &u4BufLen);
++
++	if (UNEQUAL_MAC_ADDR(arBssid, mac) && UNEQUAL_MAC_ADDR(prGlueInfo->prAdapter->rWifiVar.aucMacAddress, mac)) {
++		DBGLOG(REQ, WARN,
++			"incorrect BSSID: [" MACSTR "] currently connected BSSID[" MACSTR "]\n",
++			MAC2STR(mac), MAC2STR(arBssid));
++		return -ENOENT;
++	}
++
++	if (prGlueInfo->eParamMediaStateIndicated != PARAM_MEDIA_STATE_CONNECTED) {
++		DBGLOG(REQ, WARN, "not yet connected\n");
++	} else {
++		rStatus = kalIoctl(prGlueInfo,
++				   wlanoidQueryLinkSpeed, &u4Rate, sizeof(u4Rate), TRUE, FALSE, FALSE, &u4BufLen);
++
++		sinfo->filled |= BIT(NL80211_STA_INFO_TX_BITRATE);
++		if ((rStatus != WLAN_STATUS_SUCCESS) || (u4Rate == 0)) {
++			DBGLOG(REQ, WARN, "last link speed\n");
++			sinfo->txrate.legacy = prGlueInfo->u4LinkSpeedCache;
++		} else {
++			sinfo->txrate.legacy = u4Rate / 1000;
++			prGlueInfo->u4LinkSpeedCache = u4Rate / 1000;
++		}
++	}
++
++	if (prGlueInfo->eParamMediaStateIndicated != PARAM_MEDIA_STATE_CONNECTED) {
++		DBGLOG(REQ, WARN, "not yet connected\n");
++	} else {
++		rStatus = kalIoctl(prGlueInfo,
++				   wlanoidQueryRssi, &i4Rssi, sizeof(i4Rssi), TRUE, FALSE, FALSE, &u4BufLen);
++
++		sinfo->filled |= BIT(NL80211_STA_INFO_SIGNAL);
++
++		if ((rStatus != WLAN_STATUS_SUCCESS) || (i4Rssi == PARAM_WHQL_RSSI_MIN_DBM)
++		    || (i4Rssi == PARAM_WHQL_RSSI_MAX_DBM)) {
++			DBGLOG(REQ, WARN, "last rssi\n");
++			sinfo->signal = prGlueInfo->i4RssiCache;
++		} else {
++			sinfo->signal = i4Rssi;
++			prGlueInfo->i4RssiCache = i4Rssi;
++		}
++	}
++
++	prDevStats = (struct net_device_stats *)kalGetStats(ndev);
++
++	if (prDevStats) {
++		sinfo->filled |= BIT(NL80211_STA_INFO_RX_PACKETS);
++		sinfo->rx_packets = prDevStats->rx_packets;
++
++		sinfo->filled |= BIT(NL80211_STA_INFO_TX_PACKETS);
++		sinfo->tx_packets = prDevStats->tx_packets;
++
++		kalMemZero(&rQueryStaStatistics, sizeof(rQueryStaStatistics));
++		COPY_MAC_ADDR(rQueryStaStatistics.aucMacAddr, arBssid);
++		rQueryStaStatistics.ucReadClear = TRUE;
++
++		rStatus = kalIoctl(prGlueInfo,
++				   wlanoidQueryStaStatistics,
++				   &rQueryStaStatistics, sizeof(rQueryStaStatistics), TRUE, FALSE, TRUE, &u4BufLen);
++
++		if (rStatus != WLAN_STATUS_SUCCESS) {
++			DBGLOG(REQ, WARN, "unable to retrieve link speed,status code = %d\n", rStatus);
++		} else {
++			DBGLOG(REQ, INFO, "BSSID: [" MACSTR "] TxFailCount %d LifeTimeOut %d\n",
++				MAC2STR(arBssid), rQueryStaStatistics.u4TxFailCount,
++				rQueryStaStatistics.u4TxLifeTimeoutCount);
++
++			u4TotalError = rQueryStaStatistics.u4TxFailCount + rQueryStaStatistics.u4TxLifeTimeoutCount;
++			prDevStats->tx_errors += u4TotalError;
++		}
++		sinfo->filled |= BIT(NL80211_STA_INFO_TX_FAILED);
++		sinfo->tx_failed = prDevStats->tx_errors;
++	}
++
++	return 0;
++}
++#elif KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
+ int mtk_cfg80211_get_station(struct wiphy *wiphy, struct net_device *ndev, const u8 *mac, struct station_info *sinfo)
+ {
+ 	P_GLUE_INFO_T prGlueInfo = NULL;
+@@ -953,7 +1066,6 @@ int mtk_cfg80211_connect(struct wiphy *wiphy, struct net_device *ndev, struct cf
+ 	struct SEC_DETECT_REPLAY_INFO *prDetRplyInfo = NULL;
+ #endif
+ 
+-
+ 	prGlueInfo = (P_GLUE_INFO_T) wiphy_priv(wiphy);
+ 	ASSERT(prGlueInfo);
+ 
+@@ -988,7 +1100,6 @@ int mtk_cfg80211_connect(struct wiphy *wiphy, struct net_device *ndev, struct cf
+ 	kalMemZero(prDetRplyInfo, sizeof(struct SEC_DETECT_REPLAY_INFO));
+ #endif
+ 
+-
+ #if CFG_SUPPORT_802_11W
+ 	prGlueInfo->rWpaInfo.u4Mfp = IW_AUTH_MFP_DISABLED;
+ 	switch (sme->mfp) {
+@@ -1621,7 +1732,6 @@ int mtk_cfg80211_set_rekey_data(struct wiphy *wiphy, struct net_device *dev, str
+ 	DBGLOG(RSN, INFO, "replay count\n");
+ 	DBGLOG_MEM8(PF, ERROR, (PUINT_8)data->replay_ctr, NL80211_REPLAY_CTR_LEN);
+ 
+-
+ #if 0
+ 	kalMemCopy(prGtkData, data, sizeof(*data));
+ #else
+@@ -2731,7 +2841,89 @@ nla_put_failure:
+  *         others:  failure
+  */
+ /*----------------------------------------------------------------------------*/
+-#if KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++int
++mtk_cfg80211_change_station(struct wiphy *wiphy, struct wireless_dev *wdev, const u8 *mac,
++			    struct station_parameters *params)
++{
++
++	P_GLUE_INFO_T prGlueInfo = NULL;
++	CMD_PEER_UPDATE_T rCmdUpdate;
++	WLAN_STATUS rStatus;
++	UINT_32 u4BufLen, u4Temp;
++	ADAPTER_T *prAdapter;
++	P_BSS_INFO_T prAisBssInfo;
++
++	prGlueInfo = (P_GLUE_INFO_T) wiphy_priv(wiphy);
++	ASSERT(prGlueInfo);
++
++	prAdapter = prGlueInfo->prAdapter;
++	prAisBssInfo = prAdapter->prAisBssInfo;
++
++	if (params == NULL)
++		return 0;
++	else if (params->link_sta_params.supported_rates == NULL)
++		return 0;
++
++	kalMemZero(&rCmdUpdate, sizeof(rCmdUpdate));
++	kalMemCopy(rCmdUpdate.aucPeerMac, mac, 6);
++
++	if (params->link_sta_params.supported_rates != NULL) {
++		u4Temp = params->link_sta_params.supported_rates_len;
++		if (u4Temp > CMD_PEER_UPDATE_SUP_RATE_MAX)
++			u4Temp = CMD_PEER_UPDATE_SUP_RATE_MAX;
++		kalMemCopy(rCmdUpdate.aucSupRate, params->link_sta_params.supported_rates, u4Temp);
++		rCmdUpdate.u2SupRateLen = u4Temp;
++	}
++
++	rCmdUpdate.UapsdBitmap = 0x0F;
++	rCmdUpdate.UapsdMaxSp = 0;
++
++	rCmdUpdate.u2Capability = params->capability;
++
++	if (params->ext_capab != NULL) {
++
++		u4Temp = params->ext_capab_len;
++		if (u4Temp > CMD_PEER_UPDATE_EXT_CAP_MAXLEN)
++			u4Temp = CMD_PEER_UPDATE_EXT_CAP_MAXLEN;
++		kalMemCopy(rCmdUpdate.aucExtCap, params->ext_capab, u4Temp);
++		rCmdUpdate.u2ExtCapLen = u4Temp;
++	}
++
++	if (params->link_sta_params.ht_capa != NULL) {
++		rCmdUpdate.rHtCap.u2CapInfo = params->link_sta_params.ht_capa->cap_info;
++		rCmdUpdate.rHtCap.ucAmpduParamsInfo = params->link_sta_params.ht_capa->ampdu_params_info;
++		rCmdUpdate.rHtCap.u2ExtHtCapInfo = params->link_sta_params.ht_capa->extended_ht_cap_info;
++		rCmdUpdate.rHtCap.u4TxBfCapInfo = params->link_sta_params.ht_capa->tx_BF_cap_info;
++		rCmdUpdate.rHtCap.ucAntennaSelInfo = params->link_sta_params.ht_capa->antenna_selection_info;
++		kalMemCopy(rCmdUpdate.rHtCap.rMCS.arRxMask,
++			   params->link_sta_params.ht_capa->mcs.rx_mask, sizeof(rCmdUpdate.rHtCap.rMCS.arRxMask));
++
++		rCmdUpdate.rHtCap.rMCS.u2RxHighest = params->link_sta_params.ht_capa->mcs.rx_highest;
++		rCmdUpdate.rHtCap.rMCS.ucTxParams = params->link_sta_params.ht_capa->mcs.tx_params;
++		rCmdUpdate.fgIsSupHt = TRUE;
++	}
++	if (params->link_sta_params.vht_capa != NULL) {
++	}
++
++	if ((params->sta_flags_set & BIT(NL80211_STA_FLAG_TDLS_PEER)))
++		rCmdUpdate.eStaType = STA_TYPE_DLS_PEER;
++	rStatus = kalIoctl(prGlueInfo, cnmPeerUpdate, &rCmdUpdate, sizeof(CMD_PEER_UPDATE_T), FALSE, FALSE, FALSE,
++			   &u4BufLen);
++
++	if (rStatus != WLAN_STATUS_SUCCESS)
++		return -EINVAL;
++	if (prAisBssInfo->fgTdlsIsChSwProhibited) {
++
++		rStatus = kalIoctl(prGlueInfo,
++				   TdlsSendChSwControlCmd,
++				   &TdlsSendChSwControlCmd, sizeof(CMD_TDLS_CH_SW_T), FALSE, FALSE, FALSE,
++				   &u4BufLen);
++	}
++
++	return 0;
++}
++#elif KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
+ int
+ mtk_cfg80211_change_station(struct wiphy *wiphy, struct net_device *ndev, const u8 *mac,
+ 			    struct station_parameters *params)
+@@ -2993,7 +3185,37 @@ mtk_cfg80211_change_station(struct wiphy *wiphy, struct net_device *ndev, u8 *ma
+  *         others:  failure
+  */
+ /*----------------------------------------------------------------------------*/
+-#if KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++int mtk_cfg80211_add_station(struct wiphy *wiphy, struct wireless_dev *wdev,
++			     const u8 *mac, struct station_parameters *params)
++{
++
++	P_GLUE_INFO_T prGlueInfo = NULL;
++	CMD_PEER_ADD_T rCmdCreate;
++	ADAPTER_T *prAdapter;
++	WLAN_STATUS rStatus;
++	UINT_32 u4BufLen;
++
++	prGlueInfo = (P_GLUE_INFO_T) wiphy_priv(wiphy);
++	ASSERT(prGlueInfo);
++
++	prAdapter = prGlueInfo->prAdapter;
++
++	kalMemZero(&rCmdCreate, sizeof(rCmdCreate));
++	kalMemCopy(rCmdCreate.aucPeerMac, mac, 6);
++
++	if ((params->sta_flags_set & BIT(NL80211_STA_FLAG_TDLS_PEER))) {
++		rCmdCreate.eStaType = STA_TYPE_DLS_PEER;
++		rStatus = kalIoctl(prGlueInfo, cnmPeerAdd, &rCmdCreate, sizeof(CMD_PEER_ADD_T), FALSE, FALSE, FALSE,
++				   &u4BufLen);
++
++		if (rStatus != WLAN_STATUS_SUCCESS)
++			return -EINVAL;
++	}
++
++	return 0;
++}
++#elif KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
+ int mtk_cfg80211_add_station(struct wiphy *wiphy, struct net_device *ndev,
+ 			     const u8 *mac, struct station_parameters *params)
+ {
+@@ -3081,7 +3303,33 @@ int mtk_cfg80211_add_station(struct wiphy *wiphy, struct net_device *ndev, u8 *m
+  */
+ /*----------------------------------------------------------------------------*/
+ #if KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
+-#if KERNEL_VERSION(3, 19, 0) <= CFG80211_VERSION_CODE
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++static const u8 bcast_addr[ETH_ALEN] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
++int mtk_cfg80211_del_station(struct wiphy *wiphy, struct wireless_dev *wdev, struct station_del_parameters *params)
++{
++
++	const u8 *mac = params->mac ? params->mac : bcast_addr;
++	P_GLUE_INFO_T prGlueInfo = NULL;
++	ADAPTER_T *prAdapter;
++	STA_RECORD_T *prStaRec;
++	u8 deleteMac[MAC_ADDR_LEN];
++
++	prGlueInfo = (P_GLUE_INFO_T) wiphy_priv(wiphy);
++	ASSERT(prGlueInfo);
++
++	prAdapter = prGlueInfo->prAdapter;
++
++	memset(deleteMac, 0, MAC_ADDR_LEN);
++	memcpy(deleteMac, mac, MAC_ADDR_LEN);
++
++	prStaRec = cnmGetStaRecByAddress(prAdapter, (UINT_8) prAdapter->prAisBssInfo->ucBssIndex, deleteMac);
++
++	if (prStaRec != NULL)
++		cnmStaRecFree(prAdapter, prStaRec);
++
++	return 0;
++}
++#elif KERNEL_VERSION(3, 19, 0) <= CFG80211_VERSION_CODE
+ static const u8 bcast_addr[ETH_ALEN] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+ int mtk_cfg80211_del_station(struct wiphy *wiphy, struct net_device *ndev, struct station_del_parameters *params)
+ {
+@@ -3378,7 +3626,6 @@ bool is_world_regdom(char *alpha2)
+  * MT6632/wlan/os/linux/gl_cfg80211.o:gl_cfg80211.c:(.text+0x2ab0):
+  * first defined here*/
+ 
+-
+ static enum regd_state regd_state_machine(IN struct regulatory_request *pRequest)
+ {
+ 	switch (pRequest->initiator) {
+@@ -3407,7 +3654,6 @@ static enum regd_state regd_state_machine(IN struct regulatory_request *pRequest
+ 	}
+ }
+ 
+-
+ static void
+ mtk_apply_custom_regulatory(IN struct wiphy *pWiphy,
+ 							IN const struct ieee80211_regdomain *pRegdom)
+@@ -3446,7 +3692,6 @@ mtk_reg_notify(IN struct wiphy *pWiphy,
+ 	u8 send_cmd_request = 0;
+ 	enum regd_state old_state;
+ 
+-
+ 	if (!pWiphy) {
+ 		DBGLOG(RLM, ERROR, "%s(): pWiphy = NULL.\n", __func__);
+ 		return;
+@@ -3488,7 +3733,6 @@ mtk_reg_notify(IN struct wiphy *pWiphy,
+ 		}
+ 	}
+ 
+-
+ 	/*
+ 	 * Ignore the CORE's WW setting when using local data base of regulatory rules
+ 	 */
+@@ -3500,7 +3744,6 @@ mtk_reg_notify(IN struct wiphy *pWiphy,
+ #endif
+ 		return;/*Ignore the CORE's WW setting*/
+ 
+-
+ 	/*
+ 	 * State machine transition
+ 	 */
+@@ -3581,11 +3824,9 @@ DOMAIN_SEND_CMD:
+ 			return;
+ 		}
+ 
+-
+ 		mtk_apply_custom_regulatory(pWiphy, pRegdom);
+ 	}
+ 
+-
+ 	/*
+ 	 * Parsing channels
+ 	 */
+@@ -3594,7 +3835,6 @@ DOMAIN_SEND_CMD:
+ 	else
+ 		rlmDomainParsingChannel(pWiphy);/*real regd update*/
+ 
+-
+ 	/*
+ 	 * Always use the wlan GlueInfo as parameter,
+ 	 * because P2P stores it as a different way
+@@ -3614,14 +3854,12 @@ DOMAIN_SEND_CMD:
+ 	if (!prAdapter)
+ 		return; /*interface is not up yet.*/
+ 
+-
+ 	/*
+ 	 * Check if firmawre support single sku
+ 	 */
+ 	if (!regd_is_single_sku_en())
+ 		return; /*no need to send information to firmware due to firmware is not supported*/
+ 
+-
+ 	/*
+ 	 * Send commands to firmware
+ 	 */
+@@ -3637,7 +3875,6 @@ cfg80211_regd_set_wiphy(IN struct wiphy *prWiphy)
+ 	 */
+ 	prWiphy->reg_notifier = mtk_reg_notify;
+ 
+-
+ 	/*
+ 	 * clear REGULATORY_CUSTOM_REG flag
+ 	 */
+@@ -3651,7 +3888,6 @@ cfg80211_regd_set_wiphy(IN struct wiphy *prWiphy)
+ 	prWiphy->regulatory_flags |= REGULATORY_COUNTRY_IE_IGNORE;
+ #endif
+ 
+-
+ 	/*
+ 	 * set REGULATORY_CUSTOM_REG flag
+ 	 */
+@@ -3667,7 +3903,6 @@ cfg80211_regd_set_wiphy(IN struct wiphy *prWiphy)
+ 		wiphy_apply_custom_regulatory(prWiphy, rlmDomainGetLocalDefaultRegd());
+ #endif
+ 
+-
+ 	/*
+ 	 * Initialize regd control information
+ 	 */
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p.c b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p.c
+index c1ef7b8194bd7d49c9ac45272811dc604d7b510e..ccfc25e78524beb856a3b8ffb7bb2e0df5bd8b63 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p.c
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p.c
+@@ -60,6 +60,7 @@
+ *    Wireless LAN Adapters.
+ */
+ 
++
+ /*******************************************************************************
+ *                         C O M P I L E R   F L A G S
+ ********************************************************************************
+@@ -74,6 +75,7 @@
+ 
+ #include <linux/kmod.h>
+ 
++
+ #include "gl_os.h"
+ #include "debug.h"
+ #include "wlan_lib.h"
+@@ -113,6 +115,7 @@
+ ********************************************************************************
+ */
+ 
++
+ /*******************************************************************************
+ *                           P R I V A T E   D A T A
+ ********************************************************************************
+@@ -258,6 +261,7 @@ mtk_cfg80211_default_mgmt_stypes[NUM_NL80211_IFTYPES] = {
+ 
+ #endif
+ 
++
+ static const struct iw_priv_args rP2PIwPrivTable[] = {
+ #if 0
+ 	{
+@@ -419,6 +423,7 @@ mtk_iface_combinations_p2p[] = {
+ #endif
+ };
+ 
++
+ const struct ieee80211_iface_combination *p_mtk_iface_combinations_sta = mtk_iface_combinations_sta;
+ const INT_32 mtk_iface_combinations_sta_num = ARRAY_SIZE(mtk_iface_combinations_sta);
+ 
+@@ -450,6 +455,7 @@ static int p2pSetMACAddress(IN struct net_device *prDev, void *addr);
+ 
+ static int p2pDoIOCTL(struct net_device *prDev, struct ifreq *prIFReq, int i4Cmd);
+ 
++
+ /*----------------------------------------------------------------------------*/
+ /*!
+ * \brief A function for prDev->init
+@@ -581,6 +587,8 @@ static BOOLEAN p2PAllocInfo(IN P_GLUE_INFO_T prGlueInfo, IN UINT_8 ucIdex)
+ 	else
+ 		DBGLOG(P2P, INFO, "prP2PInfo ok\n");
+ 
++
++
+ 	/* chk if alloc successful or not */
+ 	if (prGlueInfo->prP2PInfo[ucIdex] && prGlueInfo->prP2PDevInfo && prAdapter->prP2pInfo &&
+ 		prWifiVar->prP2PConnSettings[ucIdex] &&
+@@ -588,6 +596,7 @@ static BOOLEAN p2PAllocInfo(IN P_GLUE_INFO_T prGlueInfo, IN UINT_8 ucIdex)
+ 	    prWifiVar->prP2pSpecificBssInfo[ucIdex])
+ 		return TRUE;
+ 
++
+ 	DBGLOG(P2P, ERROR, "[fail!]p2PAllocInfo :fail\n");
+ 
+ 	if (prWifiVar->prP2pSpecificBssInfo[ucIdex]) {
+@@ -690,6 +699,8 @@ BOOLEAN p2PFreeInfo(P_GLUE_INFO_T prGlueInfo)
+ 
+ }
+ 
++
++
+ BOOLEAN p2pNetRegister(P_GLUE_INFO_T prGlueInfo, BOOLEAN fgIsRtnlLockAcquired)
+ {
+ 	BOOLEAN fgDoRegister = FALSE;
+@@ -751,6 +762,7 @@ BOOLEAN p2pNetRegister(P_GLUE_INFO_T prGlueInfo, BOOLEAN fgIsRtnlLockAcquired)
+ 			ret = TRUE;
+ 		}
+ 
++
+ 		DBGLOG(P2P, INFO, "P2P 2nd interface work\n");
+ 	}
+ 	if (fgRollbackRtnlLock)
+@@ -915,6 +927,9 @@ BOOLEAN glRegisterP2P(P_GLUE_INFO_T prGlueInfo, const char *prDevName, const cha
+ 		if (!prGlueInfo->prAdapter->fgEnable5GBand)
+ 			prP2pWdev->wiphy->bands[BAND_5G] = NULL;
+ 
++
++
++
+ 		/* 2.2 wdev initialization */
+ 		if (fgIsApMode)
+ 			prP2pWdev->iftype = NL80211_IFTYPE_AP;
+@@ -923,6 +938,7 @@ BOOLEAN glRegisterP2P(P_GLUE_INFO_T prGlueInfo, const char *prDevName, const cha
+ 
+ #endif /* CFG_ENABLE_WIFI_DIRECT_CFG_80211 */
+ 
++
+ 		/* 3. allocate netdev */
+ #if KERNEL_VERSION(3, 17, 0) <= CFG80211_VERSION_CODE
+ 		prGlueInfo->prP2PInfo[i]->prDevHandler =
+@@ -986,6 +1002,7 @@ BOOLEAN glRegisterP2P(P_GLUE_INFO_T prGlueInfo, const char *prDevName, const cha
+ 
+ 		kalResetStats(prGlueInfo->prP2PInfo[i]->prDevHandler);
+ 
++
+ #if 0
+ 		/* 7. net device initialize */
+ 		netif_carrier_off(prGlueInfo->prP2PInfo->prDevHandler);
+@@ -1012,6 +1029,7 @@ BOOLEAN glRegisterP2P(P_GLUE_INFO_T prGlueInfo, const char *prDevName, const cha
+ 
+ 		prGlueInfo->prP2PInfo[i]->aprRoleHandler = prGlueInfo->prP2PInfo[i]->prDevHandler;
+ 
++
+ 		DBGLOG(P2P, INFO, "check prDevHandler = %p\n", prGlueInfo->prP2PInfo[i]->prDevHandler);
+ 		DBGLOG(P2P, INFO, "aprRoleHandler = %p\n", prGlueInfo->prP2PInfo[i]->aprRoleHandler);
+ 
+@@ -1040,6 +1058,7 @@ BOOLEAN glRegisterP2P(P_GLUE_INFO_T prGlueInfo, const char *prDevName, const cha
+ 	else
+ 		prGlueInfo->prAdapter->prP2pInfo->u4DeviceNum = 1;
+ 
++
+ 	return TRUE;
+ #if 0
+ err_reg_netdev:
+@@ -1049,6 +1068,7 @@ err_alloc_netdev:
+ 	return FALSE;
+ }				/* end of glRegisterP2P() */
+ 
++
+ BOOLEAN glP2pCreateWirelessDevice(P_GLUE_INFO_T prGlueInfo)
+ {
+ 	struct wiphy *prWiphy = NULL;
+@@ -1782,6 +1802,7 @@ int p2pDoIOCTL(struct net_device *prDev, struct ifreq *prIfReq, int i4Cmd)
+ 	return ret;
+ }				/* end of p2pDoIOCTL() */
+ 
++
+ /*----------------------------------------------------------------------------*/
+ /*!
+  * \brief To override p2p interface address
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p_cfg80211.c b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p_cfg80211.c
+index c05d544386fca9726ab9324932c1c8e6bbb57577..b73c8824fb3a500b04d0869f07d928b6aca158d0 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p_cfg80211.c
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p_cfg80211.c
+@@ -623,7 +623,11 @@ int mtk_p2p_cfg80211_del_iface(struct wiphy *wiphy, struct wireless_dev *wdev)
+ 
+ /* link_id was introduced to nl80211 ops in Linux 6.0, changing many functions prototypes:
+  * https://github.com/torvalds/linux/commit/7b0a0e3c3a88260b6fcb017e49f198463aa62ed1 */
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0))
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++int mtk_p2p_cfg80211_add_key(struct wiphy *wiphy,
++			     struct wireless_dev *wdev, int link_id,
++			     u8 key_index, bool pairwise, const u8 *mac_addr, struct key_params *params)
++#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0))
+ int mtk_p2p_cfg80211_add_key(struct wiphy *wiphy,
+ 			     struct net_device *ndev, int link_id,
+ 			     u8 key_index, bool pairwise, const u8 *mac_addr, struct key_params *params)
+@@ -633,6 +637,9 @@ int mtk_p2p_cfg80211_add_key(struct wiphy *wiphy,
+ 			     u8 key_index, bool pairwise, const u8 *mac_addr, struct key_params *params)
+ #endif
+ {
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++	struct net_device *ndev = wdev->netdev;
++#endif
+ 	P_GLUE_INFO_T prGlueInfo = NULL;
+ 	INT_32 i4Rslt = -EINVAL;
+ 	WLAN_STATUS rStatus = WLAN_STATUS_SUCCESS;
+@@ -773,7 +780,15 @@ int mtk_p2p_cfg80211_add_key(struct wiphy *wiphy,
+ }
+ 
+ /* see note above about link id introduction */
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0))
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++int mtk_p2p_cfg80211_get_key(struct wiphy *wiphy,
++			     struct wireless_dev *wdev,
++			     int link_id,
++			     u8 key_index,
++			     bool pairwise,
++			     const u8 *mac_addr, void *cookie, void (*callback) (void *cookie, struct key_params *)
++)
++#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0))
+ int mtk_p2p_cfg80211_get_key(struct wiphy *wiphy,
+ 			     struct net_device *ndev,
+ 			     int link_id,
+@@ -802,7 +817,10 @@ int mtk_p2p_cfg80211_get_key(struct wiphy *wiphy,
+ }
+ 
+ /* see note above about link id introduction */
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0))
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++int mtk_p2p_cfg80211_del_key(struct wiphy *wiphy,
++			     struct wireless_dev *wdev, int link_id, u8 key_index, bool pairwise, const u8 *mac_addr)
++#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0))
+ int mtk_p2p_cfg80211_del_key(struct wiphy *wiphy,
+ 			     struct net_device *ndev, int link_id, u8 key_index, bool pairwise, const u8 *mac_addr)
+ #else
+@@ -810,6 +828,9 @@ int mtk_p2p_cfg80211_del_key(struct wiphy *wiphy,
+ 			     struct net_device *ndev, u8 key_index, bool pairwise, const u8 *mac_addr)
+ #endif
+ {
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++	struct net_device *ndev = wdev->netdev;
++#endif
+ 	P_GLUE_INFO_T prGlueInfo = NULL;
+ 	PARAM_REMOVE_KEY_T rRemoveKey;
+ 	INT_32 i4Rslt = -EINVAL;
+@@ -924,7 +945,9 @@ mtk_p2p_cfg80211_set_default_key(struct wiphy *wiphy,
+ /*----------------------------------------------------------------------------*/
+ 
+ /* see note above about link id introduction */
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0))
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++int mtk_p2p_cfg80211_set_mgmt_key(struct wiphy *wiphy, struct wireless_dev *wdev, int link_id, u8 key_index)
++#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0))
+ int mtk_p2p_cfg80211_set_mgmt_key(struct wiphy *wiphy, struct net_device *dev, int link_id, u8 key_index)
+ #else
+ int mtk_p2p_cfg80211_set_mgmt_key(struct wiphy *wiphy, struct net_device *dev, u8 key_index)
+@@ -935,7 +958,49 @@ int mtk_p2p_cfg80211_set_mgmt_key(struct wiphy *wiphy, struct net_device *dev, u
+ 	return 0;
+ }
+ 
+-#if KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++int mtk_p2p_cfg80211_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
++		const u8 *mac, struct station_info *sinfo)
++{
++	struct net_device *ndev = wdev ? wdev->netdev : NULL;
++	INT_32 i4RetRslt = -EINVAL;
++	UINT_8 ucRoleIdx = 0;
++	P_GLUE_INFO_T prGlueInfo = (P_GLUE_INFO_T) NULL;
++	P_GL_P2P_INFO_T prP2pGlueInfo = (P_GL_P2P_INFO_T) NULL;
++	P2P_STATION_INFO_T rP2pStaInfo;
++
++	ASSERT(wiphy);
++
++	do {
++		if ((wiphy == NULL) || (ndev == NULL) || (sinfo == NULL) || (mac == NULL))
++			break;
++
++		DBGLOG(P2P, TRACE, "mtk_p2p_cfg80211_get_station\n");
++
++		prGlueInfo = *((P_GLUE_INFO_T *) wiphy_priv(wiphy));
++
++		if (mtk_Netdev_To_RoleIdx(prGlueInfo, ndev, &ucRoleIdx) != 0)
++			return -EINVAL;
++
++		prP2pGlueInfo = prGlueInfo->prP2PInfo[ucRoleIdx];
++
++		sinfo->filled = 0;
++
++		p2pFuncGetStationInfo(prGlueInfo->prAdapter, (PUINT_8)mac, &rP2pStaInfo);
++#if KERNEL_VERSION(4, 0, 0) <= CFG80211_VERSION_CODE
++		sinfo->filled |= BIT(NL80211_STA_INFO_INACTIVE_TIME);
++#else
++		sinfo->filled |= STATION_INFO_INACTIVE_TIME;
++#endif
++		sinfo->inactive_time = rP2pStaInfo.u4InactiveTime;
++		sinfo->generation = prP2pGlueInfo->i4Generation;
++
++		i4RetRslt = 0;
++	} while (FALSE);
++
++	return i4RetRslt;
++}
++#elif KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
+ int mtk_p2p_cfg80211_get_station(struct wiphy *wiphy, struct net_device *ndev,
+ 		const u8 *mac, struct station_info *sinfo)
+ {
+@@ -2404,7 +2469,57 @@ int mtk_p2p_cfg80211_change_bss(struct wiphy *wiphy, struct net_device *dev, str
+ }				/* mtk_p2p_cfg80211_change_bss */
+ 
+ #if KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
+-#if KERNEL_VERSION(3, 19, 0) <= CFG80211_VERSION_CODE
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++static const u8 bcast_addr[ETH_ALEN] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
++int mtk_p2p_cfg80211_del_station(struct wiphy *wiphy, struct wireless_dev *wdev, struct station_del_parameters *params)
++{
++	struct net_device *dev = wdev ? wdev->netdev : NULL;
++	const u8 *mac = params->mac ? params->mac : bcast_addr;
++	P_GLUE_INFO_T prGlueInfo = (P_GLUE_INFO_T) NULL;
++	INT_32 i4Rslt = -EINVAL;
++	P_MSG_P2P_CONNECTION_ABORT_T prDisconnectMsg = (P_MSG_P2P_CONNECTION_ABORT_T) NULL;
++	UINT_8 aucBcMac[] = BC_MAC_ADDR;
++	UINT_8 ucRoleIdx = 0;
++
++	do {
++		if ((wiphy == NULL) || (dev == NULL))
++			break;
++
++		if (mac == NULL)
++			mac = aucBcMac;
++
++		DBGLOG(P2P, TRACE, "mtk_p2p_cfg80211_del_station.\n");
++
++		prGlueInfo = *((P_GLUE_INFO_T *) wiphy_priv(wiphy));
++
++		if (mtk_Netdev_To_RoleIdx(prGlueInfo, dev, &ucRoleIdx) < 0)
++			break;
++
++		prDisconnectMsg =
++		    (P_MSG_P2P_CONNECTION_ABORT_T) cnmMemAlloc(prGlueInfo->prAdapter, RAM_TYPE_MSG,
++							       sizeof(MSG_P2P_CONNECTION_ABORT_T));
++
++		if (prDisconnectMsg == NULL) {
++			ASSERT(FALSE);
++			i4Rslt = -ENOMEM;
++			break;
++		}
++
++		prDisconnectMsg->rMsgHdr.eMsgId = MID_MNY_P2P_CONNECTION_ABORT;
++		prDisconnectMsg->ucRoleIdx = ucRoleIdx;
++		COPY_MAC_ADDR(prDisconnectMsg->aucTargetID, mac);
++		prDisconnectMsg->u2ReasonCode = REASON_CODE_UNSPECIFIED;
++		prDisconnectMsg->fgSendDeauth = TRUE;
++
++		mboxSendMsg(prGlueInfo->prAdapter, MBOX_ID_0, (P_MSG_HDR_T) prDisconnectMsg, MSG_SEND_METHOD_BUF);
++
++		i4Rslt = 0;
++	} while (FALSE);
++
++	return i4Rslt;
++
++}
++#elif KERNEL_VERSION(3, 19, 0) <= CFG80211_VERSION_CODE
+ static const u8 bcast_addr[ETH_ALEN] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+ int mtk_p2p_cfg80211_del_station(struct wiphy *wiphy, struct net_device *dev, struct station_del_parameters *params)
+ {
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p_kal.c b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p_kal.c
+index 5f5c953304bbb3a1b7282127ab100a03eb70caec..3456aaa8616b9d1ad9108942481df21bed3cc5e3 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p_kal.c
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p_kal.c
+@@ -1279,14 +1279,12 @@ kalP2PGOStationUpdate(IN P_GLUE_INFO_T prGlueInfo,
+ 			rStationInfo.assoc_req_ies = prCliStaRec->pucAssocReqIe;
+ 			rStationInfo.assoc_req_ies_len = prCliStaRec->u2AssocReqIeLen;
+ 
+-			cfg80211_new_sta(prP2pGlueInfo->aprRoleHandler,
+-					 /* struct net_device * dev, */
++			cfg80211_new_sta(prP2pGlueInfo->aprRoleHandler->ieee80211_ptr,
+ 					 prCliStaRec->aucMacAddr, &rStationInfo, GFP_KERNEL);
+ 		} else {
+ 			++prP2pGlueInfo->i4Generation;
+ 
+-			cfg80211_del_sta(prP2pGlueInfo->aprRoleHandler,
+-					 /* struct net_device * dev, */
++			cfg80211_del_sta(prP2pGlueInfo->aprRoleHandler->ieee80211_ptr,
+ 					 prCliStaRec->aucMacAddr, GFP_KERNEL);
+ 		}
+ 
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_cfg80211.h b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_cfg80211.h
+index 4958a8593052a8895bb6442df7136f11421fc5ca..59c46c5b89e0dcbef338c73659ce41fbbe55dc91 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_cfg80211.h
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_cfg80211.h
+@@ -172,6 +172,22 @@ mtk_cfg80211_change_iface(struct wiphy *wiphy,
+ 
+ /* TODO: link_id 's in this file were added only after Linux 6.0.
+  * Add #if preprocessor directives here. See os/linux/gl_cfg80211.c ; */
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++int
++mtk_cfg80211_add_key(struct wiphy *wiphy,
++		     struct wireless_dev *wdev, int link_id,
++		     u8 key_index, bool pairwise, const u8 *mac_addr, struct key_params *params);
++
++int
++mtk_cfg80211_get_key(struct wiphy *wiphy,
++		     struct wireless_dev *wdev, int link_id,
++		     u8 key_index,
++		     bool pairwise,
++		     const u8 *mac_addr, void *cookie, void (*callback) (void *cookie, struct key_params *));
++
++int
++mtk_cfg80211_del_key(struct wiphy *wiphy, struct wireless_dev *wdev, int link_id, u8 key_index, bool pairwise, const u8 *mac_addr);
++#else
+ int
+ mtk_cfg80211_add_key(struct wiphy *wiphy,
+ 		     struct net_device *ndev, int link_id,
+@@ -186,11 +202,14 @@ mtk_cfg80211_get_key(struct wiphy *wiphy,
+ 
+ int
+ mtk_cfg80211_del_key(struct wiphy *wiphy, struct net_device *ndev, int link_id, u8 key_index, bool pairwise, const u8 *mac_addr);
++#endif
+ 
+ int
+ mtk_cfg80211_set_default_key(struct wiphy *wiphy, struct net_device *ndev, int link_id, u8 key_index, bool unicast, bool multicast);
+ 
+-#if KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++int mtk_cfg80211_get_station(struct wiphy *wiphy, struct wireless_dev *wdev, const u8 *mac, struct station_info *sinfo);
++#elif KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
+ int mtk_cfg80211_get_station(struct wiphy *wiphy, struct net_device *ndev, const u8 *mac, struct station_info *sinfo);
+ #else
+ int mtk_cfg80211_get_station(struct wiphy *wiphy, struct net_device *ndev, u8 *mac, struct station_info *sinfo);
+@@ -285,7 +304,24 @@ int mtk_cfg80211_sched_scan_stop(IN struct wiphy *wiphy, IN struct net_device *n
+ 
+ int mtk_cfg80211_assoc(struct wiphy *wiphy, struct net_device *ndev, struct cfg80211_assoc_request *req);
+ 
+-#if KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++int
++mtk_cfg80211_change_station(struct wiphy *wiphy, struct wireless_dev *wdev,
++			    const u8 *mac, struct station_parameters *params);
++
++int mtk_cfg80211_add_station(struct wiphy *wiphy, struct wireless_dev *wdev,
++			     const u8 *mac, struct station_parameters *params);
++
++int mtk_cfg80211_del_station(struct wiphy *wiphy, struct wireless_dev *wdev, struct station_del_parameters *params);
++
++int mtk_cfg80211_tdls_mgmt(struct wiphy *wiphy, struct net_device *dev,
++			   const u8 *peer, int link_id, u8 action_code,
++			   u8 dialog_token, u16 status_code, u32 peer_capability,
++			   bool initiator, const u8 *buf, size_t len);
++
++int mtk_cfg80211_tdls_oper(struct wiphy *wiphy, struct net_device *dev,
++			   const u8 *peer, enum nl80211_tdls_operation oper);
++#elif KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
+ int
+ mtk_cfg80211_change_station(struct wiphy *wiphy, struct net_device *ndev,
+ 			    const u8 *mac, struct station_parameters *params);
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_p2p_ioctl.h b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_p2p_ioctl.h
+index f199e26ebaa20a4f52aad901e20df7760b5db856..b135436629c7d8145663b02b47655b3e54ee5da6 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_p2p_ioctl.h
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_p2p_ioctl.h
+@@ -397,7 +397,32 @@ int mtk_p2p_cfg80211_del_iface(struct wiphy *wiphy, struct wireless_dev *wdev);
+ /* link_id was introduced to nl80211 ops in Linux 6.0, changing many functions prototypes:
+  * https://github.com/torvalds/linux/commit/7b0a0e3c3a88260b6fcb017e49f198463aa62ed1
+  * See: include/net/cfg80211.h */
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0))
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++int
++mtk_p2p_cfg80211_add_key(struct wiphy *wiphy,
++			 struct wireless_dev *wdev, int link_id,
++			 u8 key_index, bool pairwise, const u8 *mac_addr, struct key_params *params);
++
++int
++mtk_p2p_cfg80211_get_key(struct wiphy *wiphy,
++			 struct wireless_dev *wdev,
++			 int link_id,
++			 u8 key_index,
++			 bool pairwise,
++			 const u8 *mac_addr, void *cookie, void (*callback) (void *cookie, struct key_params *));
++
++int
++mtk_p2p_cfg80211_del_key(struct wiphy *wiphy,
++			 struct wireless_dev *wdev, int link_id, u8 key_index, bool pairwise, const u8 *mac_addr);
++
++int
++mtk_p2p_cfg80211_set_default_key(struct wiphy *wiphy,
++				 struct net_device *netdev, int link_id, u8 key_index, bool unicast, bool multicast);
++
++int
++mtk_p2p_cfg80211_set_mgmt_key(struct wiphy *wiphy, struct wireless_dev *wdev, int link_id, u8 key_index);
++
++#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0))
+ int
+ mtk_p2p_cfg80211_add_key(struct wiphy *wiphy,
+ 			 struct net_device *ndev, int link_id,
+@@ -447,7 +472,10 @@ mtk_p2p_cfg80211_set_mgmt_key(struct wiphy *wiphy, struct net_device *dev, u8 ke
+ 
+ #endif // End of Kernel 6.0.0 <= CFG80211
+ 
+-#if KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++int mtk_p2p_cfg80211_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
++				const u8 *mac, struct station_info *sinfo);
++#elif KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
+ int mtk_p2p_cfg80211_get_station(struct wiphy *wiphy, struct net_device *ndev,
+ 				const u8 *mac, struct station_info *sinfo);
+ #else
+@@ -540,7 +568,9 @@ int mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy,
+ 			     bool no_cck, bool dont_wait_for_ack, u64 *cookie);
+ #endif
+ 
+-#if KERNEL_VERSION(3, 19, 0) <= CFG80211_VERSION_CODE
++#if KERNEL_VERSION(6, 7, 0) <= CFG80211_VERSION_CODE
++int mtk_p2p_cfg80211_del_station(struct wiphy *wiphy, struct wireless_dev *wdev, struct station_del_parameters *params);
++#elif KERNEL_VERSION(3, 19, 0) <= CFG80211_VERSION_CODE
+ int mtk_p2p_cfg80211_del_station(struct wiphy *wiphy, struct net_device *dev, struct station_del_parameters *params);
+ #elif KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
+ int mtk_p2p_cfg80211_del_station(struct wiphy *wiphy, struct net_device *dev, const u8 *mac);
+diff --git a/drivers/usb/host/xhci-aeolia.c b/drivers/usb/host/xhci-aeolia.c
+index 2dbe1668a9f10a0a797053405dc0674d6a3ef7f6..b70ef97821297b199575bbdd2d1555842ba32444 100644
+--- a/drivers/usb/host/xhci-aeolia.c
++++ b/drivers/usb/host/xhci-aeolia.c
+@@ -45,6 +45,8 @@ static void xhci_aeolia_quirks(struct device *dev, struct xhci_hcd *xhci)
+ 	 * Do not touch DMA mask, we need a custom one
+ 	 */
+ 	xhci->quirks |= XHCI_PLAT | XHCI_PLAT_DMA;
++
++	xhci->imod_interval = 0;
+ }
+ 
+ /* called during probe() after chip reset completes */
+@@ -91,10 +93,12 @@ static int xhci_aeolia_assign_irqs(struct pci_dev *dev)
+ 
+ static void xhci_aeolia_free_irqs(struct pci_dev *dev, int nr_irqs)
+ {
+-	if (xhci_aeolia_is_baikal(dev))
++	if (xhci_aeolia_is_baikal(dev)) {
+ 		bpcie_free_irqs(dev->irq, nr_irqs);
+-	else
+-		apcie_free_irqs(dev->irq, nr_irqs);
++		return;
++	}
++
++	apcie_free_irqs(dev->irq, nr_irqs);
+ }
+ 
+ static int xhci_aeolia_probe_one(struct pci_dev *dev, int index)

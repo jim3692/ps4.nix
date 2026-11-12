@@ -1,0 +1,505 @@
+From 34aaff2e37496f52294d88ab9813bcee346b9044 Mon Sep 17 00:00:00 2001
+From: Anthony Maniatopoulos <manya3084@gmail.com>
+Date: Wed, 30 Sep 2026 23:03:57 +1000
+Subject: [PATCH 045/124] ps4: program the Gladius Neo GPU
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/cik.c      |  26 +-
+ drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c | 353 ++++++++++++++++++++++++--
+ 2 files changed, 347 insertions(+), 32 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/cik.c b/drivers/gpu/drm/amd/amdgpu/cik.c
+index c93243f34e6d08aa81c9f549526695610d771814..bd9b3199574d6d091d8251e2a118e7a93bebec15 100644
+--- a/drivers/gpu/drm/amd/amdgpu/cik.c
++++ b/drivers/gpu/drm/amd/amdgpu/cik.c
+@@ -934,12 +934,12 @@ static const u32 liverpool_mgcg_cgcg_init[] =
+ 	0x1579, 0xff607fff, 0xfc000100, /* CGTT_DRM_CLK_CTRL0 */
+ };
+ 
+-static const u32 gladius_golden_spm_registers[] =
++static const u32 gladius_golden_spm_registers[] __maybe_unused =
+ {
+ 	0xc200, 0xe0ffffff, 0xe0000000 	/* mmGRBM_GFX_INDEX */
+ };
+ 
+-static const u32 gladius_golden_common_registers[] =
++static const u32 gladius_golden_common_registers[] __maybe_unused =
+ {
+ 	0xc200, 0xffffffff, 0xe0000000, /* mmGRBM_GFX_INDEX */
+ 	0xa0d4, 0xffffffff, 0x2a00161a, /* PA_SC_RASTER_CONFIG */
+@@ -948,7 +948,7 @@ static const u32 gladius_golden_common_registers[] =
+ 	0x263e, 0xffffffff, 0x12011003, /* mmGB_ADDR_CONFIG */
+ };
+ 
+-static const u32 gladius_golden_registers[] =
++static const u32 gladius_golden_registers[] __maybe_unused =
+ {	
+ 	0xf000, 0xffff1fff, 0x96940200, /* CGTS_SM_CTRL_REG */
+ 	0xf003, 0xffff0001, 0xff000000, /* CGTS_TCC_DISABLE */
+@@ -986,7 +986,7 @@ static const u32 gladius_golden_registers[] =
+ 	0x535, 0xffffffff, 0x00000000, 	/* VM_CONTEXTS_DISABLE */
+ };
+ 
+-static const u32 gladius_mgcg_cgcg_init[] =
++static const u32 gladius_mgcg_cgcg_init[] __maybe_unused =
+ {
+ 	0x3108, 0xffffffff, 0xfffffffc, /* RLC_CGTT_MGCG_OVERRIDE */
+ 	0xc200, 0xffffffff, 0xe0000000, /* GRBM_GFX_INDEX */
+@@ -1231,18 +1231,12 @@ static void cik_init_golden_registers(struct amdgpu_device *adev)
+ 						 ARRAY_SIZE(liverpool_golden_spm_registers));
+ 		break;
+ 	case CHIP_GLADIUS:
+-		amdgpu_device_program_register_sequence(adev,
+-						 gladius_mgcg_cgcg_init,
+-						 ARRAY_SIZE(gladius_mgcg_cgcg_init));
+-		amdgpu_device_program_register_sequence(adev,
+-						 gladius_golden_registers,
+-						 ARRAY_SIZE(gladius_golden_registers));
+-		amdgpu_device_program_register_sequence(adev,
+-						 gladius_golden_common_registers,
+-						 ARRAY_SIZE(gladius_golden_common_registers));
+-		amdgpu_device_program_register_sequence(adev,
+-						 gladius_golden_spm_registers,
+-						 ARRAY_SIZE(gladius_golden_spm_registers));
++		/*
++		 * The arrays above are the old Liverpool/Hawaii clone,
++		 * including TCP_CHAN_STEER_LO 0x76325410 and HDP_ADDR_CONFIG
++		 * 0x12010001. Those writes drop Gladius acceleration.
++		 * gfx_v7_0_init_golden_registers() is the Neo path.
++		 */
+ 		break;
+ 	default:
+ 		break;
+diff --git a/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c b/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c
+index 05be6d00f558e3c0e9258f67d7afb0940e71772e..81270570a88bf542f9e5d32354b623153c7ce960 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c
+@@ -58,6 +58,199 @@
+ #define BONAIRE_GB_ADDR_CONFIG_GOLDEN        0x12010001
+ #define HAWAII_GB_ADDR_CONFIG_GOLDEN         0x12011003
+ 
++/* Belize Pro dump (NUM_LOWER_PIPES=1, ROW_SIZE=1KB). Not Hawaii 0x12011003. */
++#define GLADIUS_GB_ADDR_CONFIG_DUMP          0x42011003
++
++/*
++ * Gladius (PS4 Pro GPU) golden register tables -- the sole golden path
++ * for this chip (cik.c no longer programs its Liverpool-cloned copy).
++ * Transcribed from a Belize-southbridge Pro dump; not yet validated on
++ * Baikal. Uncertainty markers from the original dump are preserved.
++ * GB_ADDR_CONFIG in this table is the dump value; gfx_v7_0_gpu_early_init
++ * seeds software tiling from a live read and constants_init is the last
++ * writer. TCP_CHAN_STEER_LO is intentionally absent.
++ */
++static const u32 gladius_golden_common_registers[] =
++{
++	mmATC_MISC_CG, 0x000c0fc0, 0x000c0200,
++	mmCB_HW_CONTROL, 0x0001f3cf, 0x00007208,	// 0x2684
++	mmCB_HW_CONTROL_2, 0x0f000000, 0x0f000000,
++	mmCB_HW_CONTROL_3, 0x000001ff, 0x00000040,
++	mmDB_DEBUG2, 0xf00fffff, 0x00004400,  //previous 400
++	0x2285, 0xf000003f, 0x00000007, /* PA_CL_ENHANCE */ //DONE
++	mmPA_SC_ENHANCE, 0xffffffff, 0x00000001, //mod
++	0x22c9, 0xffffffff, 0x00ffffff, /* PA_SC_FORCE_EOV_MAX_CNTS */ //DONE
++	mmPA_SC_LINE_STIPPLE_STATE, 0x0000ff0f, 0x00000000,
++	mmPA_SC_RASTER_CONFIG, 0x3f3fffff, 0x2a00161a,
++	mmPA_SC_RASTER_CONFIG_1, 0x0000003f, 0x0000002e,
++	mmRLC_CGCG_CGLS_CTRL, 0x00000003, 0x0020003c, //0x0001003c,
++	0x30df, 0xffffffff, 0x00000b00, /* RLC_PG_DELAY_2 */ //DONE or 0x00000b03
++	0x136, 0x00000fff, 0x00000200, /* SCLK_CGTT_BLK_CTRL_REG */ //DONE original 0x00000100
++	mmSQ_CONFIG, 0x07f80000, 0x07180000,
++	mmTA_CNTL_AUX, 0x000f000f, 0x00010000, //mod
++	mmTCC_CTRL, 0x00100000, 0x001ff07c, //mod
++	mmTCP_ADDR_CONFIG, 0x000003ff, 0x000000f7,
++	mmTCP_CHAN_STEER_HI, 0xffffffff, 0x00000000,
++	0xf9e, 0x00000001, 0x00000003, /* SEM_CHICKEN_BITS */	//DONE //2 on FAT
++	0x31da, 0x00000008, 0x00000008, /* SPI_RESET_DEBUG */ //DONE
++	0x2300, 0x000000ff, 0x00000000, /* SQ_CONFIG */ //DONE 1 on FAT
++	0x2542, 0x00010000, 0x00010000, /* TA_CNTL_AUX */ //DONE
++	mmVGT_RESET_DEBUG, 0x00000004, 0x00004000, //mod
++	mmHDMI_CONTROL, 0x313f031f, 0x00000001, //ori 0x00000011
++};
++
++static const u32 gladius_golden_registers[] =
++{
++	mmGRBM_GFX_INDEX, 0xffffffff, 0xe0000000,
++	/* These are all setting OFF_HYSTERESIS = 0x10 */
++	0xf0a8, 0xffffffff, 0x00000100, /* CB_CGTT_SCLK_CTRL */ //DONE
++	0xf082, 0xffffffff, 0x00000100, /* CGTT_BCI_CLK_CTRL */ //DONE
++	0xf0b0, 0xffffffff, 0x00000100, /* CGTT_CP_CLK_CTRL */ //DONE
++	0xf0b2, 0xffffffff, 0x00000100, /* CGTT_CPC_CLK_CTRL */ //DONE
++	0xf0b1, 0xffffffff, 0x00000100, /* CGTT_CPF_CLK_CTRL */ //DONE
++	0xf0a0, 0xffffffff, 0x00000100, /* CGTT_GDS_CLK_CTRL */ //DONE
++	0xf085, 0xffffffff, 0x06000100, /* CGTT_IA_CLK_CTRL */ //DONE
++	0xf088, 0xffffffff, 0x00000100, /* CGTT_PA_CLK_CTRL */ //DONE
++	0xf086, 0xffffffff, 0x06000100, /* CGTT_WD_CLK_CTRL */ //DONE
++	0xf081, 0xffffffff, 0x00000100, /* CGTT_PC_CLK_CTRL */ //DONE
++	0xf0b8, 0xffffffff, 0x00000100, /* CGTT_RLC_CLK_CTRL */ //DONE
++	0xf089, 0xffffffff, 0x00000100, /* CGTT_SC_CLK_CTRL */ //DONE
++	0xf080, 0xffffffff, 0x00000100, /* CGTT_SPI_CLK_CTRL */ //DONE
++	0xf08c, 0xffffffff, 0x00000100, /* CGTT_SQ_CLK_CTRL */ //DONE
++	0xf08d, 0xffffffff, 0x00000100, /* CGTT_SQG_CLK_CTRL */ //DONE
++	0xf094, 0xffffffff, 0x00000100, /* CGTT_SX_CLK_CTRL0 */ //DONE
++	0xf095, 0xffffffff, 0x00000100, /* CGTT_SX_CLK_CTRL1 */ //DONE
++	0xf096, 0xffffffff, 0x00000100, /* CGTT_SX_CLK_CTRL2 */ //DONE
++	0xf097, 0xffffffff, 0x00000100, /* CGTT_SX_CLK_CTRL3 */ //DONE
++	0xf09b, 0xffffffff, 0x00000100, //DONE
++	0xf09e, 0xffffffff, 0x00000100, /* CGTT_TCP_CLK_CTRL */ //DONE
++	0xf084, 0xffffffff, 0x06000100, /* CGTT_VGT_CLK_CTRL */ //DONE
++	0xf0a4, 0xffffffff, 0x00000100, /* DB_CGTT_CLK_CTRL_0 */ //DONE
++	0xf09d, 0xffffffff, 0x00000100, /* TA_CGTT_CTRL */ //DONE
++	0xf0ae, 0xffffffff, 0x00000100, //DONE
++	0xf0ac, 0xffffffff, 0x00000100, /* TCC_CGTT_SCLK_CTRL */ //DONE
++	0xf09c, 0xffffffff, 0x00000100, /* TD_CGTT_CTRL */ //DONE
++	0xf008, 0xffffffff, 0x00010000, /* CGTS_CU0_SP0_CTRL_REG */ //DONE
++	0xf009, 0xffffffff, 0x00030002, /* CGTS_CU0_LDS_SQ_CTRL_REG */ //DONE
++	0xf00a, 0xffffffff, 0x00000007, /* CGTS_CU0_TA_SQC_CTRL_REG */ //DONE
++	0xf00b, 0xffffffff, 0x00060005, /* CGTS_CU0_SP1_CTRL_REG */ //DONE
++	0xf00c, 0xffffffff, 0x00090008, /* CGTS_CU0_TD_TCP_CTRL_REG */ //DONE
++	0xf00d, 0xffffffff, 0x00010000, /* CGTS_CU1_SP0_CTRL_REG */ //DONE
++	0xf00e, 0xffffffff, 0x00030002, /* CGTS_CU1_LDS_SQ_CTRL_REG */ //DONE
++	0xf00f, 0xffffffff, 0x00000007, /* CGTS_CU1_TA_CTRL_REG */ //DONE maybe 0x00040007
++	0xf010, 0xffffffff, 0x00060005, /* CGTS_CU1_SP1_CTRL_REG */  //DONE
++	0xf011, 0xffffffff, 0x00090008, /* CGTS_CU1_TD_TCP_CTRL_REG */ //DONE
++	0xf012, 0xffffffff, 0x00010000, /* CGTS_CU2_SP0_CTRL_REG */ //DONE
++	0xf013, 0xffffffff, 0x00030002, /* CGTS_CU2_LDS_SQ_CTRL_REG */ //DONE
++	0xf014, 0xffffffff, 0x00000007, /* CGTS_CU2_TA_CTRL_REG */ //DONE maybe 0x00000007
++	0xf015, 0xffffffff, 0x00060005, /* CGTS_CU2_SP1_CTRL_REG */ //DONE
++	0xf016, 0xffffffff, 0x00090008, /* CGTS_CU2_TD_TCP_CTRL_REG */ //DONE
++	0xf017, 0xffffffff, 0x00010000, /* CGTS_CU3_SP0_CTRL_REG */ //DONE
++	0xf018, 0xffffffff, 0x00030002, /* CGTS_CU3_LDS_SQ_CTRL_REG */ //DONE
++	0xf019, 0xffffffff, 0x00000007, /* CGTS_CU3_TA_SQC_CTRL_REG */ //DONE maybe 07
++	0xf01a, 0xffffffff, 0x00060005, /* CGTS_CU3_SP1_CTRL_REG */ //DONE
++	0xf01b, 0xffffffff, 0x00090008, /* CGTS_CU3_TD_TCP_CTRL_REG */ //DONE
++	0xf01c, 0xffffffff, 0x00010000, /* CGTS_CU4_SP0_CTRL_REG */ //DONE
++	0xf01d, 0xffffffff, 0x00030002, /* CGTS_CU4_LDS_SQ_CTRL_REG */ //DONE
++	0xf01e, 0xffffffff, 0x00000007, /* CGTS_CU4_TA_CTRL_REG */ //DONE 07
++	0xf01f, 0xffffffff, 0x00060005, /* CGTS_CU4_SP1_CTRL_REG */ //DONE
++	0xf020, 0xffffffff, 0x00090008, /* CGTS_CU4_TD_TCP_CTRL_REG */ //DONE
++	0xf021, 0xffffffff, 0x00010000, /* CGTS_CU5_SP0_CTRL_REG */ //DONE
++	0xf022, 0xffffffff, 0x00030002, /* CGTS_CU5_LDS_SQ_CTRL_REG */ //DONE
++	0xf023, 0xffffffff, 0x00000007, /* CGTS_CU5_TA_CTRL_REG */ //DONE 07
++	0xf024, 0xffffffff, 0x00060005, /* CGTS_CU5_SP1_CTRL_REG */ //DONE
++	0xf025, 0xffffffff, 0x00090008, /* CGTS_CU5_TD_TCP_CTRL_REG */ //DONE
++	0xf026, 0xffffffff, 0x00010000, /* CGTS_CU6_SP0_CTRL_REG */ //DONE
++	0xf027, 0xffffffff, 0x00030002, /* CGTS_CU6_LDS_SQ_CTRL_REG */ //DONE
++	0xf028, 0xffffffff, 0x00000007, /* CGTS_CU6_TA_SQC_CTRL_REG */ //DONE 07
++	0xf029, 0xffffffff, 0x00060005, /* CGTS_CU6_SP1_CTRL_REG */ //DONE
++	0xf02a, 0xffffffff, 0x00090008, /* CGTS_CU6_TD_TCP_CTRL_REG */ //DONE
++	0xf02b, 0xffffffff, 0x00010000, /* CGTS_CU7_SP0_CTRL_REG */ //DONE
++	0xf02c, 0xffffffff, 0x00030002, /* CGTS_CU7_LDS_SQ_CTRL_REG */ //DONE
++	0xf02d, 0xffffffff, 0x00000007, /* CGTS_CU7_TA_SQC_CTRL_REG */ //DONE 07
++	0xf02e, 0xffffffff, 0x00060005, /* CGTS_CU7_SP1_CTRL_REG */ //DONE
++	0xf02f, 0xffffffff, 0x00090008, /* CGTS_CU7_TD_TCP_CTRL_REG */ //DONE
++	0xf030, 0xffffffff, 0x00010000, /* CGTS_CU8_SP0_CTRL_REG */ //DONE
++	0xf031, 0xffffffff, 0x00030002, /* CGTS_CU8_LDS_SQ_CTRL_REG */ //DONE
++	0xf032, 0xffffffff, 0x00000007, /* CGTS_CU8_TA_CTRL_REG */ //DONE 07
++	0xf033, 0xffffffff, 0x00060005, /* CGTS_CU8_SP1_CTRL_REG */ //DONE
++	0xf034, 0xffffffff, 0x00090008, /* CGTS_CU8_TD_TCP_CTRL_REG */ //DONE
++	0xf035, 0xffffffff, 0x00010000, /* CGTS_CU9_SP0_CTRL_REG */ //DONE
++	0xf036, 0xffffffff, 0x00030002, /* CGTS_CU9_LDS_SQ_CTRL_REG */ //DONE
++	0xf037, 0xffffffff, 0x00000007, /* CGTS_CU9_TA_CTRL_REG */ //DONE 07
++	0xf038, 0xffffffff, 0x00060005, /* CGTS_CU9_SP1_CTRL_REG */ //DONE
++	0xf039, 0xffffffff, 0x00090008, /* CGTS_CU9_TD_TCP_CTRL_REG */ //DONE
++	0xf000, 0xffffffff, 0x96941200, /* CGTS_SM_CTRL_REG */ //DONE original 0x96940200
++	0x21c2, 0xffffffff, 0x00900100, /* CP_RB_WPTR_POLL_CNTL */ //DONE
++	0x3109, 0xffffffff, 0x0020003f, /* RLC_CGCG_CGLS_CTRL */ //DONE maybe 0x0020003c
++	0x2684, 0xffffffff, 0x00058208, /* CB_HW_CONTROL */  //DONE original 0x00210000, 0x00018208
++	0xf000, 0x6901FFFF, 0x96940000, /* CGTS_SM_CTRL_REG */ //DONE NOT sure
++	0xf080, 0xfdfc0fff, 0x00000100, /* CGTT_SPI_CLK_CTRL */ //DONE probably right
++	0x1bb6, 0x00010000, 0x00010000, /* CRTC_DOUBLE_BUFFER_CONTROL */ //DONE
++	mmPA_SC_RASTER_CONFIG, 0xffffffff, 0x2a00161a,
++	mmPA_SC_RASTER_CONFIG_1, 0xffffffff, 0x0000002e,
++	mmGB_ADDR_CONFIG, 0xffffffff, GLADIUS_GB_ADDR_CONFIG_DUMP, //0x22011003, //mod
++	/* JSON/Hawaii: FORCE_EOV_CNTDWN_ENABLE | FORCE_EOV_REZ_ENABLE.
++	 * Keep dump GB_ADDR_CONFIG; do not add TCP_CHAN_STEER_LO.
++	 */
++	mmPA_SC_MODE_CNTL_1, 0x07ffffff, 0x06000000,
++	mmSPI_RESOURCE_RESERVE_CU_0, 0xffffffff, 0x00000800,
++	mmSPI_RESOURCE_RESERVE_CU_1, 0xffffffff, 0x00000800,
++	mmSPI_RESOURCE_RESERVE_EN_CU_0, 0xffffffff, 0x00FFFFBF,
++	mmSPI_RESOURCE_RESERVE_EN_CU_1, 0xffffffff, 0x00FFFFAF,
++	/* Hawaii 4-SE golden; Orbis dump was 0 for CU_2-9 (unverified). */
++	mmSPI_RESOURCE_RESERVE_EN_CU_2, 0xffffffff, 0x00fffffe,
++	mmSPI_RESOURCE_RESERVE_EN_CU_3, 0xffffffff, 0x00fffffe,
++	mmSPI_RESOURCE_RESERVE_EN_CU_4, 0xffffffff, 0x00fffffe,
++	mmSPI_RESOURCE_RESERVE_EN_CU_5, 0xffffffff, 0x00fffffe,
++	mmSPI_RESOURCE_RESERVE_EN_CU_6, 0xffffffff, 0x00fffffe,
++	mmSPI_RESOURCE_RESERVE_EN_CU_7, 0xffffffff, 0x00fffffe,
++	mmSPI_RESOURCE_RESERVE_EN_CU_8, 0xffffffff, 0x00fffffe,
++	mmSPI_RESOURCE_RESERVE_EN_CU_9, 0xffffffff, 0x00fffffe,
++	0x535, 0xffffffff, 0x00000000, /* VM_CONTEXTS_DISABLE */
++	0x1401, 0x00002000, 0x00002000, /* GARLIC_FLUSH_CNTL */ //DONE
++	mmRLC_MAX_PG_CU, 0xffffffff, 0x00000024,
++	mmCP_BUSY_STAT, 0xffffffff, 0x00008000, //or 0? set1 = 0x00428000
++	mmCP_CPF_BUSY_STAT, 0xffffffff, 0x00000000,
++	mmCP_CPF_STALLED_STAT1, 0xffffffff, 0x00000000,
++	mmCP_CPF_STATUS, 0xffffffff, 0x00000000,
++	mmGDS_CNTL_STATUS, 0xffffffff, 0x00000000,
++	mmGDS_PROTECTION_FAULT, 0xffffffff, 0x00000000,
++	mmGRBM_STATUS, 0xffffffff, 0x00000000, //0x8000b028 without set1
++	mmGRBM_STATUS2, 0xffffffff, 0x00000000, //0x01000008 without set1
++	mmGRBM_STATUS_SE0, 0xffffffff, 0x00000000, //0x00000006 without set1
++	mmGRBM_STATUS_SE1, 0xffffffff, 0x00000000, //0x00000006 without set1
++	mmGRBM_STATUS_SE2, 0xffffffff, 0x00000000, //0x00000006 without set1
++	mmGRBM_STATUS_SE3, 0xffffffff, 0x00000000, //0x00000006 without set1
++	mmCP_STALLED_STAT2, 0xffffffff, 0x00000000,
++	mmCP_STALLED_STAT3, 0xffffffff, 0x00000000,
++	mmCP_STAT, 0xffffffff, 0x00000000,
++	mmPA_SC_HP3D_TRAP_SCREEN_H, 0xffffffff, 0x00000020,
++	mmPA_SC_HP3D_TRAP_SCREEN_OCCURRENCE, 0xffffffff, 0x00000000,
++	mmPA_SC_HP3D_TRAP_SCREEN_V, 0xffffffff, 0x00000080,
++	mmPA_SC_P3D_TRAP_SCREEN_H, 0xffffffff, 0x00000001,
++	mmPA_SC_P3D_TRAP_SCREEN_OCCURRENCE, 0xffffffff, 0x00000200,
++	mmPA_SC_P3D_TRAP_SCREEN_V, 0xffffffff, 0x00000000,
++	mmPA_SC_TRAP_SCREEN_H, 0xffffffff, 0x00000001,
++	mmPA_SC_TRAP_SCREEN_OCCURRENCE, 0xffffffff, 0x00000200,
++	mmPA_SC_TRAP_SCREEN_V, 0xffffffff, 0x00000000,
++	mmSPI_DEBUG_BUSY, 0xffffffff, 0x00000000,
++	mmSPI_DEBUG_READ, 0xffffffff, 0x009472c4,
++	mmSPI_PG_ENABLE_STATIC_CU_MASK, 0xffffffff, 0x0000fffe,
++	mmSPI_SLAVE_DEBUG_BUSY, 0xffffffff, 0x00000000,
++};
++
++static const u32 gladius_mgcg_cgcg_init[] =
++{
++	0x00003079, 0xffffffff, 0x00020201, //checked
++	0x00003108, 0xffffffff, 0xfffffffd, //checked
++	0x0000c200, 0xffffffff, 0xe0000000, //always present
++	0x0000311d, 0xffffffff, 0xffffffff, //Without game running is 0x00000000
++	0x0000311e, 0xffffffff, 0xffffffff, //Without game running is 0x00000000
++	0x0000311f, 0xffffffff, 0x004000ff, //Without game running is 0x000009ff
++};
++
++
+ static void gfx_v7_0_set_ring_funcs(struct amdgpu_device *adev);
+ static void gfx_v7_0_set_irq_funcs(struct amdgpu_device *adev);
+ static void gfx_v7_0_set_gds_init(struct amdgpu_device *adev);
+@@ -1633,7 +1826,6 @@ static void gfx_v7_0_tiling_mode_table_init(struct amdgpu_device *adev)
+ 		break;
+ 
+ 	case CHIP_LIVERPOOL:
+-	case CHIP_GLADIUS:
+ 		tile[0] = (ARRAY_MODE(ARRAY_2D_TILED_THIN1) |
+ 				   MICRO_TILE_MODE_NEW(ADDR_SURF_DEPTH_MICRO_TILING) |
+ 				   PIPE_CONFIG(ADDR_SURF_P8_32x32_16x16) |
+@@ -1776,6 +1968,45 @@ static void gfx_v7_0_tiling_mode_table_init(struct amdgpu_device *adev)
+ 			if (reg_offset != 7)
+ 				WREG32(mmGB_MACROTILE_MODE0 + reg_offset, macrotile[reg_offset]);
+ 		break;
++	case CHIP_GLADIUS: {
++		/*
++		 * Neo alt pipe is GB_TILE_MODE[31:27] = 0x12. Bits 10:6
++		 * stay P8. Hawaii's 16-pipe code 0x11 is a different field.
++		 * GB_ADDR_CONFIG is not written here.
++		 */
++		static const u32 gladius_tile_mode[] = {
++			0x90800310, 0x90800b10, 0x90801310, 0x90801b10,
++			0x90802310, 0x90800308, 0x90801318, 0x90802318,
++			0x90000304, 0x90000308, 0x92000310, 0x92000294,
++			0x92000318, 0x90400308, 0x92400310, 0x924002b0,
++			0x92400294, 0x92400318, 0x9240032c, 0x9100030c,
++			0x9100031c, 0x910002b4, 0x910002a4, 0x91000328,
++			0x910002bc, 0x91000320, 0x910002b8, 0x90c00308,
++			0x92c00310, 0x92c00294, 0x92c00318, 0x00000000,
++		};
++		static const u32 gladius_macrotile_mode[] = {
++			0x000026e8, 0x000026d4, 0x000021d0, 0x000021d0,
++			0x00002080, 0x00002040, 0x00001000, 0x00000000,
++			0x000036ec, 0x000026e8, 0x000021d4, 0x000020d0,
++			0x00001080, 0x00001040, 0x00000000, 0x00000000,
++		};
++
++		for (reg_offset = 0; reg_offset < num_tile_mode_states; reg_offset++) {
++			if (reg_offset < ARRAY_SIZE(gladius_tile_mode))
++				tile[reg_offset] = gladius_tile_mode[reg_offset];
++		}
++		for (reg_offset = 0; reg_offset < num_secondary_tile_mode_states; reg_offset++) {
++			if (reg_offset < ARRAY_SIZE(gladius_macrotile_mode))
++				macrotile[reg_offset] = gladius_macrotile_mode[reg_offset];
++		}
++
++		for (reg_offset = 0; reg_offset < num_tile_mode_states; reg_offset++)
++			WREG32(mmGB_TILE_MODE0 + reg_offset, tile[reg_offset]);
++		for (reg_offset = 0; reg_offset < num_secondary_tile_mode_states; reg_offset++)
++			if (reg_offset != 7)
++				WREG32(mmGB_MACROTILE_MODE0 + reg_offset, macrotile[reg_offset]);
++		break;
++	}
+ 	case CHIP_HAWAII:
+ 		tile[0] = (ARRAY_MODE(ARRAY_2D_TILED_THIN1) |
+ 			   PIPE_CONFIG(ADDR_SURF_P16_32x32_16x16) |
+@@ -2483,6 +2714,38 @@ static void gfx_v7_0_config_init(struct amdgpu_device *adev)
+ 	adev->gfx.config.double_offchip_lds_buf = 1;
+ }
+ 
++/*
++ * GB_ADDR_CONFIG only retains ROW_SIZE on this chip. Pipe, SE, and
++ * NUM_LOWER_PIPES bits are discarded on readback. Do not keep a leftover
++ * 2KB row: Orbis HDP tiling is ROW_SIZE=1KB (0x42011003).
++ */
++static void gladius_commit_gb_row_size(struct amdgpu_device *adev)
++{
++	u32 sw = adev->gfx.config.gb_addr_config;
++	u32 hdp, gb, sw_row, gb_row, hdp_row;
++
++	mutex_lock(&adev->grbm_idx_mutex);
++	gfx_v7_0_select_se_sh(adev, 0xffffffff, 0xffffffff, 0xffffffff, 0);
++
++	WREG32(mmGB_ADDR_CONFIG, sw);
++	WREG32(mmHDP_ADDR_CONFIG, sw);
++	WREG32(mmDMIF_ADDR_CALC, sw);
++
++	gb = RREG32(mmGB_ADDR_CONFIG);
++	hdp = RREG32(mmHDP_ADDR_CONFIG);
++	sw_row = (sw & GB_ADDR_CONFIG__ROW_SIZE_MASK) >>
++		 GB_ADDR_CONFIG__ROW_SIZE__SHIFT;
++	gb_row = (gb & GB_ADDR_CONFIG__ROW_SIZE_MASK) >>
++		 GB_ADDR_CONFIG__ROW_SIZE__SHIFT;
++	hdp_row = (hdp & GB_ADDR_CONFIG__ROW_SIZE_MASK) >>
++		  GB_ADDR_CONFIG__ROW_SIZE__SHIFT;
++
++	dev_info(adev->dev,
++		 "Gladius GB ROW_SIZE-only: wrote 0x%08x readback 0x%08x (row %u) HDP 0x%08x (row %u) sw 0x%08x (row %u)\n",
++		 sw, gb, gb_row, hdp, hdp_row, sw, sw_row);
++	mutex_unlock(&adev->grbm_idx_mutex);
++}
++
+ /**
+  * gfx_v7_0_constants_init - setup the 3D engine
+  *
+@@ -2502,6 +2765,12 @@ static void gfx_v7_0_constants_init(struct amdgpu_device *adev)
+ 	WREG32(mmGB_ADDR_CONFIG, adev->gfx.config.gb_addr_config);
+ 	WREG32(mmHDP_ADDR_CONFIG, adev->gfx.config.gb_addr_config);
+ 	WREG32(mmDMIF_ADDR_CALC, adev->gfx.config.gb_addr_config);
++	if (adev->asic_type == CHIP_GLADIUS)
++		dev_info(adev->dev,
++			 "Gladius GB_ADDR_CONFIG write 0x%08x readback 0x%08x (HDP 0x%08x)\n",
++			 adev->gfx.config.gb_addr_config,
++			 RREG32(mmGB_ADDR_CONFIG),
++			 RREG32(mmHDP_ADDR_CONFIG));
+ 
+ 	gfx_v7_0_tiling_mode_table_init(adev);
+ 
+@@ -2620,6 +2889,9 @@ static void gfx_v7_0_constants_init(struct amdgpu_device *adev)
+ 
+ 	mutex_unlock(&adev->grbm_idx_mutex);
+ 
++	if (adev->asic_type == CHIP_GLADIUS)
++		gladius_commit_gb_row_size(adev);
++
+ 	udelay(50);
+ }
+ 
+@@ -4878,7 +5150,7 @@ static void gfx_v7_0_gpu_early_init(struct amdgpu_device *adev)
+ 	case CHIP_GLADIUS:
+ 		adev->gfx.config.max_shader_engines = 4; // Verified
+ 		adev->gfx.config.max_tile_pipes = 8; // Verified
+-		adev->gfx.config.max_cu_per_sh = 9; // Probably OK
++		adev->gfx.config.max_cu_per_sh = 10;
+ 		adev->gfx.config.max_sh_per_se = 1; // Verified
+ 		adev->gfx.config.max_backends_per_se = 2; // Probably OK?
+ 		adev->gfx.config.max_texture_channel_caches = 8; // ??
+@@ -4890,7 +5162,29 @@ static void gfx_v7_0_gpu_early_init(struct amdgpu_device *adev)
+ 		adev->gfx.config.sc_prim_fifo_size_backend = 0x100;
+ 		adev->gfx.config.sc_hiz_tile_fifo_size = 0x30;
+ 		adev->gfx.config.sc_earlyz_tile_fifo_size = 0x130;
+-		gb_addr_config = HAWAII_GB_ADDR_CONFIG_GOLDEN;
++		{
++			u32 hdp = RREG32(mmHDP_ADDR_CONFIG);
++			u32 gb = RREG32(mmGB_ADDR_CONFIG);
++
++			/*
++			 * GFX soft-reset wipes GB_ADDR_CONFIG (reads back with
++			 * NUM_PIPES=0) but leaves HDP_ADDR_CONFIG holding the
++			 * Orbis tiling (0x42011003). Prefer HDP when it has a
++			 * non-zero pipe count. constants_init copies this into
++			 * both GB and HDP, so a wiped GB value must not be kept.
++			 */
++			dev_info(adev->dev,
++				 "Gladius live GB_ADDR_CONFIG=0x%08x HDP_ADDR_CONFIG=0x%08x (dump 0x%08x, Hawaii 0x%08x)\n",
++				 gb, hdp,
++				 GLADIUS_GB_ADDR_CONFIG_DUMP,
++				 HAWAII_GB_ADDR_CONFIG_GOLDEN);
++			if (hdp & GB_ADDR_CONFIG__NUM_PIPES_MASK)
++				gb_addr_config = hdp;
++			else if (gb & GB_ADDR_CONFIG__NUM_PIPES_MASK)
++				gb_addr_config = gb;
++			else
++				gb_addr_config = GLADIUS_GB_ADDR_CONFIG_DUMP;
++		}
+ 		break;
+ 	case CHIP_KABINI:
+ 	case CHIP_MULLINS:
+@@ -4960,19 +5254,25 @@ static void gfx_v7_0_gpu_early_init(struct amdgpu_device *adev)
+ 	adev->gfx.config.num_gpus = 1;
+ 	adev->gfx.config.multi_gpu_tile_size = 64;
+ 
+-	/* fix up row size */
+-	gb_addr_config &= ~GB_ADDR_CONFIG__ROW_SIZE_MASK;
+-	switch (adev->gfx.config.mem_row_size_in_kb) {
+-	case 1:
+-	default:
+-		gb_addr_config |= (0 << GB_ADDR_CONFIG__ROW_SIZE__SHIFT);
+-		break;
+-	case 2:
+-		gb_addr_config |= (1 << GB_ADDR_CONFIG__ROW_SIZE__SHIFT);
+-		break;
+-	case 4:
+-		gb_addr_config |= (2 << GB_ADDR_CONFIG__ROW_SIZE__SHIFT);
+-		break;
++	/*
++	 * The APU DIMM-map heuristic is for fused Carrizo DRAM, not PS4
++	 * GDDR5. Applying it on Gladius would clobber NUM_LOWER_PIPES /
++	 * ROW_SIZE from the live read above.
++	 */
++	if (adev->asic_type != CHIP_GLADIUS) {
++		gb_addr_config &= ~GB_ADDR_CONFIG__ROW_SIZE_MASK;
++		switch (adev->gfx.config.mem_row_size_in_kb) {
++		case 1:
++		default:
++			gb_addr_config |= (0 << GB_ADDR_CONFIG__ROW_SIZE__SHIFT);
++			break;
++		case 2:
++			gb_addr_config |= (1 << GB_ADDR_CONFIG__ROW_SIZE__SHIFT);
++			break;
++		case 4:
++			gb_addr_config |= (2 << GB_ADDR_CONFIG__ROW_SIZE__SHIFT);
++			break;
++		}
+ 	}
+ 	adev->gfx.config.gb_addr_config = gb_addr_config;
+ }
+@@ -5148,11 +5448,32 @@ static int gfx_v7_0_sw_fini(struct amdgpu_ip_block *ip_block)
+ 	return 0;
+ }
+ 
++static void gfx_v7_0_init_golden_registers(struct amdgpu_device *adev)
++{
++	switch (adev->asic_type) {
++	case CHIP_GLADIUS:
++		/* Sole Gladius golden path. cik.c does not program this chip. */
++		amdgpu_device_program_register_sequence(adev,
++							gladius_mgcg_cgcg_init,
++							ARRAY_SIZE(gladius_mgcg_cgcg_init));
++		amdgpu_device_program_register_sequence(adev,
++							gladius_golden_registers,
++							ARRAY_SIZE(gladius_golden_registers));
++		amdgpu_device_program_register_sequence(adev,
++							gladius_golden_common_registers,
++							ARRAY_SIZE(gladius_golden_common_registers));
++		break;
++	default:
++		break;
++	}
++}
++
+ static int gfx_v7_0_hw_init(struct amdgpu_ip_block *ip_block)
+ {
+ 	int r;
+ 	struct amdgpu_device *adev = ip_block->adev;
+ 
++	gfx_v7_0_init_golden_registers(adev);
+ 	gfx_v7_0_constants_init(adev);
+ 
+ 	/* init CSB */

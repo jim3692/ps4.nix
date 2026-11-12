@@ -1,0 +1,61 @@
+From 11e8628a5ace05147f9074de05e3540cab35f61c Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sat, 7 Nov 2026 00:27:27 +0100
+Subject: [PATCH 079/124] amdgpu: dp: skip the link status checks on liverpool
+ off baikal
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/atombios_dp.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/atombios_dp.c b/drivers/gpu/drm/amd/amdgpu/atombios_dp.c
+index 518707bc9cbdbcf3c62c57fcf989bbcb5e0e9770..a253e90161d6110d2e38fc1890e1c9c18ad6e295 100644
+--- a/drivers/gpu/drm/amd/amdgpu/atombios_dp.c
++++ b/drivers/gpu/drm/amd/amdgpu/atombios_dp.c
+@@ -28,6 +28,7 @@
+ #include <drm/amdgpu_drm.h>
+ #include <drm/display/drm_dp_helper.h>
+ 
++#include <asm/ps4.h>
+ #include "amdgpu.h"
+ 
+ #include "atom.h"
+@@ -507,6 +508,7 @@ struct amdgpu_atombios_dp_link_train_info {
+ 	int dp_clock;
+ 	int dp_lane_count;
+ 	bool tp3_supported;
++	bool skip_status_check;
+ 	u8 dpcd[DP_RECEIVER_CAP_SIZE];
+ 	u8 train_set[4];
+ 	u8 link_status[DP_LINK_STATUS_SIZE];
+@@ -623,6 +625,9 @@ amdgpu_atombios_dp_link_train_cr(struct amdgpu_atombios_dp_link_train_info *dp_i
+ 
+ 	udelay(400);
+ 
++	if (dp_info->skip_status_check)
++		return 0;
++
+ 	/* clock recovery loop */
+ 	clock_recovery = false;
+ 	dp_info->tries = 0;
+@@ -689,6 +694,9 @@ amdgpu_atombios_dp_link_train_ce(struct amdgpu_atombios_dp_link_train_info *dp_i
+ 	else
+ 		amdgpu_atombios_dp_set_tp(dp_info, DP_TRAINING_PATTERN_2);
+ 
++	if (dp_info->skip_status_check)
++		return 0;
++
+ 	/* channel equalization loop */
+ 	dp_info->tries = 0;
+ 	channel_eq = false;
+@@ -772,6 +780,9 @@ void amdgpu_atombios_dp_link_train(struct drm_encoder *encoder,
+ 	dp_info.dp_lane_count = dig_connector->dp_lane_count;
+ 	dp_info.dp_clock = dig_connector->dp_clock;
+ 	dp_info.aux = &amdgpu_connector->ddc_bus->aux;
++	dp_info.skip_status_check = adev->asic_type == CHIP_LIVERPOOL &&
++				    adev->pdev->device != 0x9920 &&
++				    !ps4_is_baikal();
+ 
+ 	if (amdgpu_atombios_dp_link_train_init(&dp_info))
+ 		goto done;

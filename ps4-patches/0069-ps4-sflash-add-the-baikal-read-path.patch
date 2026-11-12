@@ -1,0 +1,401 @@
+From a2cfac0343affce4184f4c6d887add69a2e7e461 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Fri, 6 Nov 2026 19:20:47 +0100
+Subject: [PATCH 069/124] ps4: sflash: add the baikal read path
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/ps4/ps4-sflash.c | 244 ++++++++++++++++++++++++++++++++++-----
+ drivers/ps4/ps4-sflash.h |  25 ++++
+ 2 files changed, 237 insertions(+), 32 deletions(-)
+
+diff --git a/drivers/ps4/ps4-sflash.c b/drivers/ps4/ps4-sflash.c
+index a878d2fafccdc377023dad07c5c88c2af81bc591..c96d4d29b125b690115797a7210ba3397fe46ff0 100644
+--- a/drivers/ps4/ps4-sflash.c
++++ b/drivers/ps4/ps4-sflash.c
+@@ -8,6 +8,8 @@
+ #include <linux/pci.h>
+ #include <linux/io.h>
+ #include <linux/delay.h>
++#include <linux/iopoll.h>
++#include <linux/sched.h>
+ #include <linux/fs.h>
+ #include <linux/miscdevice.h>
+ #include <linux/uaccess.h>
+@@ -17,8 +19,20 @@
+ 
+ #include "ps4-sflash.h"
+ 
++struct ps4_sflash_dev;
++
++struct ps4_sflash_chip {
++	const char *name;
++	int (*setup)(struct ps4_sflash_dev *dev);
++	u32 (*read_jedec)(struct ps4_sflash_dev *dev);
++	u32 (*read_status)(struct ps4_sflash_dev *dev);
++	ssize_t (*read_block)(struct ps4_sflash_dev *dev, u32 flash_addr,
++			      u8 *out_buf, size_t flash_len);
++};
++
+ struct ps4_sflash_dev {
+ 	struct pci_dev *pdev;
++	const struct ps4_sflash_chip *chip;
+ 	void __iomem *bar4;
+ 	void __iomem *sflash_regs;
+ 	void __iomem *clk_regs;
+@@ -31,13 +45,6 @@ struct ps4_sflash_dev {
+ 
+ static struct ps4_sflash_dev *g_ps4_sflash;
+ 
+-static const u16 ps4_sflash_pci_ids[] = {
+-	0x90a1,
+-	0x90b8,
+-	0x90c4,
+-	0x90d4,
+-};
+-
+ static inline u32 sflash_read32(struct ps4_sflash_dev *dev, u32 reg)
+ {
+ 	return ioread32(dev->sflash_regs + reg);
+@@ -165,6 +172,186 @@ static ssize_t ps4_sflash_read_block(struct ps4_sflash_dev *dev, u32 flash_addr,
+ 	return flash_len;
+ }
+ 
++static int ps4_sflash_aeolia_setup(struct ps4_sflash_dev *dev)
++{
++	dev->sflash_regs = dev->bar4 + 0xc2000;
++	dev->clk_regs = dev->bar4 + 0xc3000;
++
++	dma_set_mask_and_coherent(&dev->pdev->dev, DMA_BIT_MASK(32));
++	dev->dma_vaddr = dma_alloc_coherent(&dev->pdev->dev, PS4_SFLASH_CHUNK_DMA,
++					    &dev->dma_paddr, GFP_KERNEL);
++	if (!dev->dma_vaddr) {
++		pr_err("failed to allocate DMA bounce buffer\n");
++		return -ENOMEM;
++	}
++	return 0;
++}
++
++static int ps4_sflash_baikal_claim(struct ps4_sflash_dev *dev)
++{
++	u32 val;
++	int ret;
++
++	sflash_write32(dev, PS4_SFLASH_BK_CLAIM, 1);
++	ret = read_poll_timeout(ioread32, val, (val & 7) == 4, 10,
++				PS4_SFLASH_BK_TIMEOUT_US, false,
++				dev->sflash_regs + PS4_SFLASH_BK_CLAIM_STATUS);
++	if (ret) {
++		sflash_write32(dev, PS4_SFLASH_BK_CLAIM, 0);
++		return ret;
++	}
++	return 0;
++}
++
++static void ps4_sflash_baikal_release(struct ps4_sflash_dev *dev)
++{
++	u32 val;
++
++	sflash_write32(dev, PS4_SFLASH_BK_CLAIM, 0);
++	if (read_poll_timeout(ioread32, val, !(val & 4), 10,
++			      PS4_SFLASH_BK_TIMEOUT_US, false,
++			      dev->sflash_regs + PS4_SFLASH_BK_CLAIM_STATUS))
++		pr_warn_ratelimited("release timed out, status %08x\n", val);
++}
++
++static int ps4_sflash_baikal_xfer(struct ps4_sflash_dev *dev, u8 opcode,
++				  u32 addr, unsigned int addr_len,
++				  u8 *rx, unsigned int rx_len)
++{
++	unsigned int i;
++	u32 val;
++	int ret;
++
++	sflash_write32(dev, PS4_SFLASH_BK_OPCODE, opcode);
++	for (i = 0; i < PS4_SFLASH_BK_ADDR_LEN; i++)
++		sflash_write32(dev, PS4_SFLASH_BK_ADDR - i * 4,
++			       addr_len ? (addr >> (24 - i * 8)) & 0xff : 0);
++	sflash_write32(dev, PS4_SFLASH_BK_BITS, (1 + addr_len + rx_len) * 8);
++	sflash_write32(dev, PS4_SFLASH_BK_CTRL, PS4_SFLASH_BK_CTRL_START);
++
++	ret = read_poll_timeout(ioread32, val, !(val & PS4_SFLASH_BK_CTRL_START),
++				0, PS4_SFLASH_BK_TIMEOUT_US, false,
++				dev->sflash_regs + PS4_SFLASH_BK_CTRL);
++	if (!ret)
++		for (i = 0; i < rx_len; i++)
++			rx[i] = sflash_read32(dev, PS4_SFLASH_BK_RX + i * 4);
++
++	sflash_write32(dev, PS4_SFLASH_BK_CTRL, 0);
++	return ret;
++}
++
++static int ps4_sflash_baikal_command(struct ps4_sflash_dev *dev, u8 opcode,
++				     u8 *rx, unsigned int rx_len)
++{
++	int ret;
++
++	ret = ps4_sflash_baikal_claim(dev);
++	if (ret)
++		return ret;
++
++	ret = ps4_sflash_baikal_xfer(dev, opcode, 0, 0, rx, rx_len);
++	ps4_sflash_baikal_release(dev);
++	return ret;
++}
++
++static u32 ps4_sflash_baikal_read_jedec(struct ps4_sflash_dev *dev)
++{
++	u8 rx[3];
++
++	if (ps4_sflash_baikal_command(dev, PS4_SFLASH_BK_OP_RDID, rx, sizeof(rx)))
++		return ~0u;
++	return rx[0] | rx[1] << 8 | rx[2] << 16;
++}
++
++static u32 ps4_sflash_baikal_read_status(struct ps4_sflash_dev *dev)
++{
++	u8 rx;
++
++	if (ps4_sflash_baikal_command(dev, PS4_SFLASH_BK_OP_RDSR, &rx, 1))
++		return ~0u;
++	return rx;
++}
++
++static ssize_t ps4_sflash_baikal_read_block(struct ps4_sflash_dev *dev,
++					    u32 flash_addr, u8 *out_buf,
++					    size_t flash_len)
++{
++	size_t i;
++	int ret;
++
++	ret = ps4_sflash_baikal_claim(dev);
++	if (ret)
++		return ret;
++
++	for (i = 0; i < flash_len; i++) {
++		ret = ps4_sflash_baikal_xfer(dev, PS4_SFLASH_BK_OP_READ4B,
++					     flash_addr + i, 4, &out_buf[i], 1);
++		if (ret)
++			break;
++		cond_resched();
++	}
++
++	ps4_sflash_baikal_release(dev);
++	return ret ? ret : flash_len;
++}
++
++static int ps4_sflash_baikal_setup(struct ps4_sflash_dev *dev)
++{
++	u32 val;
++	int ret;
++
++	dev->sflash_regs = dev->bar4;
++
++	ret = ps4_sflash_baikal_claim(dev);
++	if (ret) {
++		pr_err("controller claim timed out\n");
++		return ret;
++	}
++
++	sflash_write32(dev, PS4_SFLASH_BK_UNLOCK, 1);
++	val = sflash_read32(dev, PS4_SFLASH_BK_PINS);
++	sflash_write32(dev, PS4_SFLASH_BK_PINS, val & ~PS4_SFLASH_BK_PINS_CLEAR);
++	sflash_write32(dev, PS4_SFLASH_BK_UNLOCK, 0);
++
++	sflash_write32(dev, PS4_SFLASH_BK_IRQ_STATUS, 0xff);
++	sflash_write32(dev, PS4_SFLASH_BK_DMA_IRQ_STATUS, 0);
++	sflash_write32(dev, PS4_SFLASH_BK_IRQ_MASK, 0);
++	sflash_write32(dev, PS4_SFLASH_BK_DMA_IRQ_MASK, 0);
++	sflash_write32(dev, PS4_SFLASH_BK_TIMING, 0x30);
++	sflash_write32(dev, PS4_SFLASH_BK_CFG,
++		       sflash_read32(dev, PS4_SFLASH_BK_CFG) | PS4_SFLASH_BK_CFG_ENABLE);
++
++	ps4_sflash_baikal_release(dev);
++	return 0;
++}
++
++static const struct ps4_sflash_chip ps4_sflash_aeolia = {
++	.name		= "Aeolia",
++	.setup		= ps4_sflash_aeolia_setup,
++	.read_jedec	= ps4_sflash_read_jedec,
++	.read_status	= ps4_sflash_read_status,
++	.read_block	= ps4_sflash_read_block,
++};
++
++static const struct ps4_sflash_chip ps4_sflash_baikal = {
++	.name		= "Baikal",
++	.setup		= ps4_sflash_baikal_setup,
++	.read_jedec	= ps4_sflash_baikal_read_jedec,
++	.read_status	= ps4_sflash_baikal_read_status,
++	.read_block	= ps4_sflash_baikal_read_block,
++};
++
++static const struct {
++	u16 device;
++	const struct ps4_sflash_chip *chip;
++} ps4_sflash_pci_ids[] = {
++	{ 0x90a1, &ps4_sflash_aeolia },
++	{ 0x90b8, &ps4_sflash_aeolia },
++	{ 0x90c4, &ps4_sflash_aeolia },
++	{ 0x90d4, &ps4_sflash_aeolia },
++	{ PCI_DEVICE_ID_SONY_BAIKAL_PCIE, &ps4_sflash_baikal },
++};
++
+ static ssize_t ps4_sflash_read(struct file *file, char __user *buf,
+ 			       size_t count, loff_t *ppos)
+ {
+@@ -192,7 +379,7 @@ static ssize_t ps4_sflash_read(struct file *file, char __user *buf,
+ 		if (to_copy > count)
+ 			to_copy = count;
+ 
+-		ret = ps4_sflash_read_block(dev, chunk_flash_off, dev->dec_buf,
++		ret = dev->chip->read_block(dev, chunk_flash_off, dev->dec_buf,
+ 					    PS4_SFLASH_CHUNK_FLASH);
+ 		if (ret < 0)
+ 			break;
+@@ -235,12 +422,12 @@ static long ps4_sflash_ioctl(struct file *file, unsigned int cmd, unsigned long
+ 			ret = -EFAULT;
+ 		break;
+ 	case PS4_SFLASH_IOC_GET_JEDEC:
+-		val = ps4_sflash_read_jedec(dev);
++		val = dev->chip->read_jedec(dev);
+ 		if (copy_to_user((void __user *)arg, &val, sizeof(val)))
+ 			ret = -EFAULT;
+ 		break;
+ 	case PS4_SFLASH_IOC_GET_STATUS:
+-		val = ps4_sflash_read_status(dev);
++		val = dev->chip->read_status(dev);
+ 		if (copy_to_user((void __user *)arg, &val, sizeof(val)))
+ 			ret = -EFAULT;
+ 		break;
+@@ -268,16 +455,14 @@ static int __init ps4_sflash_init(void)
+ 	u32 jedec;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(ps4_sflash_pci_ids); i++) {
+-		pdev = pci_get_device(PCI_VENDOR_ID_SONY, ps4_sflash_pci_ids[i], NULL);
++		pdev = pci_get_device(PCI_VENDOR_ID_SONY,
++				      ps4_sflash_pci_ids[i].device, NULL);
+ 		if (pdev)
+ 			break;
+ 	}
+ 
+-	if (!pdev) {
+-		pdev = pci_get_device(0x104d, 0x90a1, NULL);
+-		if (!pdev)
+-			return -ENODEV;
+-	}
++	if (!pdev)
++		return -ENODEV;
+ 
+ 	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
+ 	if (!dev) {
+@@ -286,32 +471,25 @@ static int __init ps4_sflash_init(void)
+ 	}
+ 
+ 	dev->pdev = pdev;
++	dev->chip = ps4_sflash_pci_ids[i].chip;
+ 	mutex_init(&dev->lock);
+ 
+ 	dev->bar4 = pci_iomap(pdev, 4, 0x200000);
+ 	if (!dev->bar4) {
+-		pr_err("failed to map Aeolia Southbridge BAR4\n");
++		pr_err("failed to map southbridge BAR4\n");
+ 		ret = -ENOMEM;
+ 		goto err_free;
+ 	}
+ 
+-	dev->sflash_regs = dev->bar4 + 0xc2000;
+-	dev->clk_regs = dev->bar4 + 0xc3000;
+-
+ 	dev->dec_buf = kmalloc(PS4_SFLASH_CHUNK_FLASH, GFP_KERNEL);
+ 	if (!dev->dec_buf) {
+ 		ret = -ENOMEM;
+ 		goto err_unmap;
+ 	}
+ 
+-	dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+-	dev->dma_vaddr = dma_alloc_coherent(&pdev->dev, PS4_SFLASH_CHUNK_DMA,
+-					    &dev->dma_paddr, GFP_KERNEL);
+-	if (!dev->dma_vaddr) {
+-		pr_err("failed to allocate DMA bounce buffer\n");
+-		ret = -ENOMEM;
++	ret = dev->chip->setup(dev);
++	if (ret)
+ 		goto err_free_dec;
+-	}
+ 
+ 	dev->misc.minor = MISC_DYNAMIC_MINOR;
+ 	dev->misc.name  = "ps4sflash";
+@@ -323,15 +501,16 @@ static int __init ps4_sflash_init(void)
+ 	}
+ 
+ 	g_ps4_sflash = dev;
+-	jedec = ps4_sflash_read_jedec(dev);
++	jedec = dev->chip->read_jedec(dev);
+ 
+-	pr_info("Aeolia Southbridge SPI NOR flash driver initialized\n");
++	pr_info("%s Southbridge SPI NOR flash driver initialized\n", dev->chip->name);
+ 	pr_info("JEDEC ID: 0x%08x, Size: 32MB\n", jedec);
+ 	pr_info("Userspace device registered (/dev/ps4sflash)\n");
+ 	return 0;
+ 
+ err_free_dma:
+-	dma_free_coherent(&pdev->dev, PS4_SFLASH_CHUNK_DMA, dev->dma_vaddr, dev->dma_paddr);
++	if (dev->dma_vaddr)
++		dma_free_coherent(&pdev->dev, PS4_SFLASH_CHUNK_DMA, dev->dma_vaddr, dev->dma_paddr);
+ err_free_dec:
+ 	kfree(dev->dec_buf);
+ err_unmap:
+@@ -350,7 +529,8 @@ static void __exit ps4_sflash_exit(void)
+ 		return;
+ 
+ 	misc_deregister(&dev->misc);
+-	dma_free_coherent(&dev->pdev->dev, PS4_SFLASH_CHUNK_DMA, dev->dma_vaddr, dev->dma_paddr);
++	if (dev->dma_vaddr)
++		dma_free_coherent(&dev->pdev->dev, PS4_SFLASH_CHUNK_DMA, dev->dma_vaddr, dev->dma_paddr);
+ 	kfree(dev->dec_buf);
+ 	pci_iounmap(dev->pdev, dev->bar4);
+ 	pci_dev_put(dev->pdev);
+@@ -362,5 +542,5 @@ module_init(ps4_sflash_init);
+ module_exit(ps4_sflash_exit);
+ 
+ MODULE_AUTHOR("Armandas Kvietkus <armandas.kvietkus@proton.me>");
+-MODULE_DESCRIPTION("PS4 Aeolia Southbridge Hardware SPI NOR Flash Driver");
++MODULE_DESCRIPTION("PS4 Southbridge Hardware SPI NOR Flash Driver");
+ MODULE_LICENSE("GPL");
+diff --git a/drivers/ps4/ps4-sflash.h b/drivers/ps4/ps4-sflash.h
+index e7babfb07b595877f0a80a3636135709a4911945..cb511445a713327869fd7d4337071dc5d16ecc9d 100644
+--- a/drivers/ps4/ps4-sflash.h
++++ b/drivers/ps4/ps4-sflash.h
+@@ -26,6 +26,31 @@
+ #define PS4_SFLASH_REG_CLK_STATUS   0x01000
+ #define PS4_SFLASH_REG_CLK_CTRL     0x01004
+ 
++#define PS4_SFLASH_BK_CTRL          0x01000
++#define PS4_SFLASH_BK_CTRL_START    0x4
++#define PS4_SFLASH_BK_BITS          0x01004
++#define PS4_SFLASH_BK_ADDR          0x01030
++#define PS4_SFLASH_BK_ADDR_LEN      4
++#define PS4_SFLASH_BK_OPCODE        0x01034
++#define PS4_SFLASH_BK_RX            0x01038
++#define PS4_SFLASH_BK_IRQ_STATUS    0x010a8
++#define PS4_SFLASH_BK_IRQ_MASK      0x010ac
++#define PS4_SFLASH_BK_CFG           0x010b0
++#define PS4_SFLASH_BK_CFG_ENABLE    0x100
++#define PS4_SFLASH_BK_TIMING        0x010c4
++#define PS4_SFLASH_BK_DMA_IRQ_STATUS 0x01800
++#define PS4_SFLASH_BK_DMA_IRQ_MASK  0x01804
++#define PS4_SFLASH_BK_UNLOCK        0x04010
++#define PS4_SFLASH_BK_CLAIM_STATUS  0x0b000
++#define PS4_SFLASH_BK_CLAIM         0x0b004
++#define PS4_SFLASH_BK_PINS          0xeb420
++#define PS4_SFLASH_BK_PINS_CLEAR    0x11u
++#define PS4_SFLASH_BK_TIMEOUT_US    200000
++
++#define PS4_SFLASH_BK_OP_RDSR       0x05
++#define PS4_SFLASH_BK_OP_READ4B     0x13
++#define PS4_SFLASH_BK_OP_RDID       0x9f
++
+ #define PS4_SFLASH_IOC_MAGIC        'S'
+ #define PS4_SFLASH_IOC_GET_SIZE     _IOR(PS4_SFLASH_IOC_MAGIC, 1, __u32)
+ #define PS4_SFLASH_IOC_GET_JEDEC    _IOR(PS4_SFLASH_IOC_MAGIC, 2, __u32)

@@ -1,0 +1,775 @@
+From 282700737b51eaa63fe874c53f03c394f0ffdf79 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Fri, 6 Nov 2026 18:20:19 +0100
+Subject: [PATCH 064/124] ps4: add the aeolia and belize rtc and spi flash
+ drivers
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/ps4/Makefile     |   2 +
+ drivers/ps4/ps4-rtc.c    | 278 +++++++++++++++++++++++++++++
+ drivers/ps4/ps4-rtc.h    |  41 +++++
+ drivers/ps4/ps4-sflash.c | 366 +++++++++++++++++++++++++++++++++++++++
+ drivers/ps4/ps4-sflash.h |  34 ++++
+ 5 files changed, 721 insertions(+)
+ create mode 100644 drivers/ps4/ps4-rtc.c
+ create mode 100644 drivers/ps4/ps4-rtc.h
+ create mode 100644 drivers/ps4/ps4-sflash.c
+ create mode 100644 drivers/ps4/ps4-sflash.h
+
+diff --git a/drivers/ps4/Makefile b/drivers/ps4/Makefile
+index a82ed762d756e4a3952f67dd9dad35412a4c7183..63603c56181e7699214792930d20208445fe4d66 100644
+--- a/drivers/ps4/Makefile
++++ b/drivers/ps4/Makefile
+@@ -16,5 +16,7 @@ endif
+ obj-y += ps4-led.o
+ obj-y += ps4-fan.o
+ obj-y += ps4-buzzer.o
++obj-$(CONFIG_RTC_CLASS) += ps4-rtc.o
++obj-y += ps4-sflash.o
+ obj-$(CONFIG_PS4_TRNG) += ps4-trng.o
+ obj-$(CONFIG_PS4_CCP) += ps4-ccp.o
+\ No newline at end of file
+diff --git a/drivers/ps4/ps4-rtc.c b/drivers/ps4/ps4-rtc.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..9275d485b4aa90bf56ee438e7d7e02bf61d3053f
+--- /dev/null
++++ b/drivers/ps4/ps4-rtc.c
+@@ -0,0 +1,278 @@
++// SPDX-License-Identifier: GPL-2.0-only
++
++#define pr_fmt(fmt) "ps4-rtc: " fmt
++
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/pci.h>
++#include <linux/io.h>
++#include <linux/delay.h>
++#include <linux/fs.h>
++#include <linux/miscdevice.h>
++#include <linux/uaccess.h>
++#include <linux/rtc.h>
++
++#include "ps4-rtc.h"
++
++#define PS4_RTC_MAX_RETRIES         10
++#define PS4_RTC_STABILIZE_US        100
++
++static unsigned long long rtc_offset = 1431543102ULL;
++module_param(rtc_offset, ullong, 0644);
++
++struct ps4_rtc_dev {
++	struct pci_dev *pdev;
++	void __iomem *mmio;
++	struct miscdevice misc;
++	struct rtc_device *rtc_dev;
++};
++
++static struct ps4_rtc_dev *g_ps4_rtc;
++
++static u32 ps4_rtc_read_raw_unprotected(void __iomem *mmio)
++{
++	u32 b0 = ioread32(mmio + PS4_RTC_REG_B0) & 0xff;
++	u32 b1 = ioread32(mmio + PS4_RTC_REG_B1) & 0xff;
++	u32 b2 = ioread32(mmio + PS4_RTC_REG_B2) & 0xff;
++	u32 b3 = ioread32(mmio + PS4_RTC_REG_B3) & 0xff;
++
++	return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
++}
++
++static u32 ps4_rtc_read_stable(void __iomem *mmio)
++{
++	u32 val1, val2;
++	int retry;
++
++	for (retry = 0; retry < PS4_RTC_MAX_RETRIES; retry++) {
++		val1 = ps4_rtc_read_raw_unprotected(mmio);
++		udelay(PS4_RTC_STABILIZE_US);
++		val2 = ps4_rtc_read_raw_unprotected(mmio);
++
++		if (val1 == val2)
++			return val1;
++	}
++
++	pr_warn_ratelimited("read instability: %08x != %08x\n", val1, val2);
++	return val2;
++}
++
++u32 ps4_rtc_get_raw_ticks(void)
++{
++	if (!g_ps4_rtc || !g_ps4_rtc->mmio)
++		return 0;
++
++	return ps4_rtc_read_stable(g_ps4_rtc->mmio);
++}
++EXPORT_SYMBOL_GPL(ps4_rtc_get_raw_ticks);
++
++u64 ps4_rtc_get_time(void)
++{
++	u32 ticks = ps4_rtc_get_raw_ticks();
++
++	if (!ticks)
++		return 0;
++
++	return (u64)((int64_t)ticks - rtc_offset);
++}
++EXPORT_SYMBOL_GPL(ps4_rtc_get_time);
++
++static int ps4_rtc_read_time(struct device *dev, struct rtc_time *tm)
++{
++	struct ps4_rtc_dev *rtc = g_ps4_rtc;
++	u32 raw;
++	time64_t t;
++
++	if (!rtc || !rtc->mmio)
++		return -ENODEV;
++
++	raw = ps4_rtc_read_stable(rtc->mmio);
++	t = (time64_t)raw - rtc_offset;
++	rtc_time64_to_tm(t, tm);
++	return 0;
++}
++
++static int ps4_rtc_set_time(struct device *dev, struct rtc_time *tm)
++{
++	struct ps4_rtc_dev *rtc = g_ps4_rtc;
++	u32 raw;
++	time64_t t;
++
++	if (!rtc || !rtc->mmio)
++		return -ENODEV;
++
++	raw = ps4_rtc_read_stable(rtc->mmio);
++	t = rtc_tm_to_time64(tm);
++	rtc_offset = (unsigned long long)((int64_t)raw - t);
++	return 0;
++}
++
++static const struct rtc_class_ops ps4_rtc_ops = {
++	.read_time = ps4_rtc_read_time,
++	.set_time  = ps4_rtc_set_time,
++};
++
++static ssize_t ps4_rtc_dev_read(struct file *filp, char __user *ubuf, size_t count, loff_t *ppos)
++{
++	struct ps4_rtc_dev *rtc = filp->private_data;
++	char buf[32];
++	u32 ticks;
++	int len;
++
++	if (*ppos > 0)
++		return 0;
++
++	ticks = ps4_rtc_read_stable(rtc->mmio);
++	len = scnprintf(buf, sizeof(buf), "%u\n", ticks);
++
++	if (copy_to_user(ubuf, buf, len))
++		return -EFAULT;
++
++	*ppos += len;
++	return len;
++}
++
++static long ps4_rtc_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
++{
++	struct ps4_rtc_dev *rtc = filp->private_data;
++	u32 ticks;
++	u64 t;
++
++	switch (cmd) {
++	case PS4_RTC_IOC_GET_TICKS:
++		ticks = ps4_rtc_read_stable(rtc->mmio);
++		if (copy_to_user((u32 __user *)arg, &ticks, sizeof(ticks)))
++			return -EFAULT;
++		return 0;
++	case PS4_RTC_IOC_GET_TIME:
++		ticks = ps4_rtc_read_stable(rtc->mmio);
++		t = (u64)((int64_t)ticks - rtc_offset);
++		if (copy_to_user((u64 __user *)arg, &t, sizeof(t)))
++			return -EFAULT;
++		return 0;
++	default:
++		return -ENOTTY;
++	}
++}
++
++static int ps4_rtc_dev_open(struct inode *inode, struct file *filp)
++{
++	if (!g_ps4_rtc)
++		return -ENODEV;
++
++	filp->private_data = g_ps4_rtc;
++	return 0;
++}
++
++static const struct file_operations ps4_rtc_fops = {
++	.owner          = THIS_MODULE,
++	.open           = ps4_rtc_dev_open,
++	.read           = ps4_rtc_dev_read,
++	.unlocked_ioctl = ps4_rtc_dev_ioctl,
++	.llseek         = noop_llseek,
++};
++
++static const struct {
++	u16 device;
++	const char *name;
++} ps4_rtc_sb_devices[] = {
++	{ PS4_AEOLIA_PCI_DEV_MISC_0, "Aeolia" },
++	{ PS4_BELIZE_PCI_DEV_MISC_0, "Belize" },
++	{ PS4_AEOLIA_PCI_DEV_MISC_2, "Aeolia" },
++	{ PS4_BELIZE_PCI_DEV_MISC_2, "Belize" },
++	{ PS4_AEOLIA_PCI_DEV_MISC_1, "Aeolia" },
++};
++
++static int __init ps4_rtc_init(void)
++{
++	struct ps4_rtc_dev *rtc;
++	struct pci_dev *pdev = NULL;
++	const char *sb_name = "unknown";
++	u32 initial_ticks;
++	int ret, i;
++
++	for (i = 0; i < ARRAY_SIZE(ps4_rtc_sb_devices); i++) {
++		pdev = pci_get_device(PS4_AEOLIA_VENDOR_ID, ps4_rtc_sb_devices[i].device, NULL);
++		if (pdev) {
++			sb_name = ps4_rtc_sb_devices[i].name;
++			break;
++		}
++	}
++
++	if (!pdev) {
++		pr_err("Southbridge device not found\n");
++		return -ENODEV;
++	}
++
++	rtc = kzalloc(sizeof(*rtc), GFP_KERNEL);
++	if (!rtc) {
++		pci_dev_put(pdev);
++		return -ENOMEM;
++	}
++
++	rtc->pdev = pdev;
++	rtc->mmio = pci_iomap(pdev, 2, 0x1000);
++	if (!rtc->mmio) {
++		pr_err("failed to map %s Southbridge BAR2\n", sb_name);
++		ret = -ENOMEM;
++		goto err_free;
++	}
++
++	rtc->misc.minor = MISC_DYNAMIC_MINOR;
++	rtc->misc.name  = "ps4rtc";
++	rtc->misc.fops  = &ps4_rtc_fops;
++	ret = misc_register(&rtc->misc);
++	if (ret) {
++		pr_err("failed to register misc device\n");
++		goto err_unmap;
++	}
++
++	g_ps4_rtc = rtc;
++
++	rtc->rtc_dev = devm_rtc_allocate_device(&pdev->dev);
++	if (!IS_ERR(rtc->rtc_dev)) {
++		rtc->rtc_dev->ops = &ps4_rtc_ops;
++		ret = devm_rtc_register_device(rtc->rtc_dev);
++		if (ret)
++			pr_warn("failed to register with Linux RTC core: %d\n", ret);
++	}
++
++	initial_ticks = ps4_rtc_read_stable(rtc->mmio);
++
++	pr_info("%s Southbridge hardware RTC initialized (PCI %04x:%04x)\n",
++		sb_name, pdev->vendor, pdev->device);
++	pr_info("Current hardware RTC raw ticks: %u (0x%08x)\n",
++		initial_ticks, initial_ticks);
++	pr_info("Userspace character device registered (/dev/ps4rtc)\n");
++	return 0;
++
++err_unmap:
++	g_ps4_rtc = NULL;
++	pci_iounmap(pdev, rtc->mmio);
++err_free:
++	pci_dev_put(pdev);
++	kfree(rtc);
++	return ret;
++}
++
++static void __exit ps4_rtc_exit(void)
++{
++	struct ps4_rtc_dev *rtc = g_ps4_rtc;
++
++	if (!rtc)
++		return;
++
++	misc_deregister(&rtc->misc);
++	pci_iounmap(rtc->pdev, rtc->mmio);
++	pci_dev_put(rtc->pdev);
++	kfree(rtc);
++	g_ps4_rtc = NULL;
++}
++
++module_init(ps4_rtc_init);
++module_exit(ps4_rtc_exit);
++
++MODULE_AUTHOR("Armandas Kvietkus <armandas.kvietkus@proton.me>");
++MODULE_DESCRIPTION("PS4 Aeolia/Belize Southbridge Hardware Real-Time Clock Driver");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/ps4/ps4-rtc.h b/drivers/ps4/ps4-rtc.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..6a3bb42c34f0729232580f9893ed176d9359a16c
+--- /dev/null
++++ b/drivers/ps4/ps4-rtc.h
+@@ -0,0 +1,41 @@
++// SPDX-License-Identifier: GPL-2.0-only
++
++#ifndef _PS4_RTC_H
++#define _PS4_RTC_H
++
++#include <linux/types.h>
++#include <linux/ioctl.h>
++#include <linux/pci_ids.h>
++
++#define PS4_AEOLIA_VENDOR_ID        PCI_VENDOR_ID_SONY
++#define PS4_AEOLIA_PCI_DEV_MISC_0   PCI_DEVICE_ID_SONY_AEOLIA_PCIE
++#define PS4_AEOLIA_PCI_DEV_MISC_1   0x9090
++#define PS4_AEOLIA_PCI_DEV_MISC_2   PCI_DEVICE_ID_SONY_AEOLIA_SDHCI
++
++#define PS4_BELIZE_VENDOR_ID        PCI_VENDOR_ID_SONY
++#define PS4_BELIZE_PCI_DEV_MISC_0   PCI_DEVICE_ID_SONY_BELIZE_PCIE
++#define PS4_BELIZE_PCI_DEV_MISC_2   PCI_DEVICE_ID_SONY_BELIZE_SDHCI
++
++#define PS4_RTC_REG_B0              0x130
++#define PS4_RTC_REG_B1              0x134
++#define PS4_RTC_REG_B2              0x138
++#define PS4_RTC_REG_B3              0x13c
++
++#define PS4_AEOLIA_RTC_REG_B0       PS4_RTC_REG_B0
++#define PS4_AEOLIA_RTC_REG_B1       PS4_RTC_REG_B1
++#define PS4_AEOLIA_RTC_REG_B2       PS4_RTC_REG_B2
++#define PS4_AEOLIA_RTC_REG_B3       PS4_RTC_REG_B3
++
++#define PS4_BELIZE_RTC_REG_B0       PS4_RTC_REG_B0
++#define PS4_BELIZE_RTC_REG_B1       PS4_RTC_REG_B1
++#define PS4_BELIZE_RTC_REG_B2       PS4_RTC_REG_B2
++#define PS4_BELIZE_RTC_REG_B3       PS4_RTC_REG_B3
++
++#define PS4_RTC_IOC_MAGIC           'R'
++#define PS4_RTC_IOC_GET_TICKS       _IOR(PS4_RTC_IOC_MAGIC, 1, __u32)
++#define PS4_RTC_IOC_GET_TIME        _IOR(PS4_RTC_IOC_MAGIC, 2, __u64)
++
++u32 ps4_rtc_get_raw_ticks(void);
++u64 ps4_rtc_get_time(void);
++
++#endif
+diff --git a/drivers/ps4/ps4-sflash.c b/drivers/ps4/ps4-sflash.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..a878d2fafccdc377023dad07c5c88c2af81bc591
+--- /dev/null
++++ b/drivers/ps4/ps4-sflash.c
+@@ -0,0 +1,366 @@
++// SPDX-License-Identifier: GPL-2.0-only
++
++#define pr_fmt(fmt) "ps4-sflash: " fmt
++
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/pci.h>
++#include <linux/io.h>
++#include <linux/delay.h>
++#include <linux/fs.h>
++#include <linux/miscdevice.h>
++#include <linux/uaccess.h>
++#include <linux/mutex.h>
++#include <linux/dma-mapping.h>
++#include <linux/slab.h>
++
++#include "ps4-sflash.h"
++
++struct ps4_sflash_dev {
++	struct pci_dev *pdev;
++	void __iomem *bar4;
++	void __iomem *sflash_regs;
++	void __iomem *clk_regs;
++	struct miscdevice misc;
++	struct mutex lock;
++	u8 *dma_vaddr;
++	dma_addr_t dma_paddr;
++	u8 *dec_buf;
++};
++
++static struct ps4_sflash_dev *g_ps4_sflash;
++
++static const u16 ps4_sflash_pci_ids[] = {
++	0x90a1,
++	0x90b8,
++	0x90c4,
++	0x90d4,
++};
++
++static inline u32 sflash_read32(struct ps4_sflash_dev *dev, u32 reg)
++{
++	return ioread32(dev->sflash_regs + reg);
++}
++
++static inline void sflash_write32(struct ps4_sflash_dev *dev, u32 reg, u32 val)
++{
++	iowrite32(val, dev->sflash_regs + reg);
++}
++
++static inline u32 sflash_clk_read32(struct ps4_sflash_dev *dev, u32 reg)
++{
++	return ioread32(dev->clk_regs + reg);
++}
++
++static inline void sflash_clk_write32(struct ps4_sflash_dev *dev, u32 reg, u32 val)
++{
++	iowrite32(val, dev->clk_regs + reg);
++}
++
++static int ps4_sflash_clk_enable(struct ps4_sflash_dev *dev)
++{
++	int timeout = 1000;
++
++	sflash_clk_write32(dev, 0x4, 1);
++	while (timeout--) {
++		if ((sflash_clk_read32(dev, 0x0) & 7) == 4)
++			return 0;
++		usleep_range(50, 100);
++	}
++	return -ETIMEDOUT;
++}
++
++static int ps4_sflash_wait_idle(struct ps4_sflash_dev *dev)
++{
++	int timeout = 10000;
++
++	while (timeout--) {
++		if ((sflash_read32(dev, PS4_SFLASH_REG_STATUS) & 1) == 0)
++			return 0;
++		udelay(10);
++	}
++	return -ETIMEDOUT;
++}
++
++static int ps4_sflash_wait_dma(struct ps4_sflash_dev *dev)
++{
++	int timeout = 10000;
++
++	while (timeout--) {
++		if ((sflash_read32(dev, PS4_SFLASH_REG_CMD) & 0x80000000) == 0)
++			return 0;
++		udelay(10);
++	}
++	return -ETIMEDOUT;
++}
++
++static u32 ps4_sflash_read_jedec(struct ps4_sflash_dev *dev)
++{
++	ps4_sflash_clk_enable(dev);
++	sflash_write32(dev, PS4_SFLASH_REG_CMD, 0x8010009f);
++	ps4_sflash_wait_idle(dev);
++	return sflash_read32(dev, PS4_SFLASH_REG_RDID);
++}
++
++static u32 ps4_sflash_read_status(struct ps4_sflash_dev *dev)
++{
++	ps4_sflash_clk_enable(dev);
++	sflash_write32(dev, PS4_SFLASH_REG_CMD, 0x80000005);
++	ps4_sflash_wait_idle(dev);
++	return (sflash_read32(dev, PS4_SFLASH_REG_STATUS) >> 16) & 0xff;
++}
++
++static void ps4_sflash_unpack_chunk(const u8 *raw, u8 *dec, size_t raw_len)
++{
++	size_t i;
++
++	for (i = 0; i < raw_len; i += 4) {
++		u8 b0 = raw[i];
++		u8 b1 = raw[i + 1];
++		u8 b2 = raw[i + 2];
++		u8 b3 = raw[i + 3];
++
++		dec[i / 4] = ((b0 & 0x20) << 2) |
++			     ((b0 & 0x02) << 5) |
++			     ((b1 & 0x20) << 0) |
++			     ((b1 & 0x02) << 3) |
++			     ((b2 & 0x20) >> 2) |
++			     ((b2 & 0x02) << 1) |
++			     ((b3 & 0x20) >> 4) |
++			     ((b3 & 0x02) >> 1);
++	}
++}
++
++static ssize_t ps4_sflash_read_block(struct ps4_sflash_dev *dev, u32 flash_addr,
++				     u8 *out_buf, size_t flash_len)
++{
++	size_t dma_len = flash_len * 4;
++	u32 ctrl_addr = (flash_addr - 1) & 0xffffffff;
++	int ret;
++
++	if (dma_len > PS4_SFLASH_CHUNK_DMA)
++		return -EINVAL;
++
++	ret = ps4_sflash_clk_enable(dev);
++	if (ret)
++		return ret;
++
++	sflash_write32(dev, PS4_SFLASH_REG_TIMING, 0x007d0000);
++	sflash_write32(dev, PS4_SFLASH_REG_OPCODES, 0x9f050300);
++	sflash_write32(dev, PS4_SFLASH_REG_CS,
++		       (sflash_read32(dev, PS4_SFLASH_REG_CS) & 0xffffff00) | 1);
++
++	sflash_write32(dev, PS4_SFLASH_REG_STATUS_CLR, 0);
++	sflash_write32(dev, PS4_SFLASH_REG_OFFSET, ctrl_addr);
++	sflash_write32(dev, PS4_SFLASH_REG_DMA_ADDR, (u32)dev->dma_paddr);
++	sflash_write32(dev, PS4_SFLASH_REG_DMA_LEN, 0x80000000 | (u32)dma_len);
++	sflash_write32(dev, PS4_SFLASH_REG_CMD, 0x82100103);
++
++	ret = ps4_sflash_wait_dma(dev);
++	if (ret)
++		return ret;
++
++	ps4_sflash_unpack_chunk(dev->dma_vaddr, out_buf, dma_len);
++	return flash_len;
++}
++
++static ssize_t ps4_sflash_read(struct file *file, char __user *buf,
++			       size_t count, loff_t *ppos)
++{
++	struct ps4_sflash_dev *dev = g_ps4_sflash;
++	size_t total_read = 0;
++	ssize_t ret = 0;
++
++	if (!dev)
++		return -ENODEV;
++
++	if (*ppos >= PS4_SFLASH_TOTAL_SIZE)
++		return 0;
++
++	if (*ppos + count > PS4_SFLASH_TOTAL_SIZE)
++		count = PS4_SFLASH_TOTAL_SIZE - *ppos;
++
++	if (mutex_lock_interruptible(&dev->lock))
++		return -ERESTARTSYS;
++
++	while (count > 0) {
++		u32 chunk_flash_off = (u32)(*ppos & ~(PS4_SFLASH_CHUNK_FLASH - 1));
++		u32 offset_in_chunk = (u32)(*ppos & (PS4_SFLASH_CHUNK_FLASH - 1));
++		size_t to_copy = PS4_SFLASH_CHUNK_FLASH - offset_in_chunk;
++
++		if (to_copy > count)
++			to_copy = count;
++
++		ret = ps4_sflash_read_block(dev, chunk_flash_off, dev->dec_buf,
++					    PS4_SFLASH_CHUNK_FLASH);
++		if (ret < 0)
++			break;
++
++		if (copy_to_user(buf + total_read, dev->dec_buf + offset_in_chunk, to_copy)) {
++			ret = -EFAULT;
++			break;
++		}
++
++		*ppos += to_copy;
++		total_read += to_copy;
++		count -= to_copy;
++	}
++
++	mutex_unlock(&dev->lock);
++	return total_read ? (ssize_t)total_read : ret;
++}
++
++static loff_t ps4_sflash_llseek(struct file *file, loff_t offset, int whence)
++{
++	return fixed_size_llseek(file, offset, whence, PS4_SFLASH_TOTAL_SIZE);
++}
++
++static long ps4_sflash_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
++{
++	struct ps4_sflash_dev *dev = g_ps4_sflash;
++	u32 val;
++	int ret = 0;
++
++	if (!dev)
++		return -ENODEV;
++
++	if (mutex_lock_interruptible(&dev->lock))
++		return -ERESTARTSYS;
++
++	switch (cmd) {
++	case PS4_SFLASH_IOC_GET_SIZE:
++		val = PS4_SFLASH_TOTAL_SIZE;
++		if (copy_to_user((void __user *)arg, &val, sizeof(val)))
++			ret = -EFAULT;
++		break;
++	case PS4_SFLASH_IOC_GET_JEDEC:
++		val = ps4_sflash_read_jedec(dev);
++		if (copy_to_user((void __user *)arg, &val, sizeof(val)))
++			ret = -EFAULT;
++		break;
++	case PS4_SFLASH_IOC_GET_STATUS:
++		val = ps4_sflash_read_status(dev);
++		if (copy_to_user((void __user *)arg, &val, sizeof(val)))
++			ret = -EFAULT;
++		break;
++	default:
++		ret = -ENOTTY;
++		break;
++	}
++
++	mutex_unlock(&dev->lock);
++	return ret;
++}
++
++static const struct file_operations ps4_sflash_fops = {
++	.owner          = THIS_MODULE,
++	.read           = ps4_sflash_read,
++	.llseek         = ps4_sflash_llseek,
++	.unlocked_ioctl = ps4_sflash_ioctl,
++};
++
++static int __init ps4_sflash_init(void)
++{
++	struct ps4_sflash_dev *dev;
++	struct pci_dev *pdev = NULL;
++	int i, ret;
++	u32 jedec;
++
++	for (i = 0; i < ARRAY_SIZE(ps4_sflash_pci_ids); i++) {
++		pdev = pci_get_device(PCI_VENDOR_ID_SONY, ps4_sflash_pci_ids[i], NULL);
++		if (pdev)
++			break;
++	}
++
++	if (!pdev) {
++		pdev = pci_get_device(0x104d, 0x90a1, NULL);
++		if (!pdev)
++			return -ENODEV;
++	}
++
++	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
++	if (!dev) {
++		pci_dev_put(pdev);
++		return -ENOMEM;
++	}
++
++	dev->pdev = pdev;
++	mutex_init(&dev->lock);
++
++	dev->bar4 = pci_iomap(pdev, 4, 0x200000);
++	if (!dev->bar4) {
++		pr_err("failed to map Aeolia Southbridge BAR4\n");
++		ret = -ENOMEM;
++		goto err_free;
++	}
++
++	dev->sflash_regs = dev->bar4 + 0xc2000;
++	dev->clk_regs = dev->bar4 + 0xc3000;
++
++	dev->dec_buf = kmalloc(PS4_SFLASH_CHUNK_FLASH, GFP_KERNEL);
++	if (!dev->dec_buf) {
++		ret = -ENOMEM;
++		goto err_unmap;
++	}
++
++	dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
++	dev->dma_vaddr = dma_alloc_coherent(&pdev->dev, PS4_SFLASH_CHUNK_DMA,
++					    &dev->dma_paddr, GFP_KERNEL);
++	if (!dev->dma_vaddr) {
++		pr_err("failed to allocate DMA bounce buffer\n");
++		ret = -ENOMEM;
++		goto err_free_dec;
++	}
++
++	dev->misc.minor = MISC_DYNAMIC_MINOR;
++	dev->misc.name  = "ps4sflash";
++	dev->misc.fops  = &ps4_sflash_fops;
++	ret = misc_register(&dev->misc);
++	if (ret) {
++		pr_err("failed to register misc device\n");
++		goto err_free_dma;
++	}
++
++	g_ps4_sflash = dev;
++	jedec = ps4_sflash_read_jedec(dev);
++
++	pr_info("Aeolia Southbridge SPI NOR flash driver initialized\n");
++	pr_info("JEDEC ID: 0x%08x, Size: 32MB\n", jedec);
++	pr_info("Userspace device registered (/dev/ps4sflash)\n");
++	return 0;
++
++err_free_dma:
++	dma_free_coherent(&pdev->dev, PS4_SFLASH_CHUNK_DMA, dev->dma_vaddr, dev->dma_paddr);
++err_free_dec:
++	kfree(dev->dec_buf);
++err_unmap:
++	pci_iounmap(pdev, dev->bar4);
++err_free:
++	pci_dev_put(pdev);
++	kfree(dev);
++	return ret;
++}
++
++static void __exit ps4_sflash_exit(void)
++{
++	struct ps4_sflash_dev *dev = g_ps4_sflash;
++
++	if (!dev)
++		return;
++
++	misc_deregister(&dev->misc);
++	dma_free_coherent(&dev->pdev->dev, PS4_SFLASH_CHUNK_DMA, dev->dma_vaddr, dev->dma_paddr);
++	kfree(dev->dec_buf);
++	pci_iounmap(dev->pdev, dev->bar4);
++	pci_dev_put(dev->pdev);
++	kfree(dev);
++	g_ps4_sflash = NULL;
++}
++
++module_init(ps4_sflash_init);
++module_exit(ps4_sflash_exit);
++
++MODULE_AUTHOR("Armandas Kvietkus <armandas.kvietkus@proton.me>");
++MODULE_DESCRIPTION("PS4 Aeolia Southbridge Hardware SPI NOR Flash Driver");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/ps4/ps4-sflash.h b/drivers/ps4/ps4-sflash.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..e7babfb07b595877f0a80a3636135709a4911945
+--- /dev/null
++++ b/drivers/ps4/ps4-sflash.h
+@@ -0,0 +1,34 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#ifndef _PS4_SFLASH_H
++#define _PS4_SFLASH_H
++
++#include <linux/types.h>
++#include <linux/ioctl.h>
++
++#define PS4_SFLASH_TOTAL_SIZE       (32 * 1024 * 1024)
++#define PS4_SFLASH_CHUNK_FLASH      16384
++#define PS4_SFLASH_CHUNK_DMA        (PS4_SFLASH_CHUNK_FLASH * 4)
++
++#define PS4_SFLASH_REG_OFFSET       0x00000
++#define PS4_SFLASH_REG_DATA         0x00004
++#define PS4_SFLASH_REG_CMD          0x00008
++#define PS4_SFLASH_REG_MODE         0x0000c
++#define PS4_SFLASH_REG_RDID         0x00020
++#define PS4_SFLASH_REG_OPCODES      0x00028
++#define PS4_SFLASH_REG_CMD_FLAGS    0x0002c
++#define PS4_SFLASH_REG_CS           0x00030
++#define PS4_SFLASH_REG_TIMING       0x00038
++#define PS4_SFLASH_REG_STATUS_CLR   0x0003c
++#define PS4_SFLASH_REG_STATUS       0x00040
++#define PS4_SFLASH_REG_DMA_ADDR     0x00044
++#define PS4_SFLASH_REG_DMA_LEN      0x00048
++
++#define PS4_SFLASH_REG_CLK_STATUS   0x01000
++#define PS4_SFLASH_REG_CLK_CTRL     0x01004
++
++#define PS4_SFLASH_IOC_MAGIC        'S'
++#define PS4_SFLASH_IOC_GET_SIZE     _IOR(PS4_SFLASH_IOC_MAGIC, 1, __u32)
++#define PS4_SFLASH_IOC_GET_JEDEC    _IOR(PS4_SFLASH_IOC_MAGIC, 2, __u32)
++#define PS4_SFLASH_IOC_GET_STATUS   _IOR(PS4_SFLASH_IOC_MAGIC, 3, __u32)
++
++#endif

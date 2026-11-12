@@ -1,0 +1,32 @@
+From e177ee02e9f332e21b1a8e8909f828ef823cccfe Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Fri, 6 Nov 2026 23:43:39 +0100
+Subject: [PATCH 077/124] x86: tsc: do not wait for a watchdog on baikal
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ arch/x86/kernel/tsc.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kernel/tsc.c b/arch/x86/kernel/tsc.c
+index 723347e2cf7f80e2e23c5e892d14424f0b7b5abc..c228f59a2780caf7f12935a564ac90bc67bcaadd 100644
+--- a/arch/x86/kernel/tsc.c
++++ b/arch/x86/kernel/tsc.c
+@@ -31,6 +31,7 @@
+ #include <asm/cpu_device_id.h>
+ #include <asm/i8259.h>
+ #include <asm/msr.h>
++#include <asm/ps4.h>
+ #include <asm/topology.h>
+ #include <asm/uv/uv.h>
+ #include <asm/sev.h>
+@@ -1553,7 +1554,8 @@ void __init tsc_init(void)
+ 		return;
+ 	}
+ 
+-	if (tsc_clocksource_reliable || tsc_watchdog == TSC_WATCHDOG_OFF)
++	if (tsc_clocksource_reliable || tsc_watchdog == TSC_WATCHDOG_OFF ||
++	    ps4_is_baikal())
+ 		tsc_disable_clocksource_watchdog();
+ 
+ 	clocksource_register_khz(&clocksource_tsc_early, tsc_khz);

@@ -1,0 +1,310 @@
+From 45baaf2fc732f4eefb9abafecaea286de6276b46 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Thu, 5 Nov 2026 12:03:55 +0100
+Subject: [PATCH 047/124] ps4: bpcie: fix baikal hdd interrupts and set the
+ sata phy
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/ps4/ps4-bpcie.c        | 217 +++++++++++++++++++++++++++++----
+ drivers/usb/host/xhci-aeolia.c |   2 +
+ 2 files changed, 197 insertions(+), 22 deletions(-)
+
+diff --git a/drivers/ps4/ps4-bpcie.c b/drivers/ps4/ps4-bpcie.c
+index 9245a5821ac17bf93d0f2fa297379ec6a44ae026..2f0281b1f8b55cf50cfa0ebf9471944bcf15e7e4 100644
+--- a/drivers/ps4/ps4-bpcie.c
++++ b/drivers/ps4/ps4-bpcie.c
+@@ -5,6 +5,7 @@
+ #include <linux/irq.h>
+ #include <linux/irqchip.h>
+ #include <linux/irqdomain.h>
++#include <linux/io.h>
+ #include <linux/iopoll.h>
+ #include <linux/msi.h>
+ #include <asm/irqdomain.h>
+@@ -50,14 +51,31 @@ static void bpcie_msi_write_msg(struct irq_data *data, struct msi_msg *msg)
+ 		__pci_write_msi_msg(desc, msg);
+ }
+ 
++void pci_msi_update_mask(struct msi_desc *desc, u32 clear, u32 set);
++
++static bool bpcie_msi_is_xhci_shared(struct irq_data *data)
++{
++	struct msi_desc *desc = irq_data_get_msi_desc(data);
++	struct pci_dev *pdev = msi_desc_to_pci_dev(desc);
++
++	return PCI_FUNC(pdev->devfn) == BAIKAL_FUNC_ID_XHCI &&
++	       !desc->pci.msi_attrib.is_msix && desc->nvec_used == 1;
++}
++
+ static void bpcie_msi_unmask(struct irq_data *data)
+ {
+-	pci_msi_unmask_irq(data);
++	if (bpcie_msi_is_xhci_shared(data))
++		pci_msi_update_mask(irq_data_get_msi_desc(data), 0x7, 0);
++	else
++		pci_msi_unmask_irq(data);
+ }
+ 
+ static void bpcie_msi_mask(struct irq_data *data)
+ {
+-	pci_msi_mask_irq(data);
++	if (bpcie_msi_is_xhci_shared(data))
++		pci_msi_update_mask(irq_data_get_msi_desc(data), 0, 0x7);
++	else
++		pci_msi_mask_irq(data);
+ }
+ 
+ static struct irq_chip bpcie_msi_controller = {
+@@ -115,17 +133,27 @@ static void bpcie_handle_edge_irq(struct irq_desc *desc)
+ 	raw_spin_unlock(&desc->lock);
+ 
+ 	unsigned int subfunc_mask = mask & ~(vector_read >> shift);
++	bool run_self = !subfunc_mask;
+ 	unsigned int i;
++
+ 	for (i = 0; i < 32; i++) {
+-		if (subfunc_mask & (1 << i)) {
+-			unsigned int virq = irq_find_mapping(desc->irq_data.domain,
+-					initial_hwirq + i);
+-			struct irq_desc *new_desc = irq_to_desc(virq);
+-			if (new_desc) {
+-				handle_edge_irq(new_desc);
+-			}
++		unsigned int virq;
++		struct irq_desc *new_desc;
++
++		if (!(subfunc_mask & BIT(i)))
++			continue;
++
++		virq = irq_find_mapping(desc->irq_data.domain, initial_hwirq + i);
++		new_desc = virq ? irq_to_desc(virq) : NULL;
++		if (!new_desc || new_desc == desc) {
++			run_self = true;
++			continue;
+ 		}
++		handle_edge_irq(new_desc);
+ 	}
++
++	if (run_self)
++		handle_edge_irq(desc);
+ }
+ 
+ static int bpcie_msi_init(struct irq_domain *domain,
+@@ -507,6 +535,144 @@ static void bpcie_ahci_rmw(void __iomem *mmio, u32 offset, u32 mask, u32 set)
+ 	iowrite32((val & mask) | set, mmio + offset);
+ }
+ 
++#define BAIKAL_BOOT_PAGE_PHYS		0x9b000
++#define BAIKAL_BOOT_TRACE_HDD		0x386
++#define BAIKAL_BOOT_TRACE_OTHER		0x385
++#define BAIKAL_BOOT_REVISION		0x6e0
++#define BAIKAL_REVISION_30100		0x30100
++#define BAIKAL_SATA_TRACE_DEFAULT	6
++
++struct bpcie_sata_rmw {
++	u16 reg;
++	u32 keep;
++	u32 set;
++};
++
++static const struct bpcie_sata_rmw bpcie_sata_trace_0_2[] = {
++	{ 0x204C, 0xFFFFC0FF, 0x1D00 },
++	{ 0x2054, 0xFFFF9FFF, 0x4000 },
++	{ 0x207C, 0xFFFFFFC0, 0x20 },
++	{ 0x205C, 0xCFFFFFFF, 0x20000000 },
++	{ 0x2080, 0xFFFFF03F, 0x880 },
++	{ 0x2080, 0xFFFC0FFF, 0x3000 },
++	{ 0x205C, 0x3FFFFFFF, 0x40000000 },
++	{ 0x204C, 0xFFFFFFF0, 0x3 },
++	{ 0x206C, 0xFFFFF0FF, 0x100 },
++	{ 0x2084, 0xFFFFFF00, 0x32 },
++};
++
++static const struct bpcie_sata_rmw bpcie_sata_trace_3_5[] = {
++	{ 0x204C, 0xFFC0FFFF, 0x1E0000 },
++	{ 0x204C, 0xC0FFFFFF, 0 },
++	{ 0x2054, 0xFFFF9FFF, 0x2000 },
++	{ 0x207C, 0xFFFFF03F, 0x840 },
++	{ 0x207C, 0xFFFC0FFF, 0x2000 },
++	{ 0x205C, 0xCFFFFFFF, 0x10000000 },
++	{ 0x2080, 0xFFFFF03F, 0x8C0 },
++	{ 0x2080, 0xFFFC0FFF, 0x7000 },
++	{ 0x205C, 0x3FFFFFFF, 0x40000000 },
++	{ 0x204C, 0xFFFFFFF0, 0x3 },
++	{ 0x206C, 0xFFFFF0FF, 0x100 },
++	{ 0x2084, 0xFFFFFF00, 0x43 },
++};
++
++static const struct bpcie_sata_rmw bpcie_sata_trace_6_8[] = {
++	{ 0x204C, 0xFFC0FFFF, 0x200000 },
++	{ 0x204C, 0xC0FFFFFF, 0x1000000 },
++	{ 0x2054, 0xFFFF9FFF, 0x2000 },
++	{ 0x207C, 0xFFFFF03F, 0x880 },
++	{ 0x207C, 0xFFFC0FFF, 0x6000 },
++	{ 0x205C, 0xCFFFFFFF, 0x10000000 },
++	{ 0x2080, 0xFFFFF03F, 0x900 },
++	{ 0x2080, 0xFFFC0FFF, 0xF000 },
++	{ 0x205C, 0x3FFFFFFF, 0x40000000 },
++	{ 0x204C, 0xFFFFFFF0, 0x5 },
++	{ 0x206C, 0xFFFFF0FF, 0x200 },
++	{ 0x2084, 0xFFFFFF00, 0x55 },
++};
++
++static const struct bpcie_sata_rmw bpcie_sata_trace_9_12[] = {
++	{ 0x204C, 0xFFC0FFFF, 0x240000 },
++	{ 0x204C, 0xC0FFFFFF, 0x4000000 },
++	{ 0x2054, 0xFFFF9FFF, 0x2000 },
++	{ 0x207C, 0xFFFFF03F, 0x880 },
++	{ 0x207C, 0xFFFC0FFF, 0x6000 },
++	{ 0x205C, 0xCFFFFFFF, 0x10000000 },
++	{ 0x2080, 0xFFFFF03F, 0x900 },
++	{ 0x2080, 0xFFFC0FFF, 0xF000 },
++	{ 0x205C, 0x3FFFFFFF, 0x40000000 },
++	{ 0x204C, 0xFFFFFFF0, 0x5 },
++	{ 0x206C, 0xFFFFF0FF, 0x200 },
++	{ 0x2084, 0xFFFFFF00, 0x55 },
++};
++
++static const struct bpcie_sata_rmw bpcie_sata_trace_13_18[] = {
++	{ 0x204C, 0xFFC0FFFF, 0x260000 },
++	{ 0x204C, 0xC0FFFFFF, 0x7000000 },
++	{ 0x2054, 0xFFFF9FFF, 0x2000 },
++	{ 0x207C, 0xFFFFF03F, 0x880 },
++	{ 0x207C, 0xFFFC0FFF, 0x6000 },
++	{ 0x205C, 0xCFFFFFFF, 0x10000000 },
++	{ 0x2080, 0xFFFFF03F, 0x900 },
++	{ 0x2080, 0xFFFC0FFF, 0xF000 },
++	{ 0x205C, 0x3FFFFFFF, 0x40000000 },
++	{ 0x204C, 0xFFFFFFF0, 0x5 },
++	{ 0x206C, 0xFFFFF0FF, 0x200 },
++	{ 0x2084, 0xFFFFFF00, 0x55 },
++};
++
++static const struct {
++	u32 max_length;
++	const struct bpcie_sata_rmw *rmw;
++	size_t count;
++} bpcie_sata_trace_sets[] = {
++	{ 2, bpcie_sata_trace_0_2, ARRAY_SIZE(bpcie_sata_trace_0_2) },
++	{ 5, bpcie_sata_trace_3_5, ARRAY_SIZE(bpcie_sata_trace_3_5) },
++	{ 8, bpcie_sata_trace_6_8, ARRAY_SIZE(bpcie_sata_trace_6_8) },
++	{ 12, bpcie_sata_trace_9_12, ARRAY_SIZE(bpcie_sata_trace_9_12) },
++	{ 18, bpcie_sata_trace_13_18, ARRAY_SIZE(bpcie_sata_trace_13_18) },
++};
++
++static bool bpcie_baikal_boot_info(bool hdd, u8 *trace, u32 *revision)
++{
++	u8 *page = memremap(BAIKAL_BOOT_PAGE_PHYS, PAGE_SIZE, MEMREMAP_WB);
++
++	*trace = 0;
++	*revision = 0;
++	if (!page)
++		return false;
++	*trace = page[hdd ? BAIKAL_BOOT_TRACE_HDD : BAIKAL_BOOT_TRACE_OTHER];
++	*revision = *(u32 *)(page + BAIKAL_BOOT_REVISION);
++	memunmap(page);
++	return true;
++}
++
++static u32 bpcie_sata_trace_length(u8 trace)
++{
++	u32 length = trace & 0x1f;
++
++	if (trace > 0x5f)
++		length += (trace >> 5) - 2;
++	if (!trace || length > 18)
++		length = BAIKAL_SATA_TRACE_DEFAULT;
++	return length;
++}
++
++static void bpcie_sata_write_trace_set(void __iomem *mmio, u32 length)
++{
++	size_t i, j;
++
++	for (i = 0; i < ARRAY_SIZE(bpcie_sata_trace_sets); i++) {
++		if (length > bpcie_sata_trace_sets[i].max_length)
++			continue;
++		for (j = 0; j < bpcie_sata_trace_sets[i].count; j++)
++			bpcie_ahci_rmw(mmio, bpcie_sata_trace_sets[i].rmw[j].reg,
++				       bpcie_sata_trace_sets[i].rmw[j].keep,
++				       bpcie_sata_trace_sets[i].rmw[j].set);
++		return;
++	}
++}
++
+ int bpcie_baikal_sata_phy_init(struct pci_dev *pdev, void __iomem *ahci_mmio)
+ {
+ 	struct pci_dev *glue_dev;
+@@ -518,6 +684,10 @@ int bpcie_baikal_sata_phy_init(struct pci_dev *pdev, void __iomem *ahci_mmio)
+ 	u32 pulse_offset;
+ 	u32 hold_offset;
+ 	u32 status;
++	u32 revision;
++	u32 length;
++	u8 trace;
++	bool have_boot;
+ 	bool shared_path;
+ 	int ret = 0;
+ 
+@@ -576,7 +746,16 @@ int bpcie_baikal_sata_phy_init(struct pci_dev *pdev, void __iomem *ahci_mmio)
+ 
+ 	dev_info(&pdev->dev, "Baikal SATA EFUSE VALUE: 0x%02x:0x%02x:0x%02x\n",
+ 		 tune0, tune1, tune2);
+-	dev_info(&pdev->dev, "Baikal SATA PHY Trace length : %d\n", 4);
++	have_boot = bpcie_baikal_boot_info(shared_path, &trace, &revision);
++	length = bpcie_sata_trace_length(trace);
++	if (have_boot)
++		dev_info(&pdev->dev,
++			 "Baikal SATA PHY trace byte 0x%02x, length %u, revision 0x%x\n",
++			 trace, length, revision);
++	else
++		dev_warn(&pdev->dev,
++			 "Baikal SATA PHY boot block not mapped, length %u\n",
++			 length);
+ 
+ 	bpcie_ahci_rmw(ahci_mmio, 0x20A0, 0xFBFF03FF, (tune0 << 10) | 0x4000000);
+ 	iowrite32(ioread32(ahci_mmio + 0x2014) | 0x100000, ahci_mmio + 0x2014);
+@@ -584,23 +763,17 @@ int bpcie_baikal_sata_phy_init(struct pci_dev *pdev, void __iomem *ahci_mmio)
+ 	iowrite32(ioread32(ahci_mmio + 0x201C) | 0x4, ahci_mmio + 0x201C);
+ 	bpcie_ahci_rmw(ahci_mmio, 0x2078, 0xFFFFFE0F, tune2 << 4);
+ 
+-	bpcie_ahci_rmw(ahci_mmio, 0x204C, 0xFFC0FFFF, 0x1E0000);
+-	bpcie_ahci_rmw(ahci_mmio, 0x204C, 0xC0FFFFFF, 0);
+-	bpcie_ahci_rmw(ahci_mmio, 0x2054, 0xFFFF9FFF, 0x2000);
+-	bpcie_ahci_rmw(ahci_mmio, 0x207C, 0xFFFFF03F, 0x840);
+-	bpcie_ahci_rmw(ahci_mmio, 0x207C, 0xFFFC0FFF, 0x2000);
+-	bpcie_ahci_rmw(ahci_mmio, 0x205C, 0xCFFFFFFF, 0x10000000);
+-	bpcie_ahci_rmw(ahci_mmio, 0x2080, 0xFFFFF03F, 0x8C0);
+-	bpcie_ahci_rmw(ahci_mmio, 0x2080, 0xFFFC0FFF, 0x7000);
+-	bpcie_ahci_rmw(ahci_mmio, 0x205C, 0x3FFFFFFF, 0x40000000);
+-	bpcie_ahci_rmw(ahci_mmio, 0x204C, 0xFFFFFFF0, 0x3);
+-	bpcie_ahci_rmw(ahci_mmio, 0x206C, 0xFFFFF0FF, 0x100);
+-	bpcie_ahci_rmw(ahci_mmio, 0x2084, 0xFFFFFF00, 0x43);
++	bpcie_sata_write_trace_set(ahci_mmio, length);
+ 
+ 	bpcie_ahci_rmw(ahci_mmio, 0x2040, 0xFFFFFFE0, 0x12);
+ 	bpcie_ahci_rmw(ahci_mmio, 0x2040, 0xFFFFC0FF, 0x3100);
+ 	bpcie_ahci_rmw(ahci_mmio, 0x2040, 0xFFE0FFFF, 0xE0000);
+ 	bpcie_ahci_rmw(ahci_mmio, 0x2040, 0xFFFFFF1F, 0x80);
++	if (revision == BAIKAL_REVISION_30100) {
++		iowrite32(ioread32(ahci_mmio + 0x2028) & ~BIT(25),
++			  ahci_mmio + 0x2028);
++		bpcie_ahci_rmw(ahci_mmio, 0x2044, 0xFFFFFF80, 0x1C);
++	}
+ 	bpcie_ahci_rmw(ahci_mmio, 0x201C, 0xFF0FFFFF, 0x200000);
+ 	bpcie_ahci_rmw(ahci_mmio, 0x20DC, 0xFFFFE0FF, 0x400);
+ 	iowrite32(ioread32(ahci_mmio + 0x2024) | 0x30, ahci_mmio + 0x2024);
+diff --git a/drivers/usb/host/xhci-aeolia.c b/drivers/usb/host/xhci-aeolia.c
+index 90502c5121dd49896c24dc85ec9a2907f1d79d96..2dbe1668a9f10a0a797053405dc0674d6a3ef7f6 100644
+--- a/drivers/usb/host/xhci-aeolia.c
++++ b/drivers/usb/host/xhci-aeolia.c
+@@ -243,6 +243,8 @@ static int ahci_init_one(struct pci_dev *pdev)
+ 	if (!hpriv)
+ 		return -ENOMEM;
+ 	hpriv->flags |= (unsigned long)pi.private_data;
++	if (baikal)
++		hpriv->flags |= AHCI_HFLAG_NO_NCQ;
+ 
+ 	//hpriv->mmio = pcim_iomap_table(pdev)[ahci_pci_bar];
+ 	rsrc_start = pci_resource_start(pdev, ahci_pci_bar);

@@ -1,0 +1,705 @@
+From 89be308be7d91f72db76c52de2a0e2d52cb31764 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Fri, 6 Nov 2026 21:23:01 +0100
+Subject: [PATCH 070/124] ps4: pick the southbridge at runtime and drop
+ X86_PS4_BAIKAL
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ arch/x86/Kconfig                           |  7 ---
+ arch/x86/include/asm/msi.h                 |  2 +-
+ arch/x86/include/asm/ps4.h                 | 33 +++-----------
+ arch/x86/kernel/apic/msi.c                 |  2 +-
+ arch/x86/pci/irq.c                         |  4 +-
+ arch/x86/platform/ps4/ps4.c                | 22 +++++-----
+ drivers/ata/ahci.c                         | 15 +++----
+ drivers/ata/ahci.h                         |  2 +-
+ drivers/gpu/drm/amd/amdgpu/liverpool_clk.c |  4 ++
+ drivers/iommu/amd/init.c                   | 23 +++-------
+ drivers/iommu/amd/iommu.c                  |  6 ++-
+ drivers/mmc/host/sdhci-pci-core.c          |  6 ---
+ drivers/net/ethernet/sony/mts/Kconfig      |  2 +-
+ drivers/ps4/Makefile                       |  6 +--
+ drivers/ps4/icc/i2c.c                      |  2 -
+ drivers/ps4/ps4-apcie-icc.c                |  2 -
+ drivers/ps4/ps4-apcie-pwrbutton.c          | 10 -----
+ drivers/ps4/ps4-apcie.c                    |  7 +--
+ drivers/usb/host/xhci-aeolia.c             | 51 +++++++++++++++++-----
+ 19 files changed, 86 insertions(+), 120 deletions(-)
+
+diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
+index f55fe3016e830a4e8226d9f165dabaa9f659211b..382f4f43177fbf40fc30a8d88b94b4a33e938e41 100644
+--- a/arch/x86/Kconfig
++++ b/arch/x86/Kconfig
+@@ -619,13 +619,6 @@ config PS4_ICCNODE
+ 	help
+ 	  Enable userspace /dev/icc character device node and ioctl interface.
+ 
+-config X86_PS4_BAIKAL
+-	bool "Sony PlayStation 4 Baikal southbridge support"
+-	depends on X86_PS4
+-	help
+-	  Enable support for the Baikal southbridge used by PlayStation 4
+-	  Slim and Pro systems.
+-
+ config PS4_CCP
+ 	bool "PS4 SAMU CCP hardware crypto engine"
+ 	depends on X86_PS4
+diff --git a/arch/x86/include/asm/msi.h b/arch/x86/include/asm/msi.h
+index 630d103e23be98d87fcff444b338c08ee9ed8511..1f1152cce8d08de89b64569a780f7442efa9c853 100644
+--- a/arch/x86/include/asm/msi.h
++++ b/arch/x86/include/asm/msi.h
+@@ -8,7 +8,7 @@ typedef struct irq_alloc_info msi_alloc_info_t;
+ 
+ int pci_msi_prepare(struct irq_domain *domain, struct device *dev, int nvec,
+ 		    msi_alloc_info_t *arg);
+-#ifdef CONFIG_X86_PS4_BAIKAL
++#ifdef CONFIG_X86_PS4
+ void irq_msi_compose_msg(struct irq_data *data, struct msi_msg *msg);
+ #endif
+ 
+diff --git a/arch/x86/include/asm/ps4.h b/arch/x86/include/asm/ps4.h
+index 70f56c40f40f9dc1699f5a4416ba33715adfd4d9..29b57502e47eb8d53a42b6dac9c08ea5573f01e9 100644
+--- a/arch/x86/include/asm/ps4.h
++++ b/arch/x86/include/asm/ps4.h
+@@ -47,7 +47,7 @@ extern int ps4_samu_ccp(void *op);
+ extern int apcie_status(void);
+ extern int apcie_icc_cmd(u8 major, u16 minor, const void *data,
+ 			 u16 length, void *reply, u16 reply_length);
+-#ifdef CONFIG_X86_PS4_BAIKAL
++extern bool ps4_is_baikal(void);
+ extern int bpcie_assign_irqs(struct pci_dev *dev, int nvec);
+ extern void bpcie_free_irqs(unsigned int virq, unsigned int nr_irqs);
+ extern void bpcie_icc_reboot(void);
+@@ -57,33 +57,6 @@ extern int bpcie_icc_cmd(u8 major, u16 minor, const void *data,
+ extern int bpcie_icc_register_event_handler(u8 major, bpcie_icc_event_fn fn,
+ 					    void *ctx);
+ extern void bpcie_icc_unregister_event_handler(u8 major);
+-#else
+-static inline int bpcie_assign_irqs(struct pci_dev *dev, int nvec)
+-{
+-	return -ENODEV;
+-}
+-static inline void bpcie_free_irqs(unsigned int virq, unsigned int nr_irqs)
+-{
+-}
+-static inline int bpcie_status(void)
+-{
+-	return -ENODEV;
+-}
+-static inline int bpcie_icc_cmd(u8 major, u16 minor, const void *data,
+-				u16 length, void *reply, u16 reply_length)
+-{
+-	return -ENODEV;
+-}
+-static inline int bpcie_icc_register_event_handler(u8 major,
+-						   bpcie_icc_event_fn fn,
+-						   void *ctx)
+-{
+-	return -ENODEV;
+-}
+-static inline void bpcie_icc_unregister_event_handler(u8 major)
+-{
+-}
+-#endif
+ 
+ 
+ #else
+@@ -106,6 +79,10 @@ static inline int apcie_icc_cmd(u8 major, u16 minor, const void *data,
+ {
+ 	return -ENODEV;
+ }
++static inline bool ps4_is_baikal(void)
++{
++	return false;
++}
+ static inline int bpcie_assign_irqs(struct pci_dev *dev, int nvec)
+ {
+ 	return -ENODEV;
+diff --git a/arch/x86/kernel/apic/msi.c b/arch/x86/kernel/apic/msi.c
+index e45ab63a3b4919553ef3502d3c4cd70cb1330cdd..cb699d75890dc3ea622542f918bc7d621145e2eb 100644
+--- a/arch/x86/kernel/apic/msi.c
++++ b/arch/x86/kernel/apic/msi.c
+@@ -23,7 +23,7 @@
+ 
+ struct irq_domain *x86_pci_msi_default_domain __ro_after_init;
+ 
+-#ifdef CONFIG_X86_PS4_BAIKAL
++#ifdef CONFIG_X86_PS4
+ void irq_msi_compose_msg(struct irq_data *data, struct msi_msg *msg)
+ {
+ 	__irq_msi_compose_msg(irqd_cfg(data), msg, false);
+diff --git a/arch/x86/pci/irq.c b/arch/x86/pci/irq.c
+index cbba24b925820da475e00776d039a27411649197..616bc52c4006c9e213d8471c809f694bf0019d15 100644
+--- a/arch/x86/pci/irq.c
++++ b/arch/x86/pci/irq.c
+@@ -21,6 +21,7 @@
+ #include <asm/i8259.h>
+ #include <asm/pc-conf-reg.h>
+ #include <asm/pci_x86.h>
++#include <asm/ps4.h>
+ 
+ #define PIRQ_SIGNATURE	(('$' << 0) + ('P' << 8) + ('I' << 16) + ('R' << 24))
+ #define PIRQ_VERSION 0x0100
+@@ -1716,9 +1717,8 @@ static int pirq_enable_irq(struct pci_dev *dev)
+ {
+ 	u8 pin = 0;
+ 
+-	if (!boot_cpu_has(X86_FEATURE_HYPERVISOR) && boot_cpu_data.x86_vendor == X86_VENDOR_AMD && boot_cpu_data.x86 == 0x16) {
++	if (ps4_is_baikal())
+ 		return 0;
+-	}
+ 
+ 	pci_read_config_byte(dev, PCI_INTERRUPT_PIN, &pin);
+ 	if (pin && !pcibios_lookup_irq(dev, 1)) {
+diff --git a/arch/x86/platform/ps4/ps4.c b/arch/x86/platform/ps4/ps4.c
+index 9e8c093cd0029cd290af9f738d5f521066f243d9..fb3245565aa25ed3fdc06dce5d93a5c585aa331f 100644
+--- a/arch/x86/platform/ps4/ps4.c
++++ b/arch/x86/platform/ps4/ps4.c
+@@ -26,13 +26,13 @@
+ #include <asm/i8259.h>
+ #include <asm/reboot.h>
+ #include <asm/msr.h>
++#include <asm/pci-direct.h>
+ #include <asm/ps4.h>
+ 
+ static bool is_ps4;
++static bool is_baikal;
+ bool apcie_initialized;
+-#ifdef CONFIG_X86_PS4_BAIKAL
+ bool bpcie_initialized;
+-#endif
+ 
+ /*
+  * The RTC is part of the Aeolia PCI device and will be implemented there as
+@@ -55,15 +55,10 @@ int apcie_status(void)
+ {
+ 	if (!is_ps4)
+ 		return -ENODEV;
+-#ifdef CONFIG_X86_PS4_BAIKAL
+ 	return READ_ONCE(apcie_initialized) || READ_ONCE(bpcie_initialized);
+-#else
+-	return READ_ONCE(apcie_initialized);
+-#endif
+ }
+ EXPORT_SYMBOL_GPL(apcie_status);
+ 
+-#ifdef CONFIG_X86_PS4_BAIKAL
+ int bpcie_status(void)
+ {
+ 	if (!is_ps4)
+@@ -71,16 +66,19 @@ int bpcie_status(void)
+ 	return READ_ONCE(bpcie_initialized);
+ }
+ EXPORT_SYMBOL_GPL(bpcie_status);
+-#endif
++
++bool ps4_is_baikal(void)
++{
++	return is_baikal;
++}
++EXPORT_SYMBOL_GPL(ps4_is_baikal);
+ 
+ void icc_reboot(void);
+ 
+ static void ps4_emergency_restart(void)
+ {
+ 	icc_reboot();
+-#ifdef CONFIG_X86_PS4_BAIKAL
+ 	bpcie_icc_reboot();
+-#endif
+ }
+ 
+ /*
+@@ -90,6 +88,10 @@ void __init x86_ps4_early_setup(void)
+ {
+ 	pr_info("x86_ps4_early_setup: PS4 early setup\n");
+ 	is_ps4 = true;
++	is_baikal = read_pci_config_16(0, 0x14, 4, PCI_DEVICE_ID) ==
++		    PCI_DEVICE_ID_SONY_BAIKAL_PCIE;
++	pr_info("x86_ps4_early_setup: southbridge %s\n",
++		is_baikal ? "Baikal" : "Aeolia or Belize");
+ 	x86_platform.calibrate_tsc = ps4_calibrate_tsc;
+ 	x86_platform.get_wallclock = dummy_get_wallclock;
+ 	x86_platform.set_wallclock = dummy_set_wallclock;
+diff --git a/drivers/ata/ahci.c b/drivers/ata/ahci.c
+index 00500b2d985ee405f42c0100759ca582f983e3e6..785f3122fe3c342e4b6e2a5af3bdf8be3d0508f5 100644
+--- a/drivers/ata/ahci.c
++++ b/drivers/ata/ahci.c
+@@ -1615,7 +1615,7 @@ static const struct pci_device_id ahci_pci_tbl[] = {
+ 	}, {
+ 		PCI_VDEVICE(SONY, PCI_DEVICE_ID_SONY_BELIZE_AHCI),
+ 		.driver_data = board_ahci_31bit_dma,
+-#ifdef CONFIG_X86_PS4_BAIKAL
++#ifdef CONFIG_X86_PS4
+ 	}, {
+ 		PCI_VDEVICE(SONY, PCI_DEVICE_ID_SONY_BAIKAL_AHCI),
+ 		.driver_data = board_ahci_31bit_dma,
+@@ -2757,12 +2757,10 @@ static void ahci_init_irq(struct pci_dev *pdev, unsigned int n_ports,
+ 
+ 	#ifdef CONFIG_X86_PS4
+ 	if (pdev->vendor == PCI_VENDOR_ID_SONY) {
+-#ifdef CONFIG_X86_PS4_BAIKAL
+ 		if (pdev->device == PCI_DEVICE_ID_SONY_BAIKAL_AHCI) {
+ 			bpcie_assign_irqs(pdev, n_ports);
+ 			return;
+ 		}
+-#endif
+ 		apcie_assign_irqs(pdev, n_ports);
+ 		return;
+ 	}
+@@ -2936,7 +2934,7 @@ static int ahci_validate_bar_size(struct pci_dev *pdev, int bar,
+ 	return 0;
+ }
+ 
+-#ifdef CONFIG_X86_PS4_BAIKAL
++#ifdef CONFIG_X86_PS4
+ static bool ahci_baikal_shared_phy_seeded(struct pci_dev *pdev)
+ {
+ 	struct pci_dev *xhci;
+@@ -2977,7 +2975,8 @@ static int ahci_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	if (apcie_status() == 0)
+ 		return -EPROBE_DEFER;
+ 
+-	if (pdev->vendor == PCI_VENDOR_ID_SONY)
++	if (pdev->vendor == PCI_VENDOR_ID_SONY &&
++	    pdev->device == PCI_DEVICE_ID_SONY_BAIKAL_AHCI)
+ 		sht = &ahci_ps4_sht;
+ 	#endif
+ 
+@@ -3011,7 +3010,7 @@ static int ahci_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 			ahci_pci_bar = AHCI_PCI_BAR_CAVIUM;
+ 		if (pdev->device == 0xa084)
+ 			ahci_pci_bar = AHCI_PCI_BAR_CAVIUM_GEN5;
+-#ifdef CONFIG_X86_PS4_BAIKAL
++#ifdef CONFIG_X86_PS4
+ 	} else if (pdev->vendor == PCI_VENDOR_ID_SONY &&
+ 		   pdev->device == PCI_DEVICE_ID_SONY_BAIKAL_AHCI) {
+ 		ahci_pci_bar = AHCI_PCI_BAR0_BAIKAL;
+@@ -3088,7 +3087,7 @@ static int ahci_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 				&dev_attr_remapped_nvme.attr,
+ 				NULL);
+ 
+-#ifdef CONFIG_X86_PS4_BAIKAL
++#ifdef CONFIG_X86_PS4
+ 	if (pdev->vendor == PCI_VENDOR_ID_SONY &&
+ 	    pdev->device == PCI_DEVICE_ID_SONY_BAIKAL_AHCI) {
+ 		if (!ahci_baikal_shared_phy_seeded(pdev)) {
+@@ -3272,12 +3271,10 @@ static void ahci_remove_one(struct pci_dev *pdev)
+ 
+ 	#ifdef CONFIG_X86_PS4
+ 	if (pdev->vendor == PCI_VENDOR_ID_SONY) {
+-#ifdef CONFIG_X86_PS4_BAIKAL
+ 		if (pdev->device == PCI_DEVICE_ID_SONY_BAIKAL_AHCI) {
+ 			bpcie_free_irqs(pdev->irq, 1);
+ 			return;
+ 		}
+-#endif
+ 		apcie_free_irqs(pdev->irq, 1);
+ 	}
+ 	#endif
+diff --git a/drivers/ata/ahci.h b/drivers/ata/ahci.h
+index 6adfa68d23b171de0fcba081fa273912e5a68cd1..fc562b97d51b6134e4db610c5854cfab1baa9381 100644
+--- a/drivers/ata/ahci.h
++++ b/drivers/ata/ahci.h
+@@ -488,7 +488,7 @@ struct ahci_controller{
+ };
+ 
+ void bpcie_sata_phy_init(struct device *dev, struct ahci_controller *ctlr);
+-#ifdef CONFIG_X86_PS4_BAIKAL
++#ifdef CONFIG_X86_PS4
+ int bpcie_baikal_sata_phy_init(struct pci_dev *pdev, void __iomem *ahci_mmio);
+ #else
+ static inline int bpcie_baikal_sata_phy_init(struct pci_dev *pdev,
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_clk.c b/drivers/gpu/drm/amd/amdgpu/liverpool_clk.c
+index 34e4a8e36d8087c570c98af28778c5e56b0e56a3..1113a777462ae216f3fa5d0f4592232617c92b09 100644
+--- a/drivers/gpu/drm/amd/amdgpu/liverpool_clk.c
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_clk.c
+@@ -1,5 +1,6 @@
+ // SPDX-License-Identifier: MIT
+ 
++#include <asm/ps4.h>
+ #include <linux/delay.h>
+ #include "amdgpu.h"
+ #include "liverpool_clk.h"
+@@ -327,6 +328,9 @@ int liverpool_clk_force_max(struct amdgpu_device *adev)
+ 	u32 spll_pdiva, spll_fbdiv;
+ 	u32 status;
+ 
++	if (!ps4_is_baikal())
++		return 0;
++
+ 	if (adev->asic_type != CHIP_GLADIUS)
+ 		return liverpool_sclk_set_top(adev);
+ 
+diff --git a/drivers/iommu/amd/init.c b/drivers/iommu/amd/init.c
+index 1f70325af0e81ea6281170a71b905af29b5c81e7..c1bdd1759ae949b44cdbd8c54f52fdb77c90479f 100644
+--- a/drivers/iommu/amd/init.c
++++ b/drivers/iommu/amd/init.c
+@@ -21,6 +21,7 @@
+ #include <linux/kmemleak.h>
+ #include <linux/cc_platform.h>
+ #include <linux/iopoll.h>
++#include <asm/ps4.h>
+ #include <asm/pci-direct.h>
+ #include <asm/iommu.h>
+ #include <asm/apic.h>
+@@ -1961,14 +1962,10 @@ static int __init init_iommu_one_late(struct amd_iommu *iommu)
+ 
+ 	init_translation_status(iommu);
+ 	if (translation_pre_enabled(iommu) && !is_kdump_kernel()) {
+-#ifdef CONFIG_X86_PS4_BAIKAL
+-		if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD &&
+-		    boot_cpu_data.x86 == 0x16) {
++		if (ps4_is_baikal()) {
+ 			pr_info("AMD-Vi: PS4 Baikal: IOMMU:%d pre-enabled, preserving state\n",
+ 				iommu->index);
+-		} else
+-#endif
+-		{
++		} else {
+ 			iommu_disable(iommu);
+ 			clear_translation_pre_enabled(iommu);
+ 			pr_warn("Translation was enabled for IOMMU:%d but we are not in kdump mode\n",
+@@ -3313,14 +3310,9 @@ static int __init early_amd_iommu_init(void)
+ 	}
+ 
+ 	/* Disable any previously enabled IOMMUs */
+-#ifdef CONFIG_X86_PS4_BAIKAL
+-	if (amd_iommu_pre_enabled &&
+-	    boot_cpu_data.x86_vendor == X86_VENDOR_AMD &&
+-	    boot_cpu_data.x86 == 0x16) {
++	if (amd_iommu_pre_enabled && ps4_is_baikal())
+ 		pr_info("AMD-Vi: PS4 Baikal: keeping IOMMU enabled to preserve IR tables\n");
+-	} else
+-#endif
+-	if (!is_kdump_kernel() || amd_iommu_disabled)
++	else if (!is_kdump_kernel() || amd_iommu_disabled)
+ 		disable_iommus();
+ 
+ 	#ifndef CONFIG_X86_PS4
+@@ -3714,11 +3706,8 @@ void __init amd_iommu_detect(void)
+ {
+ 	int ret;
+ 
+-#ifdef CONFIG_X86_PS4_BAIKAL
+-	if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD &&
+-	    boot_cpu_data.x86 == 0x16)
++	if (ps4_is_baikal())
+ 		goto disable_snp;
+-#endif
+ 
+ 	if (no_iommu || (iommu_detected && !gart_iommu_aperture))
+ 		goto disable_snp;
+diff --git a/drivers/iommu/amd/iommu.c b/drivers/iommu/amd/iommu.c
+index 84b9f41a91355d1e5ec9aca036b97aa032eefaf2..fd8ff14e7db39a3be37b216ceb5f75bd36e731da 100644
+--- a/drivers/iommu/amd/iommu.c
++++ b/drivers/iommu/amd/iommu.c
+@@ -3162,7 +3162,7 @@ static bool amd_iommu_is_attach_deferred(struct device *dev)
+ 	return dev_data->defer_attach;
+ }
+ 
+-#ifdef CONFIG_X86_PS4_BAIKAL
++#ifdef CONFIG_X86_PS4
+ static bool amd_iommu_ps4_baikal_force_identity(struct device *dev)
+ {
+ 	struct pci_dev *pdev;
+@@ -3189,7 +3189,7 @@ static int amd_iommu_def_domain_type(struct device *dev)
+ 	if (dev_is_pci(dev) && to_pci_dev(dev)->untrusted)
+ 		return IOMMU_DOMAIN_DMA;
+ 
+-#ifdef CONFIG_X86_PS4_BAIKAL
++#ifdef CONFIG_X86_PS4
+ 	if (amd_iommu_ps4_baikal_force_identity(dev) &&
+ 	    !cc_platform_has(CC_ATTR_MEM_ENCRYPT) &&
+ 	    !amd_iommu_snp_en)
+@@ -4002,6 +4002,8 @@ static int irq_remapping_select(struct irq_domain *d, struct irq_fwspec *fwspec,
+ 		devid = get_ioapic_devid(fwspec->param[0]);
+ 	else if (x86_fwspec_is_hpet(fwspec))
+ 		devid = get_hpet_devid(fwspec->param[0]);
++	else if (x86_fwspec_is_aeolia(fwspec))
++		devid = fwspec->param[0];
+ 
+ 	if (devid < 0)
+ 		return 0;
+diff --git a/drivers/mmc/host/sdhci-pci-core.c b/drivers/mmc/host/sdhci-pci-core.c
+index 67af6ff6d47e53e2858e146ca8479247b97704fa..a97442d1017859c6f9dc3c02c199c9ee0ab6607b 100644
+--- a/drivers/mmc/host/sdhci-pci-core.c
++++ b/drivers/mmc/host/sdhci-pci-core.c
+@@ -332,21 +332,17 @@ static const struct sdhci_pci_fixes sdhci_intel_qrk = {
+ #ifdef CONFIG_X86_PS4
+ static int aeolia_assign_irqs(struct sdhci_pci_slot *slot)
+ {
+-#ifdef CONFIG_X86_PS4_BAIKAL
+ 	if (slot->chip->pdev->device == PCI_DEVICE_ID_SONY_BAIKAL_SDHCI)
+ 		return bpcie_assign_irqs(slot->chip->pdev, 1);
+-#endif
+ 	return apcie_assign_irqs(slot->chip->pdev, 1);
+ }
+ 
+ static void aeolia_free_irqs(struct sdhci_pci_slot *slot)
+ {
+-#ifdef CONFIG_X86_PS4_BAIKAL
+ 	if (slot->chip->pdev->device == PCI_DEVICE_ID_SONY_BAIKAL_SDHCI) {
+ 		bpcie_free_irqs(slot->host->irq, 1);
+ 		return;
+ 	}
+-#endif
+ 	apcie_free_irqs(slot->host->irq, 1);
+ }
+ 
+@@ -2053,9 +2049,7 @@ static const struct pci_device_id pci_ids[] = {
+ 	#ifdef CONFIG_X86_PS4
+ 	SDHCI_PCI_DEVICE(SONY, AEOLIA_SDHCI, aeolia),
+ 	SDHCI_PCI_DEVICE(SONY, BELIZE_SDHCI, aeolia),
+-#ifdef CONFIG_X86_PS4_BAIKAL
+ 	SDHCI_PCI_DEVICE(SONY, BAIKAL_SDHCI, aeolia),
+-#endif
+ 	#endif
+ 	SDHCI_PCI_DEVICE(GLI, 9750, gl9750),
+ 	SDHCI_PCI_DEVICE(GLI, 9755, gl9755),
+diff --git a/drivers/net/ethernet/sony/mts/Kconfig b/drivers/net/ethernet/sony/mts/Kconfig
+index 42973f63759d4f5fda292d559e226eec1c9728f7..ff92a5cd77a3d47cd6965291aebdb7dcd84b8adb 100644
+--- a/drivers/net/ethernet/sony/mts/Kconfig
++++ b/drivers/net/ethernet/sony/mts/Kconfig
+@@ -1,7 +1,7 @@
+ # SPDX-License-Identifier: GPL-2.0-only
+ config MTS
+ 	tristate "PlayStation 4 Baikal Gigabit Ethernet"
+-	depends on PCI && X86_PS4_BAIKAL
++	depends on PCI && X86_PS4
+ 	help
+ 	  Driver for the Sony mts Gigabit Ethernet controller (104d:90d8)
+ 	  in the Baikal southbridge of the PlayStation 4.
+diff --git a/drivers/ps4/Makefile b/drivers/ps4/Makefile
+index 63603c56181e7699214792930d20208445fe4d66..eab75cb8a5cce24a38455ddbb2a8aa7c8d0ecc6d 100644
+--- a/drivers/ps4/Makefile
++++ b/drivers/ps4/Makefile
+@@ -7,12 +7,10 @@ obj-y += ps4-apcie.o \
+     ps4-apcie-icc.o \
+     ps4-apcie-pwrbutton.o \
+     icc/i2c.o
+-obj-$(CONFIG_X86_PS4_BAIKAL) += ps4-bpcie.o \
++obj-y += ps4-bpcie.o \
+     ps4-bpcie-uart.o \
+     ps4-bpcie-icc.o
+-ifdef CONFIG_RTC_CLASS
+-obj-$(CONFIG_X86_PS4_BAIKAL) += ps4-bpcie-rtc.o
+-endif
++obj-$(CONFIG_RTC_CLASS) += ps4-bpcie-rtc.o
+ obj-y += ps4-led.o
+ obj-y += ps4-fan.o
+ obj-y += ps4-buzzer.o
+diff --git a/drivers/ps4/icc/i2c.c b/drivers/ps4/icc/i2c.c
+index 7996898f539f8948480c48bb6dab2555f4adb9bd..e5f6aeae3af46521e64f3993a4c7069afd1a077a 100644
+--- a/drivers/ps4/icc/i2c.c
++++ b/drivers/ps4/icc/i2c.c
+@@ -99,12 +99,10 @@ static int icc_i2c_smbus_xfer(struct i2c_adapter *adapter, u16 addr,
+ 	}
+ 
+ 	msg.length = msg.cmd.length + 4;
+-#ifdef CONFIG_X86_PS4_BAIKAL
+ 	if (bpcie_status() > 0) {
+ 		data_off = 8;
+ 		err_off = 0;
+ 	}
+-#endif
+ 	ret = apcie_icc_cmd(0x10, 0x0, &msg, msg.length, resultbuf,
+ 		      sizeof(resultbuf));
+ 	if (ret < err_off + 2 || ret > sizeof(resultbuf)) {
+diff --git a/drivers/ps4/ps4-apcie-icc.c b/drivers/ps4/ps4-apcie-icc.c
+index db6a33b6d64e3fe138d5790978231b685f4ae38c..618760246624eb178ab1169bbe9c2a9ed6e1d1f5 100644
+--- a/drivers/ps4/ps4-apcie-icc.c
++++ b/drivers/ps4/ps4-apcie-icc.c
+@@ -292,11 +292,9 @@ int apcie_icc_cmd(u8 major, u16 minor, const void *data, u16 length,
+ {
+ 	int ret;
+ 
+-#ifdef CONFIG_X86_PS4_BAIKAL
+ 	if (!icc_sc && bpcie_status() > 0)
+ 		return bpcie_icc_cmd(major, minor, data, length, reply,
+ 				     reply_length);
+-#endif
+ 	mutex_lock(&icc_mutex);
+ 	if (!icc_sc) {
+ 		pr_err("icc: not ready\n");
+diff --git a/drivers/ps4/ps4-apcie-pwrbutton.c b/drivers/ps4/ps4-apcie-pwrbutton.c
+index b0b535b8a15d142bf41aada5f0e07617625bfd32..46770e945533f4f79620293887d85421a68a7d2e 100644
+--- a/drivers/ps4/ps4-apcie-pwrbutton.c
++++ b/drivers/ps4/ps4-apcie-pwrbutton.c
+@@ -21,10 +21,8 @@ int icc_pwrbutton_init(struct apcie_dev *sc)
+ 	int ret = 0;
+ 	u16 button;
+ 	struct input_dev *dev;
+-#ifdef CONFIG_X86_PS4_BAIKAL
+ 	int (*icc_cmd)(u8 major, u16 minor, const void *data, u16 length,
+ 		      void *reply, u16 reply_length) = apcie_icc_cmd;
+-#endif
+ 
+ 	dev = input_allocate_device();
+ 	if (!dev) {
+@@ -55,13 +53,9 @@ int icc_pwrbutton_init(struct apcie_dev *sc)
+ 
+ 	// enable power button notifications
+ 	button = 0x100;
+-#ifdef CONFIG_X86_PS4_BAIKAL
+ 	if (sc->pdev->device == PCI_DEVICE_ID_SONY_BAIKAL_PCIE)
+ 		icc_cmd = bpcie_icc_cmd;
+ 	ret = icc_cmd(8, 1, &button, sizeof(button), NULL, 0);
+-#else
+-	ret = apcie_icc_cmd(8, 1, &button, sizeof(button), NULL, 0);
+-#endif
+ 	if (ret < 0) {
+ 		sc_info("%s: Failed to enable power notifications (%d)\n",
+ 			__func__, ret);
+@@ -69,11 +63,7 @@ int icc_pwrbutton_init(struct apcie_dev *sc)
+ 
+ 	// enable reset button notifications (?)
+ 	button = 0x102;
+-#ifdef CONFIG_X86_PS4_BAIKAL
+ 	ret = icc_cmd(8, 1, &button, sizeof(button), NULL, 0);
+-#else
+-	ret = apcie_icc_cmd(8, 1, &button, sizeof(button), NULL, 0);
+-#endif
+ 	if (ret < 0) {
+ 		sc_info("%s: Failed to enable reset notifications (%d)\n",
+ 		        __func__, ret);
+diff --git a/drivers/ps4/ps4-apcie.c b/drivers/ps4/ps4-apcie.c
+index 32553936ae3323cd347b460c4ec6636e83da79ce..10d4b2a778eb23884e7a070ac4b676262b6ed871 100644
+--- a/drivers/ps4/ps4-apcie.c
++++ b/drivers/ps4/ps4-apcie.c
+@@ -592,6 +592,7 @@ static int apcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+ 	}
+ 	sc->pdev = dev;
+ 	memset(sc->irq_map, -1, sizeof(sc->irq_map));
++	memset(sc->serial_line, -1, sizeof(sc->serial_line));
+ 	pci_set_drvdata(dev, sc);
+ 
+ 	// eMMC ... unused?
+@@ -609,16 +610,12 @@ static int apcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+ 
+ 	if ((ret = apcie_glue_init(sc)) < 0)
+ 		goto free_bars;
+-	if ((ret = apcie_uart_init(sc)) < 0)
+-		goto remove_glue;
+ 	if ((ret = apcie_icc_init(sc)) < 0)
+-		goto remove_uart;
++		goto remove_glue;
+ 
+ 	WRITE_ONCE(apcie_initialized, true);
+ 	return 0;
+ 
+-remove_uart:
+-	apcie_uart_remove(sc);
+ remove_glue:
+ 	apcie_glue_remove(sc);
+ free_bars:
+diff --git a/drivers/usb/host/xhci-aeolia.c b/drivers/usb/host/xhci-aeolia.c
+index b70ef97821297b199575bbdd2d1555842ba32444..9ffed71367f7d383a80e7c86d34217430fb9699b 100644
+--- a/drivers/usb/host/xhci-aeolia.c
++++ b/drivers/usb/host/xhci-aeolia.c
+@@ -44,24 +44,25 @@ static void xhci_aeolia_quirks(struct device *dev, struct xhci_hcd *xhci)
+ 	 * Do not try to enable MSIs, we provide the MSIs ourselves
+ 	 * Do not touch DMA mask, we need a custom one
+ 	 */
+-	xhci->quirks |= XHCI_PLAT | XHCI_PLAT_DMA;
++	xhci->quirks |= XHCI_PLAT_DMA;
+ 
+-	xhci->imod_interval = 0;
++	if (to_pci_dev(dev)->device == PCI_DEVICE_ID_SONY_BAIKAL_XHCI) {
++		xhci->quirks |= XHCI_PLAT;
++		xhci->imod_interval = 0;
++	}
+ }
+ 
+ /* called during probe() after chip reset completes */
+ static int xhci_aeolia_setup(struct usb_hcd *hcd)
+ {
++	hcd_to_xhci(hcd)->imod_interval = 40000;
++
+ 	return xhci_gen_setup(hcd, xhci_aeolia_quirks);
+ }
+ 
+ static bool xhci_aeolia_is_baikal(struct pci_dev *dev)
+ {
+-#ifdef CONFIG_X86_PS4_BAIKAL
+ 	return dev->device == PCI_DEVICE_ID_SONY_BAIKAL_XHCI;
+-#else
+-	return false;
+-#endif
+ }
+ 
+ static bool xhci_aeolia_has_middle_host(struct pci_dev *dev)
+@@ -154,6 +155,14 @@ static int xhci_aeolia_probe_one(struct pci_dev *dev, int index)
+ 	if (retval)
+ 		goto put_usb3_hcd;
+ 
++	if (!xhci_aeolia_is_baikal(dev)) {
++		struct usb_hcd *usb3_hcd = xhci_get_usb3_hcd(xhci);
++
++		if (usb3_hcd && HCC_MAX_PSA(xhci->hcc_params) >= 4 &&
++		    !(xhci->quirks & XHCI_BROKEN_STREAMS))
++			usb3_hcd->can_do_streams = 1;
++	}
++
+ 	retval = usb_add_hcd(xhci->shared_hcd, irq, IRQF_SHARED);
+ 	if (retval)
+ 		goto dealloc_usb2_hcd;
+@@ -343,6 +352,17 @@ static int ahci_init_one(struct pci_dev *pdev)
+ 	else
+ 		dev_info(&pdev->dev, "SSS flag set, parallel bus scan disabled\n");
+ 
++	if (!baikal) {
++		if (!(hpriv->cap & HOST_CAP_PART))
++			host->flags |= ATA_HOST_NO_PART;
++
++		if (!(hpriv->cap & HOST_CAP_SSC))
++			host->flags |= ATA_HOST_NO_SSC;
++
++		if (!(hpriv->cap2 & HOST_CAP2_SDS))
++			host->flags |= ATA_HOST_NO_DEVSLP;
++	}
++
+ 	if (pi.flags & ATA_FLAG_EM)
+ 		ahci_reset_em(host);
+ 
+@@ -520,6 +540,11 @@ static void xhci_hcd_pci_shutdown(struct pci_dev *dev)
+ 	struct usb_hcd	   *hcd;
+ 	int idx;
+ 
++	if (dev->device == PCI_DEVICE_ID_SONY_AEOLIA_XHCI) {
++		usb_hcd_pci_shutdown(dev);
++		return;
++	}
++
+ 	axhci = pci_get_drvdata(dev);
+ 	if (!axhci)
+ 		return;
+@@ -529,19 +554,21 @@ static void xhci_hcd_pci_shutdown(struct pci_dev *dev)
+ 			continue;
+ 
+ 		hcd = axhci->hcd[idx];
+-		if (hcd &&
+-		    test_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags) &&
+-		    hcd->driver->shutdown)
+-			hcd->driver->shutdown(hcd);
++		if (!hcd || !test_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags) ||
++		    !hcd->driver->shutdown)
++			continue;
++
++		hcd->driver->shutdown(hcd);
++		if (dev->device == PCI_DEVICE_ID_SONY_BELIZE_XHCI &&
++		    usb_hcd_is_primary_hcd(hcd) && hcd->irq > 0)
++			free_irq(hcd->irq, hcd);
+ 	}
+ }
+ 
+ static const struct pci_device_id pci_ids[] = {
+ 		{ PCI_DEVICE(PCI_VENDOR_ID_SONY, PCI_DEVICE_ID_SONY_AEOLIA_XHCI) },
+ 		{ PCI_DEVICE(PCI_VENDOR_ID_SONY, PCI_DEVICE_ID_SONY_BELIZE_XHCI) },
+-#ifdef CONFIG_X86_PS4_BAIKAL
+ 		{ PCI_DEVICE(PCI_VENDOR_ID_SONY, PCI_DEVICE_ID_SONY_BAIKAL_XHCI) },
+-#endif
+ 	{ /* end: all zeroes */ }
+ };
+ MODULE_DEVICE_TABLE(pci, pci_ids);

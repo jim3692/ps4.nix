@@ -1,0 +1,124 @@
+70b952b4d2d7af1ad567f5d5ed393dc4b8f37a1e ps4: add the platform, aeolia, usb, ethernet, sdhci, ahci and gpu support
+3d1d653abcab06320ff4e5baead2a920f2fac7ee ps4: fix ioremap
+731df65036cd8260297f0d9144e3394223c5482d ps4: use msi_alloc_desc
+fc64c3ffb569817dced0e58878ce30ac997fc7a2 ps4: fix the ethernet and apcie drivers
+e187a5fdd89466751f2d9c0ad7e62a2a34c40478 ps4: clean up the gpu registers and ahci, fix xhci dma and update the config
+cb60d3ee55e21dff93f33a7b84759f1c71522589 mmc: add marvell sd8897 sdio support for ps4
+be7f5c5e79a1e5c5a65de9dd8c70976f7fe66cd9 build: add the github actions workflows
+b1a2207dad5ad0110fb1a2149fdbb9016d6d5b5e drm: amdgpu: fix the black screen at the display manager
+eaa983c7dd75bc9d619971f4f174c033314374bf drm: amdgpu: ps4_bridge: drop 1080p120 and use the preferred mode type
+ab34bcf703c22c71ea69d7dcf5ea6c0fc768bca5 config: enable usb audio, tun, zram, docker, netfilter and add marvell firmware
+43c5f6df5d07c58b52306383c0cbea845bafb15c net: wireless: add the mt76x8 driver for the mt7668 combo chip
+83d76921e347fdd1eb6c1a52dd41f43acc5a375c build: merge clang lto ci, update the config and unify the dockerfile
+f8f9f106951b70206a9364e41c74e28428f2f05f net: sky2: fix the interrupt storm and the device ids on ps4
+941e4e2897ce4229e76083f51a1599fd388b2b4a ps4: fix the bridge and mt76x8 builds
+d0418a473930da8fd5c3c248b2875bd2e0d4cad4 ps4: add the led and fan drivers
+af266c72e2d3bc1201ef4d296f44459d218e713a amdgpu: add the liverpool and gladius sclk force driver
+741206c0897a40866a981fb7b4e3aa5a634d99ad amdgpu: ps4_bridge: fix hotplug, detect and the crtc paths
+230ca6a95e25fae11fb21429c5197a5c387a3f5d amdgpu: cik: program pcie aspm and drop the deep light sleep states on ps4
+cbe842086e387eb422004455a8a5cc74e664b880 alsa: hda: atihdmi: fix hdmi audio on ps4
+0ff59ac697bb5c757bbe90948a9e24e36adc5c59 ps4: add the dmi fallback and the extra firmware blobs
+9ce16c55d6bb8e19248171290df3831adeeaa13f build: add the strawberry builder
+98546a179dc2e0364c9b838987c6e5c2d225d2ad ps4: update the dmi strings
+21060ce55bef047070d39494c0c1007f3b856e7f build: pin the sd8797 firmware, fix licensing and drop sdhci quirks
+6dec4e2d774b6c76049d96ca3e80bdabf8276461 amdgpu: ps4_bridge: fix the bridge enable
+e4b89d9b1461dc181da323bbf1d1dca3dd5ef536 mwifiex: disable wifi power save on ps4
+e20eef8577810f1a5c786e1a47dbf6473ad25118 mt76x8: fix the build warnings
+b1a0ee45ac3c1ebfbefa4ff59cf03fe7a9e79218 ps4: harden the apcie, icc and msi paths and fix the xhci irqs
+aff63b437466a33a5f791a5911f8bd0c05b34f76 ps4: fix the led and fan drivers
+27a8942a76bfdde670b34f5d552fe32077fff0ee ps4: add the boot banner
+b8ade4a6a8e615cafa931d1c8bd1b00484f38cc7 x86: ps4: calibrate: bound the emc timer reads
+bf14e70cd5c36aa09687472380386a322d756ffd amdgpu: irq: handle the ps4 msi interrupt
+b5de06ad3af7ee06abd7005a571b1054650c74e5 amdgpu: ps4_bridge: load the edid from firmware
+2bb832f843fc67c75ddc08e2007748c8a11ecd3c radeon: cik: keep going when the liverpool sdma ring test fails
+39d4f90a791808c6152e1574bdcde3011c1f5bc2 ps4: fix the probe and irq paths
+139142490b452a4040984f6af52f8610a5e336f3 amdgpu: fix the gem unpin and the display paths on ps4
+bb12e93d367b3cad2261bc90443ce2f1761b2400 iommu: amd: fix the ps4 iommu setup
+5260fb6bc732ebb59271522483bf376a1ea88410 build: update the builder, the workflow, the readme and the config and add the issue templates
+500dd5d37750fb120d32066dc3fc01fe56d0d1e4 docs: add the baikal devlog
+fe7b11c006d2aa1c25de268780ea6704a264ed50 ps4: add the baikal southbridge glue and wire up ahci, xhci and sdhci
+056e2f72020c35cd730a36e41860a6fd80c6d979 x86: amd: name the ps4 cpus
+74bf0140f4449ceb54767055886a4548c813f192 amdgpu: skip asic_init on reset and set the vram type and clocks on ps4
+997e00e106e148611d5ab55eeac9c0c7d77e0968 mt76x8: fix the proc write copy size
+e0a13320bf222d21edd184bdb9e2121b9e4954db ps4: add the buzzer driver
+7c7b25b6dd74e46c2afec624b641093f91da849a bluetooth: fix mt7668 on baikal
+34aaff2e37496f52294d88ab9813bcee346b9044 ps4: program the Gladius Neo GPU
+f1e78c8553f17af7521ceabb4d18546ebc615e33 ps4: route Gladius SMU through SAMU
+45baaf2fc732f4eefb9abafecaea286de6276b46 ps4: bpcie: fix baikal hdd interrupts and set the sata phy
+6934876ea2f1bd5262494f5d24f86ec9dcc30453 net: add baikal mts gigabit ethernet driver
+57e70e6b3add0d25e359534cd62f302c18ff860a ps4: switch the fan and led to the aeolia driver
+7503e90baae6989bdd00102b238412e44c646e9b ps4: bpcie-icc: add power off, reboot and event delivery
+d85ee4d7bdf8e5aa2822c1a27f3fc6024063926c ps4: bpcie: fix the uart and add the rtc
+10a21ce1d40c2adab5726aaf83936ce19baff0df amdgpu: ps4_bridge: read the edid over icc and handle hotplug
+47bdc6827b0259f414294e7a3bb2292f7942df12 amdgpu: gfx7: match the gameos config on liverpool
+fb5439fda94911efab576284cd2bd870d670d46d ps4: add the samu core, ccp, trng and ps4crypt
+2046ddf912c54bab4ef0efe3af8ae27e7d21ba9f amdgpu: uvd: enable uvd 5.0 on baikal liverpool
+7c90423b1d2f46b1b3f8e939fd15e2a7c0bdd8d1 amdgpu: vce: add the native vce1 block on baikal liverpool
+aa68165aa706fb2dc12c31d3488a55d22aebfae0 ps4: port to linux 7.1.7
+d6d4876d2cdd081f677bd5792877337cf76c7a48 amdgpu: liverpool_clk: set sclk and vid from the fuses through the samu proxy
+2afff9541c29224818fea1fb7d4928d9781a2090 amdgpu: enable uvd and vce on liverpool 1002:9920 and 1002:9922
+3f717376b6a442fb61c3890f61dadd3e88c21f98 cpufreq: add the ps4 p-state driver
+64b6874b1a305e54500e52f954d48057592fd505 firmware: ps4-dmi: fill only the missing dmi fields
+e93e6cad3a2b5823c3aa05c7bb768ed2715d2ae4 x86: ps4: name the cpu by its chip revision
+dc128cd080fe5d72fde57143412f5499914db4f1 x86: ps4: calibrate: wait on a tsc deadline for the emc timer reset
+282700737b51eaa63fe874c53f03c394f0ffdf79 ps4: add the aeolia and belize rtc and spi flash drivers
+f48c898c213bb3f5e7b3226c319b4b0f99e0842a ps4: icc: add the /dev/icc node option, reply checks and per chip i2c offsets
+4a9973270825e46e09beb7ae3471549eba25b249 ps4: led: use white early and violet blue at boot on baikal
+f3731efc42ad06e79a8403f8e6cfc44692a913fb firmware: add the live liverpool gpu microcode
+20d9ff7639ab9c01f90b6a7c9d6a11de27e99ed2 ps4: guard the uarts without serial 8250
+a2cfac0343affce4184f4c6d887add69a2e7e461 ps4: sflash: add the baikal read path
+89be308be7d91f72db76c52de2a0e2d52cb31764 ps4: pick the southbridge at runtime and drop X86_PS4_BAIKAL
+a2644bca698192a91beae96361401179ca26aeeb build: port the configs based build system
+77f1bc4f9af109f5af5786aab8995a657717524c ps4: add ps4sb.h and merge the uart and icc drivers
+9df8ee379fb3796d5b8b73c138d2826077e15016 ps4: merge the rtc drivers and add one status and irq entry point
+8ce92f46093d921ca0994610ff8ed611eb30d18b ps4: merge the southbridge headers and rename the drivers
+9a9242b5ff8b7a38da16bb32ec746791a02b7af5 x86: ps4: calibrate: measure the tsc against the baikal emc timer
+10bc1f581f2a19db5607f22d3f0b0acde1855c19 ps4: keep the aeolia irq lookup and limit the baikal acpi paths
+e177ee02e9f332e21b1a8e8909f828ef823cccfe x86: tsc: do not wait for a watchdog on baikal
+af1c4266978ada226b6580325844329cf46a0533 ps4: use identity mapping off baikal and fix the belize ahci error path
+11e8628a5ace05147f9074de05e3540cab35f61c amdgpu: dp: skip the link status checks on liverpool off baikal
+afff47dff40d197485f7e113dbe48794d626e644 build: turn off the samu ccp and trng for now
+60e1ee63f5578c875c927b8cd47379a0f2a20d54 ps4: port to linux 7.3
+4f45f7a4bcb551c1086bf89f7090938b59f181fc bluetooth: l2cap: wait for encryption before accepting classic channels
+54ae2fce005d150860ad76233e0fcc4ff8cd01e1 amdgpu: ps4 bridge: clear the bad first header byte in the hotplug edid
+b918f9020439ab72202c62839f6d768c67c8258f docs: add the readme, contributing and agents files and the showcase media
+79d665c2a436894b36e8200c93ab40346bacd317 docs: move the kheops part to its own file and fix the credit names
+20ae56bee0a99f02602742391b3fe3543ff04c67 amdgpu: ps4 bridge: fall back to 1080p when no edid mode is usable
+1fd0540970e1dfc1a871a8effc13c054f1397ad3 amdgpu: gladius: apply the 12.02 golden registers and turn off cgcg
+38788eb43567d9877863dc783017c221ad9409e9 docs: update the credit names
+f341ecf088e028514b8bee3060450fc94020f0a7 amdgpu: gladius: embed both cp microcode tables and pick one by 0x203e
+3372c6a10f37b8f7b8e632405f85f90a48911abc amdgpu: gladius: use the gfx7 firmware header versions
+59ab160958a2de394812627b85291219ef49a2a7 amdgpu: gladius: stop zeroing tcp_chan_steer_hi
+dff6838fcfa1dd4c2d437e9ab82514b2e7ea2cc4 amdgpu: gladius: stop setting cb_hw_control_2
+246b4fa114e8cf58f6f884228126df6468eaf912 docs: note that the november 8 kheops article is the same v2.1 pack
+689a51ea20f8605634775efe38ad1ba2ae08f229 docs: list what does not work yet
+985e4d328420dc5c355fd436044a7ba48f2401eb Replace Marvell 88W8897 firmware with functional binary
+a044295a1d29cfda1faff14db2b5b0b73cf1619b amdgpu: gladius: skip set_predication in the pfp microcode
+1ae7c56d6f6a5cb8efc440fdfe4faee3b93b305d docs: vulkan works on pro
+db0b92a8b102167435911bdd5131b8061b4ff371 docs: add the gladius firmware generator
+5f3c66df11091b860b9a5b9e1d6892b409b9852a amdgpu: ps4 bridge: match the mn864729 colour setup to gameos
+880e2ea98224e0b77e5ea946253723014e31d842 amdgpu: ps4 bridge: walk the whole edid fifo in the 8 byte fallback
+ab6d303ba190c7376b4990f7fc378c3bd84c9537 amdgpu: ps4 bridge: clear the bad first header byte in the icc edid
+23442e8cd21a6d5131a919d89d273b8b20579404 amdgpu: ps4 bridge: take the edid from the emc event on belize too
+3455abc339d5f2d26f1dd98243a7547c96df6219 amdgpu: gladius: switch the gpu to pro mode when it starts in base mode
+76bac61f7b91cfb30c75b8a1b6b163be68752f68 ps4: rtc: read the time offset from the emc nvs
+72c1408ffc3da24352149913cb9d25f3b3cfef5e ps4: trng: register with the hwrng core 30 s after boot
+a4d28acd6434122eaf18beeea0ffe933d673113f configs: enable the samu ccp and trng
+81a0b974f770dc1eed9f4b97bc420474d6b70228 docs: ccp and trng are on again
+a722f7f729ca2e6ecf37fdf06f9c4497771e1d2e docs: update what works and known issues
+9582a1d0ea094732610f83f73bdbfc47d89aa0f9 wlan: mtk: remove bullshit log spam
+8665d4a7f1d56d8f21792773cefecade236a7377 ps4: sflash: put the driver behind PS4_SFLASH, off by default
+e4b1dc4c53fab2dfbca0a4edf91cc205695748f2 amdgpu: ps4 bridge: drive 4k30 and 4k60 on pro like gameos
+5181b19d192813210a67dae4624660d4657b38b3 amdgpu: ps4 bridge: add the gameos waits and skip the dp retrain on pro
+12a24aa5917d68e9093bebdaf2f719a8ff8d6d82 amdgpu: ps4 bridge: log the mode, dp link and enable result
+fd8edbbd2145839ee3edd950b4d93bd8463ac75a firmware: ps4-dmi: use generic values that fit every ps4 model
+576471518b8c0d06bc08e1808c7a788570dfb254 firmware: ps4-dmi: replace a bad loader bios version and date
+43c497b137bf30dc0769b3153ef62d5a29832bba init: add the strawberry team to the boot banner
+86760b6bf8107d37de5095a75ea2f3fce5b05f32 init: say why the kernel is called strawberry
+1297cc9c2afa4cc25f0392e1cf2cdbe6c82a1891 amdgpu: gladius: add uvd and vce
+d183a34e1959b9392b52fdeeb4c43485b5d5d4e4 docs: video works on pro, add the documentation todo
+cad4547d9ea8f5337ed9787a06e0f5ef6a00e7dc docs: add the todo to document every engine
+bc3905e529ac89536fb22fbce39af9ee81efae82 docs: agents must not write code here without a booted test
+123e5fda12a7363ccf1adcfc08e1e9b7bbdbfe84 docs: 4k60 works on pro
+c0c50f0e260f420af86c051588cbf9838f4bb74e amdgpu: gladius: drop the pro mode switch, warn in base mode
+8e84be3ed88ee55e4bd4bd1b8b303c1e8ec90ce9 =config: enable XFS for the General profile

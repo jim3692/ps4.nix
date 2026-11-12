@@ -1,0 +1,23 @@
+From 123e5fda12a7363ccf1adcfc08e1e9b7bbdbfe84 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Tue, 10 Nov 2026 22:01:02 +0100
+Subject: [PATCH 122/124] docs: 4k60 works on pro
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ README.md | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/README.md b/README.md
+index 8aad4c134599d15d43957287460cc840bdf9f5ce..91ce66b1b6712642bf2a3d8476bbb4d2b1545d2f 100644
+--- a/README.md
++++ b/README.md
+@@ -23,7 +23,7 @@ tested on aeolia, baikal slim, baikal pro, belize fat, belize slim and belize pr
+ ## Known issues
+ 
+ - on pro the gpu microcode skips predication, so conditional rendering always draws
+-- 4k only up to 30 hz. no 4k60, hdr or deep color yet
++- 4k (30 and 60 hz) only on pro. no hdr or deep color yet
+ - no suspend or hibernate
+ - the gpu clock stays at its top speed, it does not clock down when idle
+ - aeolia ethernet can keep one cpu core busy, fix is in progress

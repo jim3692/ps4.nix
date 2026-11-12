@@ -1,0 +1,45 @@
+From 9582a1d0ea094732610f83f73bdbfc47d89aa0f9 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Tue, 10 Nov 2026 20:48:56 +0100
+Subject: [PATCH 109/124] wlan: mtk: remove bullshit log spam
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ .../mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_init.c   | 4 +---
+ .../mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p_cfg80211.c    | 2 +-
+ 2 files changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_init.c b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_init.c
+index 0f1b926052d41e81db5be2a83b04e7896b6b4df9..5230b93ba1faecee9b97133bec617436499b7270 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_init.c
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_init.c
+@@ -1134,15 +1134,13 @@ VOID wlanDebugInit(VOID)
+ #else
+ 
+ 	for (i = 0; i < DBG_MODULE_NUM; i++) {
+-		aucDebugModule[i] = DBG_CLASS_ERROR |
+-			DBG_CLASS_WARN | DBG_CLASS_STATE | DBG_CLASS_EVENT;// | DBG_CLASS_INFO;
++		aucDebugModule[i] = DBG_CLASS_ERROR | DBG_CLASS_WARN;
+ 	}
+ 	aucDebugModule[DBG_TX_IDX] &= ~(DBG_CLASS_EVENT | DBG_CLASS_INFO);
+ 	aucDebugModule[DBG_RX_IDX] &= ~(DBG_CLASS_EVENT | DBG_CLASS_INFO);
+ 	aucDebugModule[DBG_REQ_IDX] &= ~(DBG_CLASS_EVENT | DBG_CLASS_INFO);
+ 	aucDebugModule[DBG_INTR_IDX] = 0;
+ 	aucDebugModule[DBG_MEM_IDX] = DBG_CLASS_ERROR | DBG_CLASS_WARN;
+-	aucDebugModule[DBG_REQ_IDX] = DBG_CLASS_MASK;
+ 
+ #endif
+ #endif /* DBG */
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p_cfg80211.c b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p_cfg80211.c
+index eee4282f4653dc013992dd919b880737cdf87b21..6ea8cf1cd0b48c04ffd9faef41ab369397900b6c 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p_cfg80211.c
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p_cfg80211.c
+@@ -3016,7 +3016,7 @@ void mtk_p2p_cfg80211_mgmt_frame_register(IN struct wiphy *wiphy,
+ 			}
+ 			break;
+ 		default:
+-			DBGLOG(P2P, ERROR, "Ask frog to add code for mgmt:%x\n", frame_type);
++			DBGLOG(P2P, TRACE, "Ask frog to add code for mgmt:%x\n", frame_type);
+ 			break;
+ 		}
+ 

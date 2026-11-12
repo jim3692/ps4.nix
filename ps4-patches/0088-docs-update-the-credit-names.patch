@@ -1,0 +1,35 @@
+From 38788eb43567d9877863dc783017c221ad9409e9 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sat, 7 Nov 2026 22:50:19 +0100
+Subject: [PATCH 088/124] docs: update the credit names
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ README.md | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/README.md b/README.md
+index 5f8d41a5d0e4b3587de20558ce0a6cbe61acb230..a67d64afe63e62669ca0585a722931961cfc0320 100644
+--- a/README.md
++++ b/README.md
+@@ -102,15 +102,15 @@ people keep saying i stole their code. i wrote down whats really inside their ke
+ 
+ ### Team
+ 
+-- devs: arabpixel (ArabPixel), packagebob (feeRnt), professionalcummer, bjhabibie
++- devs: arabpixel (ArabPixel), packagebob (feeRnt), bjhabibie
+ - coordination: eclipsed.starr (dreams-of-formaldehyde), hnoobi (TheVorkMan), vanillitefroyo
+ 
+ ### Testers
+ 
+-- baikal: blyadimir., dewaardt, ss6530, isitnull., shyxuo, zarbok., vanixidk (vanixvanixvanix), jhuhblya, louisianafriedchicken, hwangbokgukho, kingabut, izanhower, sgtxkitkat, rodrigo, sudofrontman, fluffysheep
+-- belize: adanielg18 (angeldanielguerrerocarrera), gattodev_real (GattoDev-debug), angheloisfish, wondermine, nadaman, rzle, hnoobi (TheVorkMan), vanillitefroyo
+-- aeolia: diema, lupusetflos, professionalcummer
+-- testers and logs: bozo.ozod, erkki_69_men.com, bejolsurviva_66626, Bbang, gryoza, fleur, TheGreekOne, felix_suicide, tteons, Scrooge
++- baikal: blyadimir., dewaardt, ss6530, isitnull., shyxuo, zarbok., vanixidk (vanixvanixvanix), jhuhblya, mechanical, kingabut, izanhower, sgtxkitkat, rodrigo, sudofrontman, fluffysheep
++- belize: adanielg18 (angeldanielguerrerocarrera), gattodev_real (GattoDev-debug), angheloisfish, wondermine, nadaman, razzle, hnoobi (TheVorkMan), vanillitefroyo
++- aeolia: rmuxnet (me), diema, lupusetflos, bjhabibie
++- testers and logs: bozo.ozod, erkki_69_men.com, Bbang, gryoza, fleur, TheGreekOne, felix_suicide, tteons, Scrooge
+ 
+ ### Special thanks
+ 

@@ -1,0 +1,563 @@
+From aff63b437466a33a5f791a5911f8bd0c05b34f76 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sun, 26 Apr 2026 21:54:45 +0200
+Subject: [PATCH 028/124] ps4: fix the led and fan drivers
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/ps4/ps4-fan.c |  65 ++++++++-
+ drivers/ps4/ps4-fan.h |   2 +-
+ drivers/ps4/ps4-led.c | 332 +++++++++++++++---------------------------
+ drivers/ps4/ps4-led.h |  19 +--
+ 4 files changed, 186 insertions(+), 232 deletions(-)
+
+diff --git a/drivers/ps4/ps4-fan.c b/drivers/ps4/ps4-fan.c
+index 68ae6508b35d09e8345d053521e666c80c94eea4..53f0d336b4f90c066f36a1d865f5620a81059b03 100644
+--- a/drivers/ps4/ps4-fan.c
++++ b/drivers/ps4/ps4-fan.c
+@@ -3,16 +3,34 @@
+ #include <linux/module.h>
+ #include <linux/platform_device.h>
+ #include <linux/hwmon.h>
++#include <linux/jiffies.h>
+ #include <linux/mutex.h>
+ #include <linux/slab.h>
+ #include <linux/err.h>
+ #include "aeolia.h"
+ #include "ps4-fan.h"
+ 
++#define PS4_FAN_CACHE_JIFFIES HZ
++
+ struct ps4_fan_priv {
+ 	struct mutex lock;
++	long temp_mc;
++	long thresh_mc;
++	long rpm;
++	unsigned long temp_updated;
++	unsigned long thresh_updated;
++	unsigned long rpm_updated;
++	bool temp_valid;
++	bool thresh_valid;
++	bool rpm_valid;
+ };
+ 
++static bool ps4_fan_cache_valid(unsigned long updated, bool valid)
++{
++	return valid &&
++	       time_is_after_jiffies(updated + PS4_FAN_CACHE_JIFFIES);
++}
++
+ static int icc_read_apu_temp(long *temp_mc)
+ {
+ 	u8 reply[PS4_FAN_TEMP_REPLY_LEN];
+@@ -146,10 +164,32 @@ static int ps4_fan_read(struct device *dev, enum hwmon_sensor_types type,
+ 		if (channel != 0) { ret = -EOPNOTSUPP; break; }
+ 		switch (attr) {
+ 		case hwmon_temp_input:
++			if (ps4_fan_cache_valid(priv->temp_updated,
++						priv->temp_valid)) {
++				*val = priv->temp_mc;
++				ret = 0;
++				break;
++			}
+ 			ret = icc_read_apu_temp(val);
++			if (!ret) {
++				priv->temp_mc = *val;
++				priv->temp_updated = jiffies;
++				priv->temp_valid = true;
++			}
+ 			break;
+ 		case hwmon_temp_crit:
++			if (ps4_fan_cache_valid(priv->thresh_updated,
++						priv->thresh_valid)) {
++				*val = priv->thresh_mc;
++				ret = 0;
++				break;
++			}
+ 			ret = icc_read_fan_threshold(val);
++			if (!ret) {
++				priv->thresh_mc = *val;
++				priv->thresh_updated = jiffies;
++				priv->thresh_valid = true;
++			}
+ 			break;
+ 		default:
+ 			ret = -EOPNOTSUPP;
+@@ -160,7 +200,17 @@ static int ps4_fan_read(struct device *dev, enum hwmon_sensor_types type,
+ 			ret = -EOPNOTSUPP;
+ 			break;
+ 		}
++		if (ps4_fan_cache_valid(priv->rpm_updated, priv->rpm_valid)) {
++			*val = priv->rpm;
++			ret = 0;
++			break;
++		}
+ 		ret = icc_read_fan_rpm(val);
++		if (!ret) {
++			priv->rpm = *val;
++			priv->rpm_updated = jiffies;
++			priv->rpm_valid = true;
++		}
+ 		break;
+ 	default:
+ 		ret = -EOPNOTSUPP;
+@@ -178,9 +228,22 @@ static int ps4_fan_write(struct device *dev, enum hwmon_sensor_types type,
+ 
+ 	if (type != hwmon_temp || channel != 0 || attr != hwmon_temp_crit)
+ 		return -EOPNOTSUPP;
++	if (val % 1000)
++		return -EINVAL;
+ 
+ 	mutex_lock(&priv->lock);
++	if (ps4_fan_cache_valid(priv->thresh_updated, priv->thresh_valid) &&
++	    priv->thresh_mc == val) {
++		mutex_unlock(&priv->lock);
++		return 0;
++	}
++
+ 	ret = icc_write_fan_threshold(val);
++	if (!ret) {
++		priv->thresh_mc = val;
++		priv->thresh_updated = jiffies;
++		priv->thresh_valid = true;
++	}
+ 	mutex_unlock(&priv->lock);
+ 
+ 	return ret;
+@@ -275,4 +338,4 @@ module_exit(ps4_fan_exit);
+ MODULE_LICENSE("GPL");
+ MODULE_AUTHOR("rmux <armandas.kvietkus@proton.me>");
+ MODULE_DESCRIPTION("PS4 Aeolia/Belize fan threshold and RPM hwmon driver");
+-MODULE_ALIAS("platform:ps4-fan");
+\ No newline at end of file
++MODULE_ALIAS("platform:ps4-fan");
+diff --git a/drivers/ps4/ps4-fan.h b/drivers/ps4/ps4-fan.h
+index ebd7d90f56dd7fea9dc3f4c492042ca6c620e247..101d95e91eb431c1a4f071bb8d79af9400b20955 100644
+--- a/drivers/ps4/ps4-fan.h
++++ b/drivers/ps4/ps4-fan.h
+@@ -34,4 +34,4 @@
+ #define PS4_FAN_THRESH_MAX_MC           ((long)(PS4_FAN_THRESH_MAX_C) * 1000L)
+ #define PS4_FAN_THRESH_DEFAULT_MC       ((long)(PS4_FAN_THRESH_DEFAULT_C) * 1000L)
+ 
+-#endif
+\ No newline at end of file
++#endif
+diff --git a/drivers/ps4/ps4-led.c b/drivers/ps4/ps4-led.c
+index 76ea90c70f45ecfe0d4eba0cea2bdb71f20c6d0a..85d8bc2e919abbee0332ad118688e8008501dbcf 100644
+--- a/drivers/ps4/ps4-led.c
++++ b/drivers/ps4/ps4-led.c
+@@ -4,10 +4,6 @@
+ #include <linux/leds.h>
+ #include <linux/platform_device.h>
+ #include <linux/string.h>
+-#include <linux/workqueue.h>
+-#include <linux/jiffies.h>
+-#include <linux/mutex.h>
+-#include <linux/slab.h>
+ #include "aeolia.h"
+ #include "ps4-led.h"
+ 
+@@ -107,221 +103,144 @@ static const u8 led_pink_blue[] = {
+ 	0x05, 0x01, 0x00
+ };
+ 
+-struct ps4_led_priv {
+-	struct platform_device  *pdev;
+-	struct delayed_work      thermal_work;
+-	struct mutex             lock;
+-	enum ps4_led_mode        mode;
+-	unsigned int             thermal_interval_ms;
+-};
+-
+-static void ps4_thermal_work_fn(struct work_struct *work)
+-{
+-	struct ps4_led_priv *priv =
+-		container_of(to_delayed_work(work),
+-			     struct ps4_led_priv, thermal_work);
+-	u8 temp_reply[PS4_LED_TEMP_REPLY_LEN];
+-	u8 led_reply[0x30];
++struct ps4_led_node {
++	struct led_classdev cdev;
+ 	const u8 *payload;
+-	unsigned int interval_ms;
+-	int ret;
+-
+-	mutex_lock(&priv->lock);
+-	if (priv->mode != MODE_THERMAL) {
+-		mutex_unlock(&priv->lock);
+-		return;
+-	}
+-	interval_ms = priv->thermal_interval_ms;
+-	mutex_unlock(&priv->lock);
+-
+-	memset(temp_reply, 0, sizeof(temp_reply));
+-
+-	ret = apcie_icc_cmd(PS4_LED_TEMP_ICC_MAJOR, PS4_LED_TEMP_ICC_MINOR,
+-			    NULL, 0, temp_reply, sizeof(temp_reply));
+-	if (ret < 0 || temp_reply[PS4_ICC_STATUS_OK] != 0x00) {
+-		dev_dbg(&priv->pdev->dev,
+-			"thermal: ICC temp read failed (ret=%d status=0x%02x)\n",
+-			ret, temp_reply[0]);
+-		goto reschedule;
+-	}
++};
+ 
+-	if (temp_reply[PS4_LED_TEMP_BYTE] < PS4_LED_TEMP_COOL_MAX)
+-		payload = led_blue;
+-	else if (temp_reply[PS4_LED_TEMP_BYTE] < PS4_LED_TEMP_WARM_MAX)
+-		payload = led_white;
+-	else
+-		payload = led_orange;
+-
+-	dev_dbg(&priv->pdev->dev,
+-		"thermal: APU %u°C => %s\n",
+-		temp_reply[PS4_LED_TEMP_BYTE],
+-		(payload == led_blue)  ? "blue"  :
+-		(payload == led_white) ? "white" : "orange");
+-
+-	apcie_icc_cmd(PS4_LED_ICC_MAJOR, PS4_LED_ICC_MINOR,
+-		      (void *)payload, PS4_LED_PAYLOAD_LEN,
+-		      led_reply, sizeof(led_reply));
+-
+-reschedule:
+-	schedule_delayed_work(&priv->thermal_work,
+-			      msecs_to_jiffies(interval_ms));
+-}
++static DEFINE_MUTEX(ps4_led_lock);
++static const u8 *ps4_led_current_payload;
+ 
+-static void ps4_led_set(struct led_classdev *led_cdev,
+-			enum led_brightness value)
++static int ps4_led_set_blocking(struct led_classdev *led_cdev,
++				enum led_brightness value)
+ {
+-	const u8 *data = led_off;
++	struct ps4_led_node *node =
++		container_of(led_cdev, struct ps4_led_node, cdev);
++	const u8 *data = value == LED_OFF ? led_off : node->payload;
+ 	u8 reply[0x30];
++	int ret;
+ 
+-	if (value != LED_OFF) {
+-		if (strstr(led_cdev->name, "orange_white_blue"))
+-			data = led_orange_white_blue;
+-		else if (strstr(led_cdev->name, "pulsate_orange"))
+-			data = led_pulsate_orange;
+-		else if (strstr(led_cdev->name, "orange_white"))
+-			data = led_orange_white;
+-		else if (strstr(led_cdev->name, "orange_blue"))
+-			data = led_orange_blue;
+-		else if (strstr(led_cdev->name, "white_blue"))
+-			data = led_white_blue;
+-		else if (strstr(led_cdev->name, "violet_blue"))
+-			data = led_violet_blue;
+-		else if (strstr(led_cdev->name, "pink_blue"))
+-			data = led_pink_blue;
+-		else if (strstr(led_cdev->name, "pink"))
+-			data = led_pink;
+-		else if (strstr(led_cdev->name, "orange"))
+-			data = led_orange;
+-		else if (strstr(led_cdev->name, "white"))
+-			data = led_white;
+-		else if (strstr(led_cdev->name, "blue"))
+-			data = led_blue;
+-	}
+-
+-	apcie_icc_cmd(PS4_LED_ICC_MAJOR, PS4_LED_ICC_MINOR,
+-		      (void *)data, PS4_LED_PAYLOAD_LEN,
+-		      reply, sizeof(reply));
+-}
+-
+-static struct led_classdev ps4_led_nodes[] = {
+-	{ .name = "ps4:blue:status",              .brightness_set = ps4_led_set },
+-	{ .name = "ps4:white:status",             .brightness_set = ps4_led_set },
+-	{ .name = "ps4:orange:status",            .brightness_set = ps4_led_set },
+-	{ .name = "ps4:orange_blue:status",       .brightness_set = ps4_led_set },
+-	{ .name = "ps4:orange_white:status",      .brightness_set = ps4_led_set },
+-	{ .name = "ps4:pulsate_orange:status",    .brightness_set = ps4_led_set },
+-	{ .name = "ps4:orange_white_blue:status", .brightness_set = ps4_led_set },
+-	{ .name = "ps4:white_blue:status",        .brightness_set = ps4_led_set },
+-	{ .name = "ps4:violet_blue:status",       .brightness_set = ps4_led_set },
+-	{ .name = "ps4:pink:status",              .brightness_set = ps4_led_set },
+-	{ .name = "ps4:pink_blue:status",         .brightness_set = ps4_led_set },
+-};
+-
+-static ssize_t mode_show(struct device *dev,
+-			 struct device_attribute *attr, char *buf)
+-{
+-	struct ps4_led_priv *priv = dev_get_drvdata(dev);
+-	const char *s;
+-
+-	mutex_lock(&priv->lock);
+-	s = (priv->mode == MODE_THERMAL) ? "thermal" : "static";
+-	mutex_unlock(&priv->lock);
++	memset(reply, 0, sizeof(reply));
+ 
+-	return sysfs_emit(buf, "%s\n", s);
+-}
++	mutex_lock(&ps4_led_lock);
+ 
+-static ssize_t mode_store(struct device *dev,
+-			  struct device_attribute *attr,
+-			  const char *buf, size_t count)
+-{
+-	struct ps4_led_priv *priv = dev_get_drvdata(dev);
+-	bool want_thermal;
+-
+-	if (sysfs_streq(buf, "thermal"))
+-		want_thermal = true;
+-	else if (sysfs_streq(buf, "static"))
+-		want_thermal = false;
+-	else
+-		return -EINVAL;
+-
+-	mutex_lock(&priv->lock);
+-
+-	if (want_thermal && priv->mode != MODE_THERMAL) {
+-		priv->mode = MODE_THERMAL;
+-		mutex_unlock(&priv->lock);
+-		schedule_delayed_work(&priv->thermal_work, 0);
+-	} else if (!want_thermal && priv->mode == MODE_THERMAL) {
+-		priv->mode = MODE_STATIC;
+-		mutex_unlock(&priv->lock);
+-		cancel_delayed_work_sync(&priv->thermal_work);
+-	} else {
+-		mutex_unlock(&priv->lock);
++	if (ps4_led_current_payload == data) {
++		mutex_unlock(&ps4_led_lock);
++		return 0;
+ 	}
+ 
+-	return count;
+-}
+-static DEVICE_ATTR_RW(mode);
+-
+-static ssize_t thermal_interval_ms_show(struct device *dev,
+-					struct device_attribute *attr,
+-					char *buf)
+-{
+-	struct ps4_led_priv *priv = dev_get_drvdata(dev);
+-	unsigned int v;
+-
+-	mutex_lock(&priv->lock);
+-	v = priv->thermal_interval_ms;
+-	mutex_unlock(&priv->lock);
+-
+-	return sysfs_emit(buf, "%u\n", v);
+-}
+-
+-static ssize_t thermal_interval_ms_store(struct device *dev,
+-					 struct device_attribute *attr,
+-					 const char *buf, size_t count)
+-{
+-	struct ps4_led_priv *priv = dev_get_drvdata(dev);
+-	unsigned int val;
+-
+-	if (kstrtouint(buf, 10, &val) || val == 0)
+-		return -EINVAL;
++	ret = apcie_icc_cmd(PS4_LED_ICC_MAJOR, PS4_LED_ICC_MINOR,
++			    data, PS4_LED_PAYLOAD_LEN,
++			    reply, sizeof(reply));
++	if (ret < 0) {
++		mutex_unlock(&ps4_led_lock);
++		return ret;
++	}
+ 
+-	mutex_lock(&priv->lock);
+-	priv->thermal_interval_ms = val;
+-	mutex_unlock(&priv->lock);
++	ps4_led_current_payload = data;
++	mutex_unlock(&ps4_led_lock);
+ 
+-	return count;
++	return 0;
+ }
+-static DEVICE_ATTR_RW(thermal_interval_ms);
+ 
+-static struct attribute *ps4_led_attrs[] = {
+-	&dev_attr_mode.attr,
+-	&dev_attr_thermal_interval_ms.attr,
+-	NULL,
++static struct ps4_led_node ps4_led_nodes[] = {
++	{
++		.cdev = {
++			.name = "ps4:blue:status",
++			.max_brightness = 255,
++			.brightness_set_blocking = ps4_led_set_blocking,
++		},
++		.payload = led_blue,
++	},
++	{
++		.cdev = {
++			.name = "ps4:white:status",
++			.max_brightness = 255,
++			.brightness_set_blocking = ps4_led_set_blocking,
++		},
++		.payload = led_white,
++	},
++	{
++		.cdev = {
++			.name = "ps4:orange:status",
++			.max_brightness = 255,
++			.brightness_set_blocking = ps4_led_set_blocking,
++		},
++		.payload = led_orange,
++	},
++	{
++		.cdev = {
++			.name = "ps4:orange_blue:status",
++			.max_brightness = 255,
++			.brightness_set_blocking = ps4_led_set_blocking,
++		},
++		.payload = led_orange_blue,
++	},
++	{
++		.cdev = {
++			.name = "ps4:orange_white:status",
++			.max_brightness = 255,
++			.brightness_set_blocking = ps4_led_set_blocking,
++		},
++		.payload = led_orange_white,
++	},
++	{
++		.cdev = {
++			.name = "ps4:pulsate_orange:status",
++			.max_brightness = 255,
++			.brightness_set_blocking = ps4_led_set_blocking,
++		},
++		.payload = led_pulsate_orange,
++	},
++	{
++		.cdev = {
++			.name = "ps4:orange_white_blue:status",
++			.max_brightness = 255,
++			.brightness_set_blocking = ps4_led_set_blocking,
++		},
++		.payload = led_orange_white_blue,
++	},
++	{
++		.cdev = {
++			.name = "ps4:white_blue:status",
++			.max_brightness = 255,
++			.brightness_set_blocking = ps4_led_set_blocking,
++		},
++		.payload = led_white_blue,
++	},
++	{
++		.cdev = {
++			.name = "ps4:violet_blue:status",
++			.max_brightness = 255,
++			.brightness_set_blocking = ps4_led_set_blocking,
++		},
++		.payload = led_violet_blue,
++	},
++	{
++		.cdev = {
++			.name = "ps4:pink:status",
++			.max_brightness = 255,
++			.brightness_set_blocking = ps4_led_set_blocking,
++		},
++		.payload = led_pink,
++	},
++	{
++		.cdev = {
++			.name = "ps4:pink_blue:status",
++			.max_brightness = 255,
++			.brightness_set_blocking = ps4_led_set_blocking,
++		},
++		.payload = led_pink_blue,
++	},
+ };
+-ATTRIBUTE_GROUPS(ps4_led);
+ 
+ static int ps4_led_probe(struct platform_device *pdev)
+ {
+-	struct ps4_led_priv *priv;
+ 	int i, ret;
+ 
+-	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
+-	if (!priv)
+-		return -ENOMEM;
+-
+-	priv->pdev                = pdev;
+-	priv->mode                = MODE_STATIC;
+-	priv->thermal_interval_ms = PS4_LED_THERMAL_INTERVAL_MS_DEFAULT;
+-
+-	mutex_init(&priv->lock);
+-	INIT_DELAYED_WORK(&priv->thermal_work, ps4_thermal_work_fn);
+-
+-	platform_set_drvdata(pdev, priv);
+-
+ 	for (i = 0; i < ARRAY_SIZE(ps4_led_nodes); i++) {
+ 		ret = devm_led_classdev_register(&pdev->dev,
+-						 &ps4_led_nodes[i]);
++						 &ps4_led_nodes[i].cdev);
+ 		if (ret) {
+ 			dev_err(&pdev->dev,
+ 				"failed to register LED node %d: %d\n",
+@@ -330,26 +249,15 @@ static int ps4_led_probe(struct platform_device *pdev)
+ 		}
+ 	}
+ 
+-	dev_info(&pdev->dev,
+-		 "PS4 LED driver ready. "
+-		 "Write 'thermal' to mode attribute to enable thermal indicator.\n");
++	dev_info(&pdev->dev, "PS4 LED driver ready.\n");
+ 
+ 	return 0;
+ }
+ 
+-static void ps4_led_remove(struct platform_device *pdev)
+-{
+-	struct ps4_led_priv *priv = platform_get_drvdata(pdev);
+-
+-	cancel_delayed_work_sync(&priv->thermal_work);
+-}
+-
+ static struct platform_driver ps4_led_driver = {
+ 	.probe  = ps4_led_probe,
+-	.remove = ps4_led_remove,
+ 	.driver = {
+-		.name       = "ps4-led",
+-		.dev_groups = ps4_led_groups,
++		.name = "ps4-led",
+ 	},
+ };
+ 
+@@ -393,5 +301,5 @@ module_exit(ps4_led_exit);
+ 
+ MODULE_LICENSE("GPL");
+ MODULE_AUTHOR("rmux <armandas.kvietkus@proton.me>");
+-MODULE_DESCRIPTION("PS4 Aeolia front panel LED driver with Thermal Indicator Mode");
+-MODULE_ALIAS("platform:ps4-led");
+\ No newline at end of file
++MODULE_DESCRIPTION("PS4 Aeolia front panel LED driver");
++MODULE_ALIAS("platform:ps4-led");
+diff --git a/drivers/ps4/ps4-led.h b/drivers/ps4/ps4-led.h
+index 10dd70c72654a52626b5378280727586a2ec8ac6..23413871af2dfb4a9ef5505ef537e145243ba300 100644
+--- a/drivers/ps4/ps4-led.h
++++ b/drivers/ps4/ps4-led.h
+@@ -7,21 +7,4 @@
+ #define PS4_LED_ICC_MINOR       0x20
+ #define PS4_LED_PAYLOAD_LEN     35
+ 
+-#define PS4_LED_TEMP_COOL_MAX   65
+-#define PS4_LED_TEMP_WARM_MAX   80
+-
+-#define PS4_LED_TEMP_ICC_MAJOR  0x0B
+-#define PS4_LED_TEMP_ICC_MINOR  0x01
+-#define PS4_LED_TEMP_REPLY_LEN  0x10
+-#define PS4_LED_TEMP_BYTE       3
+-
+-#define PS4_ICC_STATUS_OK       0x00
+-
+-#define PS4_LED_THERMAL_INTERVAL_MS_DEFAULT     2000U
+-
+-enum ps4_led_mode {
+-	MODE_STATIC,
+-	MODE_THERMAL,
+-};
+-
+-#endif
+\ No newline at end of file
++#endif

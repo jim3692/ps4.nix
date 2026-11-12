@@ -1,0 +1,330 @@
+From d6d4876d2cdd081f677bd5792877337cf76c7a48 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Fri, 6 Nov 2026 17:57:47 +0100
+Subject: [PATCH 058/124] amdgpu: liverpool_clk: set sclk and vid from the
+ fuses through the samu proxy
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/liverpool_clk.c | 233 ++++++++++++++-------
+ drivers/gpu/drm/amd/amdgpu/liverpool_smu.c |   7 +
+ 2 files changed, 170 insertions(+), 70 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_clk.c b/drivers/gpu/drm/amd/amdgpu/liverpool_clk.c
+index 851ac450655fd01da81c13dd1e009a8e418e5252..34e4a8e36d8087c570c98af28778c5e56b0e56a3 100644
+--- a/drivers/gpu/drm/amd/amdgpu/liverpool_clk.c
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_clk.c
+@@ -44,9 +44,15 @@
+ #define SCLK_STARTUP_DID                0xe000304c
+ #define   SCLKSTARTUPDID_MASK             0x7f
+ 
+-#define LIVERPOOL_TARGET_SCLK_DID       1
+-#define LIVERPOOL_CLK_TIMEOUT_US        10
+-#define LIVERPOOL_CLK_TIMEOUT_ITER      1000
++#define VDDNB_REQUEST                   0xc0200090
++#define VDDNB_STATUS                    0xc0200094
++#define LIVERPOOL_FUSE_BASE             0xc0100000
++#define LIVERPOOL_SCLK_LEVELS           5
++#define LIVERPOOL_SCLK_POLL             100001
++#define LIVERPOOL_VDDNB_POLL            10000
++#define LIVERPOOL_VID_MIN               0x58
++#define LIVERPOOL_VID_MAX               0x74
++#define LIVERPOOL_DENTIST_DISPCLK_CNTL  (0x490 / 4)
+ 
+ #define GLADIUS_GCK_SCLK_HI		0x400000
+ 
+@@ -164,15 +170,165 @@ int liverpool_clk_gladius_set_div(struct amdgpu_device *adev, unsigned int div)
+ 	return wr;
+ }
+ 
++static u32 liverpool_fuse(struct amdgpu_device *adev, u32 block, u32 bit, u32 width)
++{
++	u32 reg = LIVERPOOL_FUSE_BASE | (block << 12) | ((bit >> 5) * 4);
++	u32 shift = bit & 31;
++	u64 value = RREG32_SMC(reg);
++
++	if (shift + width > 32)
++		value |= (u64)RREG32_SMC(reg + 4) << 32;
++	return (value >> shift) & (BIT_ULL(width) - 1);
++}
++
++static int liverpool_poll_bit0(struct amdgpu_device *adev, u32 reg, u32 tries)
++{
++	u32 i;
++
++	for (i = 0; i < tries; i++)
++		if (RREG32_SMC(reg) & 1)
++			return 0;
++	return -ETIMEDOUT;
++}
++
++static u32 liverpool_did_clock(u32 did)
++{
++	if (did < 8)
++		return 80000;
++	if (did < 0x40)
++		return 1280000 / did;
++	if (did < 0x60)
++		return 320000 / (16 + (did - 0x40) / 2);
++	if (did < 0x7f)
++		return 320000 / (did - 0x40);
++	return 2500;
++}
++
++static u32 liverpool_clock_level(struct amdgpu_device *adev, u32 block, u32 bit,
++				 u32 levels, u32 did)
++{
++	u32 clock = liverpool_did_clock(did);
++	u32 k;
++
++	for (k = 0; k < levels - 1; k++)
++		if (clock <= liverpool_did_clock(liverpool_fuse(adev, block, bit + 7 * k, 7)))
++			break;
++	return k;
++}
++
++static u32 liverpool_vid_for_clocks(struct amdgpu_device *adev, u32 sclk_did)
++{
++	static const struct {
++		u32 reg, block, bit, bit_early;
++	} clocks[] = {
++		{ 0xc05000dc, 4, 0x3e3, 0x3c2 },
++		{ 0xc050009c, 7, 0x3b8, 0x3b8 },
++		{ 0xc05000ac, 4, 0x3c7, 0x3a6 },
++		{ 0xc0500094, 7, 0x398, 0x398 },
++		{ 0xc05000e4, 4, 0x3ff, 0x3de },
++		{ 0xc05000a4, 7, 0x3d4, 0x3d4 },
++	};
++	bool slim = adev->pdev->device == 0x9923;
++	u32 level, k, i, sel;
++
++	level = liverpool_clock_level(adev, 7, 0x349, LIVERPOOL_SCLK_LEVELS, sclk_did);
++	for (i = 0; i < ARRAY_SIZE(clocks); i++) {
++		k = liverpool_clock_level(adev, clocks[i].block,
++					  slim ? clocks[i].bit : clocks[i].bit_early, 4,
++					  RREG32_SMC(clocks[i].reg) & SCLK_DIVIDER_MASK);
++		level = max(level, k);
++	}
++	k = liverpool_clock_level(adev, 7, 0x37c, 4,
++				  RREG32(LIVERPOOL_DENTIST_DISPCLK_CNTL) & SCLK_DIVIDER_MASK);
++	level = max(level, k);
++
++	sel = liverpool_fuse(adev, 7, 0x33f + 2 * level, 2);
++	return liverpool_fuse(adev, 4, 0x33 + 8 * sel, 8);
++}
++
++static int liverpool_vid_set(struct amdgpu_device *adev, u32 vid)
++{
++	int r = liverpool_smu_samu_write(adev, VDDNB_REQUEST, vid * 2 + 1);
++
++	if (!r)
++		r = liverpool_poll_bit0(adev, VDDNB_STATUS, LIVERPOOL_VDDNB_POLL);
++	if (r)
++		dev_err(adev->dev, "Liverpool SCLK: VID 0x%02x failed (%d)\n", vid, r);
++	return r;
++}
++
++static int liverpool_sclk_set_top(struct amdgpu_device *adev)
++{
++	u32 cntl, current_did, top, target, vid, current_vid;
++	int r;
++
++	top = liverpool_fuse(adev, 7, 0x349 + 7 * (LIVERPOOL_SCLK_LEVELS - 1), 7);
++	cntl = RREG32_SMC(CG_SCLK_CNTL);
++	current_did = cntl & SCLK_DIVIDER_MASK;
++
++	if (top < 8 || top > 0x3f) {
++		dev_warn(adev->dev, "Liverpool SCLK: invalid fused divider 0x%02x\n", top);
++		return -EINVAL;
++	}
++
++	target = min(current_did, top);
++	vid = liverpool_vid_for_clocks(adev, target);
++	current_vid = (RREG32_SMC(VDDNB_STATUS) >> 1) & 0xff;
++
++	dev_info(adev->dev,
++		 "Liverpool SCLK: divider 0x%02x, fused top 0x%02x (%u MHz), VID 0x%02x, fused VID 0x%02x\n",
++		 current_did, top, 12800 / top, current_vid, vid);
++
++	if (vid < LIVERPOOL_VID_MIN || vid > LIVERPOOL_VID_MAX) {
++		dev_warn(adev->dev, "Liverpool SCLK: fused VID 0x%02x out of range\n", vid);
++		return -EINVAL;
++	}
++
++	if (vid < current_vid) {
++		r = liverpool_vid_set(adev, vid);
++		if (r)
++			return r;
++	}
++
++	if (current_did > top) {
++		r = liverpool_smu_samu_write(adev, CG_SCLK_CNTL, cntl & ~SCLK_DIRCNTL_EN);
++		if (!r)
++			r = liverpool_poll_bit0(adev, CG_SCLK_STATUS, LIVERPOOL_SCLK_POLL);
++		if (!r)
++			r = liverpool_smu_samu_write(adev, CG_SCLK_CNTL,
++						     (RREG32_SMC(CG_SCLK_CNTL) & ~SCLK_DIVIDER_MASK) | top);
++		if (!r)
++			r = liverpool_poll_bit0(adev, CG_SCLK_STATUS, LIVERPOOL_SCLK_POLL);
++		if (r) {
++			dev_err(adev->dev, "Liverpool SCLK: divider write failed (%d)\n", r);
++			return r;
++		}
++	}
++
++	if (vid > current_vid) {
++		r = liverpool_vid_set(adev, vid);
++		if (r)
++			return r;
++	}
++
++	cntl = RREG32_SMC(CG_SCLK_CNTL);
++	current_vid = (RREG32_SMC(VDDNB_STATUS) >> 1) & 0xff;
++	if (current_did != target || current_did != (cntl & SCLK_DIVIDER_MASK) || current_vid != vid)
++		dev_info(adev->dev, "Liverpool SCLK: now divider 0x%02x, VID 0x%02x\n",
++			 cntl & SCLK_DIVIDER_MASK, current_vid);
++	return ((cntl & SCLK_DIVIDER_MASK) == target && current_vid == vid) ? 0 : -EIO;
++}
++
+ int liverpool_clk_force_max(struct amdgpu_device *adev)
+ {
+ 	u32 spll_fuses, sclk_fuses, spll_cntl, spll_fb;
+ 	u32 spll_freq_id_startup, spll_freq_id_max;
+ 	u32 startup_did, current_did;
+ 	u32 spll_pdiva, spll_fbdiv;
+-	u32 cntl, status;
+-	bool expected_done_tog;
+-	int i;
++	u32 status;
++
++	if (adev->asic_type != CHIP_GLADIUS)
++		return liverpool_sclk_set_top(adev);
+ 
+ 	spll_fuses = RREG32_SMC(GCK_SPLL_FUSES);
+ 	sclk_fuses = RREG32_SMC(GCK_SCLK_FUSES);
+@@ -206,68 +362,5 @@ int liverpool_clk_force_max(struct amdgpu_device *adev)
+ 			 "Liverpool CLK: SPLL unlock sticky set (0x%08x)\n",
+ 			 status);
+ 
+-	if (adev->asic_type == CHIP_GLADIUS)
+-		return gladius_gck_mailbox(adev);
+-
+-	cntl = RREG32_SMC(CG_SCLK_CNTL);
+-	dev_info(adev->dev,
+-		 "Liverpool CLK: CG_SCLK_CNTL=0x%08x DIVIDER=%u DIRCNTLEN=%u DIRCNTLDIV=%u\n",
+-		 cntl,
+-		 (cntl & SCLK_DIVIDER_MASK)     >> SCLK_DIVIDER_SHIFT,
+-		 !!(cntl & SCLK_DIRCNTL_EN),
+-		 (cntl & SCLK_DIRCNTL_DIV_MASK) >> SCLK_DIRCNTL_DIV_SHIFT);
+-
+-	if ((cntl & SCLK_DIRCNTL_EN) &&
+-	    ((cntl & SCLK_DIRCNTL_DIV_MASK) >> SCLK_DIRCNTL_DIV_SHIFT) == LIVERPOOL_TARGET_SCLK_DID) {
+-		dev_info(adev->dev, "Liverpool CLK: already at DID=1, no change.\n");
+-		return 0;
+-	}
+-
+-	for (i = 0; i < LIVERPOOL_CLK_TIMEOUT_ITER; i++) {
+-		if (RREG32_SMC(CG_SCLK_STATUS) & SCLK_STATUS_DONE)
+-			break;
+-		udelay(LIVERPOOL_CLK_TIMEOUT_US);
+-	}
+-	if (i == LIVERPOOL_CLK_TIMEOUT_ITER) {
+-		dev_err(adev->dev,
+-			"Liverpool CLK: timed out waiting for SCLK idle (0x%08x)\n",
+-			RREG32_SMC(CG_SCLK_STATUS));
+-		return -ETIMEDOUT;
+-	}
+-
+-	cntl &= ~SCLK_DIRCNTL_DIV_MASK;
+-	cntl |= (LIVERPOOL_TARGET_SCLK_DID << SCLK_DIRCNTL_DIV_SHIFT) & SCLK_DIRCNTL_DIV_MASK;
+-	cntl |= SCLK_DIRCNTL_EN;
+-	cntl ^= SCLK_DIRCNTL_TOG;
+-	expected_done_tog = !!(cntl & SCLK_DIRCNTL_TOG);
+-	WREG32_SMC(CG_SCLK_CNTL, cntl);
+-
+-	for (i = 0; i < LIVERPOOL_CLK_TIMEOUT_ITER; i++) {
+-		status = RREG32_SMC(CG_SCLK_STATUS);
+-		if (!!(status & SCLK_DIRCNTL_DONE_TOG) == expected_done_tog)
+-			break;
+-		udelay(LIVERPOOL_CLK_TIMEOUT_US);
+-	}
+-	if (i == LIVERPOOL_CLK_TIMEOUT_ITER) {
+-		dev_err(adev->dev,
+-			"Liverpool CLK: timed out waiting for force done (0x%08x)\n",
+-			RREG32_SMC(CG_SCLK_STATUS));
+-		return -ETIMEDOUT;
+-	}
+-
+-	cntl   = RREG32_SMC(CG_SCLK_CNTL);
+-	status = RREG32_SMC(CG_SCLK_STATUS);
+-	dev_info(adev->dev,
+-		 "Liverpool CLK: force done. CG_SCLK_CNTL=0x%08x DIRCNTLDIV=%u status=0x%08x\n",
+-		 cntl,
+-		 (cntl & SCLK_DIRCNTL_DIV_MASK) >> SCLK_DIRCNTL_DIV_SHIFT,
+-		 status);
+-
+-	if (((cntl & SCLK_DIRCNTL_DIV_MASK) >> SCLK_DIRCNTL_DIV_SHIFT) != LIVERPOOL_TARGET_SCLK_DID)
+-		dev_warn(adev->dev,
+-			 "Liverpool CLK: readback DID mismatch â€” expected %u got %u\n",
+-			 LIVERPOOL_TARGET_SCLK_DID,
+-			 (cntl & SCLK_DIRCNTL_DIV_MASK) >> SCLK_DIRCNTL_DIV_SHIFT);
+-
+-	return 0;
++	return gladius_gck_mailbox(adev);
+ }
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_smu.c b/drivers/gpu/drm/amd/amdgpu/liverpool_smu.c
+index 7cc076da24f573b78c55e610df9ee5ad28efadc0..91505cf9c51b198a0f8b058402351c9b1384586f 100644
+--- a/drivers/gpu/drm/amd/amdgpu/liverpool_smu.c
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_smu.c
+@@ -15,6 +15,7 @@
+ #include <linux/io.h>
+ #include <linux/mutex.h>
+ 
++#include <asm/ps4.h>
+ #include "amdgpu.h"
+ #include "liverpool_smu.h"
+ 
+@@ -93,12 +94,14 @@ int liverpool_smu_samu_read(struct amdgpu_device *adev, u32 reg, u32 *val)
+ 	if (!liverpool_samu_mapped(adev) || !val)
+ 		return -EIO;
+ 
++	ps4_samu_lock();
+ 	mutex_lock(&liverpool_samu_mutex);
+ 	writel(LIVERPOOL_SAMU_OP_READ, adev->rmmio + LIVERPOOL_SAMU_CMD);
+ 	writel(reg, adev->rmmio + LIVERPOOL_SAMU_ADDR);
+ 	r = liverpool_samu_doorbell(adev);
+ 	if (r) {
+ 		mutex_unlock(&liverpool_samu_mutex);
++		ps4_samu_unlock();
+ 		return r;
+ 	}
+ 	stat = readl(adev->rmmio + LIVERPOOL_SAMU_STAT);
+@@ -107,6 +110,7 @@ int liverpool_smu_samu_read(struct amdgpu_device *adev, u32 reg, u32 *val)
+ 	else
+ 		*val = 0;
+ 	mutex_unlock(&liverpool_samu_mutex);
++	ps4_samu_unlock();
+ 	return stat ? -EIO : 0;
+ }
+ 
+@@ -118,6 +122,7 @@ int liverpool_smu_samu_write(struct amdgpu_device *adev, u32 reg, u32 val)
+ 	if (!liverpool_samu_mapped(adev))
+ 		return -EIO;
+ 
++	ps4_samu_lock();
+ 	mutex_lock(&liverpool_samu_mutex);
+ 	writel(LIVERPOOL_SAMU_OP_WRITE, adev->rmmio + LIVERPOOL_SAMU_CMD);
+ 	writel(reg, adev->rmmio + LIVERPOOL_SAMU_ADDR);
+@@ -125,10 +130,12 @@ int liverpool_smu_samu_write(struct amdgpu_device *adev, u32 reg, u32 val)
+ 	r = liverpool_samu_doorbell(adev);
+ 	if (r) {
+ 		mutex_unlock(&liverpool_samu_mutex);
++		ps4_samu_unlock();
+ 		return r;
+ 	}
+ 	stat = readl(adev->rmmio + LIVERPOOL_SAMU_STAT);
+ 	mutex_unlock(&liverpool_samu_mutex);
++	ps4_samu_unlock();
+ 	return stat ? -EIO : 0;
+ }
+ 

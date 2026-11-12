@@ -1,0 +1,3468 @@
+From 77f1bc4f9af109f5af5786aab8995a657717524c Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Fri, 6 Nov 2026 21:31:14 +0100
+Subject: [PATCH 072/124] ps4: add ps4sb.h and merge the uart and icc drivers
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ arch/x86/include/asm/ps4.h              |  27 +-
+ arch/x86/platform/ps4/ps4.c             |   5 +-
+ drivers/gpu/drm/amd/amdgpu/ps4_bridge.c |   6 +-
+ drivers/gpu/drm/radeon/ps4_bridge.c     |   2 +-
+ drivers/ps4/Makefile                    |   8 +-
+ drivers/ps4/aeolia-baikal.h             | 101 ----
+ drivers/ps4/aeolia.h                    |  16 +-
+ drivers/ps4/baikal.h                    |  16 +-
+ drivers/ps4/icc/i2c.c                   |  11 +-
+ drivers/ps4/ps4-apcie-icc.c             | 746 -----------------------
+ drivers/ps4/ps4-apcie-pwrbutton.c       |   8 +-
+ drivers/ps4/ps4-apcie-uart.c            |  93 ---
+ drivers/ps4/ps4-apcie.c                 |  46 +-
+ drivers/ps4/ps4-bpcie-icc.c             | 758 -----------------------
+ drivers/ps4/ps4-bpcie-uart.c            |  88 ---
+ drivers/ps4/ps4-bpcie.c                 |  42 +-
+ drivers/ps4/ps4-buzzer.c                |   2 +-
+ drivers/ps4/ps4-fan.c                   |   8 +-
+ drivers/ps4/ps4-led.c                   |   4 +-
+ drivers/ps4/ps4sb.h                     | 149 +++++
+ drivers/ps4/sb-icc.c                    | 770 ++++++++++++++++++++++++
+ drivers/ps4/sb-uart.c                   |  87 +++
+ 22 files changed, 1096 insertions(+), 1897 deletions(-)
+ delete mode 100644 drivers/ps4/aeolia-baikal.h
+ delete mode 100644 drivers/ps4/ps4-apcie-icc.c
+ delete mode 100644 drivers/ps4/ps4-apcie-uart.c
+ delete mode 100644 drivers/ps4/ps4-bpcie-icc.c
+ delete mode 100644 drivers/ps4/ps4-bpcie-uart.c
+ create mode 100644 drivers/ps4/ps4sb.h
+ create mode 100644 drivers/ps4/sb-icc.c
+ create mode 100644 drivers/ps4/sb-uart.c
+
+diff --git a/arch/x86/include/asm/ps4.h b/arch/x86/include/asm/ps4.h
+index 29b57502e47eb8d53a42b6dac9c08ea5573f01e9..9cb903f53a7e5728f7625a38d4d4e4ca85abe149 100644
+--- a/arch/x86/include/asm/ps4.h
++++ b/arch/x86/include/asm/ps4.h
+@@ -35,7 +35,7 @@ extern unsigned long ps4_calibrate_tsc(void);
+ extern int apcie_assign_irqs(struct pci_dev *dev, int nvec);
+ extern void apcie_free_irqs(unsigned int virq, unsigned int nr_irqs);
+ 
+-typedef void (*bpcie_icc_event_fn)(void *ctx, u16 minor, const u8 *data,
++typedef void (*ps4sb_icc_event_fn)(void *ctx, u16 minor, const u8 *data,
+ 				   u16 length);
+ extern void ps4_samu_lock(void);
+ extern void ps4_samu_unlock(void);
+@@ -45,23 +45,21 @@ extern void ps4_samu_unmap(void);
+ extern int ps4_samu_rng(void *buf, size_t len);
+ extern int ps4_samu_ccp(void *op);
+ extern int apcie_status(void);
+-extern int apcie_icc_cmd(u8 major, u16 minor, const void *data,
+-			 u16 length, void *reply, u16 reply_length);
+ extern bool ps4_is_baikal(void);
+ extern int bpcie_assign_irqs(struct pci_dev *dev, int nvec);
+ extern void bpcie_free_irqs(unsigned int virq, unsigned int nr_irqs);
+-extern void bpcie_icc_reboot(void);
++extern void ps4sb_icc_reboot(void);
+ extern int bpcie_status(void);
+-extern int bpcie_icc_cmd(u8 major, u16 minor, const void *data,
++extern int ps4sb_icc_cmd(u8 major, u16 minor, const void *data,
+ 			 u16 length, void *reply, u16 reply_length);
+-extern int bpcie_icc_register_event_handler(u8 major, bpcie_icc_event_fn fn,
++extern int ps4sb_icc_register_event_handler(u8 major, ps4sb_icc_event_fn fn,
+ 					    void *ctx);
+-extern void bpcie_icc_unregister_event_handler(u8 major);
++extern void ps4sb_icc_unregister_event_handler(u8 major);
+ 
+ 
+ #else
+ 
+-typedef void (*bpcie_icc_event_fn)(void *ctx, u16 minor, const u8 *data,
++typedef void (*ps4sb_icc_event_fn)(void *ctx, u16 minor, const u8 *data,
+ 				   u16 length);
+ static inline int apcie_assign_irqs(struct pci_dev *dev, int nvec)
+ {
+@@ -74,11 +72,6 @@ static inline int apcie_status(void)
+ {
+ 	return -ENODEV;
+ }
+-static inline int apcie_icc_cmd(u8 major, u16 minor, const void *data,
+-				u16 length, void *reply, u16 reply_length)
+-{
+-	return -ENODEV;
+-}
+ static inline bool ps4_is_baikal(void)
+ {
+ 	return false;
+@@ -94,18 +87,18 @@ static inline int bpcie_status(void)
+ {
+ 	return -ENODEV;
+ }
+-static inline int bpcie_icc_cmd(u8 major, u16 minor, const void *data,
++static inline int ps4sb_icc_cmd(u8 major, u16 minor, const void *data,
+ 				u16 length, void *reply, u16 reply_length)
+ {
+ 	return -ENODEV;
+ }
+-static inline int bpcie_icc_register_event_handler(u8 major,
+-						   bpcie_icc_event_fn fn,
++static inline int ps4sb_icc_register_event_handler(u8 major,
++						   ps4sb_icc_event_fn fn,
+ 						   void *ctx)
+ {
+ 	return -ENODEV;
+ }
+-static inline void bpcie_icc_unregister_event_handler(u8 major)
++static inline void ps4sb_icc_unregister_event_handler(u8 major)
+ {
+ }
+ 
+diff --git a/arch/x86/platform/ps4/ps4.c b/arch/x86/platform/ps4/ps4.c
+index fb3245565aa25ed3fdc06dce5d93a5c585aa331f..947173e4bfe2bc3250d46094ace851e69cbbf4b5 100644
+--- a/arch/x86/platform/ps4/ps4.c
++++ b/arch/x86/platform/ps4/ps4.c
+@@ -73,12 +73,9 @@ bool ps4_is_baikal(void)
+ }
+ EXPORT_SYMBOL_GPL(ps4_is_baikal);
+ 
+-void icc_reboot(void);
+-
+ static void ps4_emergency_restart(void)
+ {
+-	icc_reboot();
+-	bpcie_icc_reboot();
++	ps4sb_icc_reboot();
+ }
+ 
+ /*
+diff --git a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+index f92b7f6def40798421cb0f9e5ae65e7fcff8d734..5f83dfacaceded297a4c0c6605f7bb1a6f9cf7a9 100644
+--- a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
++++ b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+@@ -314,7 +314,7 @@ static int cq_exec(struct i2c_cmdqueue *q)
+ 	q->cmd->length = q->p - (u8 *)q->cmd;
+ 	q->req.length = q->p - (u8 *)&q->req;
+ 
+-	res = apcie_icc_cmd(0x10, 0, &q->req, q->req.length,
++	res = ps4sb_icc_cmd(0x10, 0, &q->req, q->req.length,
+ 		      &q->reply, sizeof(q->reply));
+ 
+ 	if (res < 5) {
+@@ -1100,7 +1100,7 @@ static void ps4_bridge_events_stop(void *data)
+ 	if (!mn_bridge->hdmi_events)
+ 		return;
+ 	ps4_bridge_set_event_control(mn_bridge, 0);
+-	bpcie_icc_unregister_event_handler(PS4_BRIDGE_ICC_SERVICE);
++	ps4sb_icc_unregister_event_handler(PS4_BRIDGE_ICC_SERVICE);
+ 	mn_bridge->hdmi_events = false;
+ 	kfree(mn_bridge->hdmi_edid);
+ 	mn_bridge->hdmi_edid = NULL;
+@@ -1112,7 +1112,7 @@ static void ps4_bridge_events_start(struct device *dev,
+ {
+ 	if (bpcie_status() <= 0)
+ 		return;
+-	if (bpcie_icc_register_event_handler(PS4_BRIDGE_ICC_SERVICE,
++	if (ps4sb_icc_register_event_handler(PS4_BRIDGE_ICC_SERVICE,
+ 					     ps4_bridge_hdmi_event, mn_bridge))
+ 		return;
+ 	mn_bridge->hdmi_events = true;
+diff --git a/drivers/gpu/drm/radeon/ps4_bridge.c b/drivers/gpu/drm/radeon/ps4_bridge.c
+index 05f20f2c7a27cc7af975716053b282126e51defb..ecf160c943db169c134aa78c8e012d6bdcbc0680 100644
+--- a/drivers/gpu/drm/radeon/ps4_bridge.c
++++ b/drivers/gpu/drm/radeon/ps4_bridge.c
+@@ -188,7 +188,7 @@ static int cq_exec(struct i2c_cmdqueue *q)
+ 	q->cmd->length = q->p - (u8 *)q->cmd;
+ 	q->req.length = q->p - (u8 *)&q->req;
+ 
+-	res = apcie_icc_cmd(0x10, 0, &q->req, q->req.length,
++	res = ps4sb_icc_cmd(0x10, 0, &q->req, q->req.length,
+ 		      &q->reply, sizeof(q->reply));
+ 
+ 	if (res < 5) {
+diff --git a/drivers/ps4/Makefile b/drivers/ps4/Makefile
+index eab75cb8a5cce24a38455ddbb2a8aa7c8d0ecc6d..5e5d0ad2d4f3267b4359a444d709a6d36687818c 100644
+--- a/drivers/ps4/Makefile
++++ b/drivers/ps4/Makefile
+@@ -3,13 +3,11 @@
+ # N.B. this driver must be init'd before pretty much everything, but actual dependants are:
+ # drivers/net/ethernet/marvell/sky2 (implements ps4-gbe)
+ obj-y += ps4-apcie.o \
+-    ps4-apcie-uart.o \
+-    ps4-apcie-icc.o \
++    ps4-bpcie.o \
++    sb-uart.o \
++    sb-icc.o \
+     ps4-apcie-pwrbutton.o \
+     icc/i2c.o
+-obj-y += ps4-bpcie.o \
+-    ps4-bpcie-uart.o \
+-    ps4-bpcie-icc.o
+ obj-$(CONFIG_RTC_CLASS) += ps4-bpcie-rtc.o
+ obj-y += ps4-led.o
+ obj-y += ps4-fan.o
+diff --git a/drivers/ps4/aeolia-baikal.h b/drivers/ps4/aeolia-baikal.h
+deleted file mode 100644
+index 22ff67ae9b9916509d9cf256532992933cfa6e98..0000000000000000000000000000000000000000
+--- a/drivers/ps4/aeolia-baikal.h
++++ /dev/null
+@@ -1,101 +0,0 @@
+-#ifndef _AEOLIA_BAIKAL_H
+-#define _AEOLIA_BAIKAL_H
+-
+-#include <linux/io.h>
+-#include <linux/pci.h>
+-#include <linux/i2c.h>
+-
+-struct apcie_msi_domain_ctx;
+-
+-#define ICC_REPLY 0x4000
+-#define ICC_EVENT 0x8000
+-
+-#define ICC_MAGIC 0x42
+-#define ICC_EVENT_MAGIC 0x24
+-
+-struct icc_message_hdr {
+-	u8 magic;
+- 	u8 major;
+- 	u16 minor;
+-	u16 unknown;
+-	u16 cookie;
+-	u16 length;
+-	u16 checksum;
+-} __packed;
+-
+-#define ICC_HDR_SIZE sizeof(struct icc_message_hdr)
+-#define ICC_MIN_SIZE 0x20
+-#define ICC_MAX_SIZE 0x7f0
+-#define ICC_MIN_PAYLOAD (ICC_MIN_SIZE - ICC_HDR_SIZE)
+-#define ICC_MAX_PAYLOAD (ICC_MAX_SIZE - ICC_HDR_SIZE)
+-
+-#define ICC_TIMEOUT 15
+-
+-#define sc_err(...) dev_err(&sc->pdev->dev, __VA_ARGS__)
+-#define sc_warn(...) dev_warn(&sc->pdev->dev, __VA_ARGS__)
+-#define sc_notice(...) dev_notice(&sc->pdev->dev, __VA_ARGS__)
+-#define sc_info(...) dev_info(&sc->pdev->dev, __VA_ARGS__)
+-#define sc_dbg(...) dev_dbg(&sc->pdev->dev, __VA_ARGS__)
+-
+-struct abpcie_icc_dev {
+-	phys_addr_t spm_base;
+-	void __iomem *spm;
+-
+-	spinlock_t reply_lock;
+-	bool reply_pending;
+-
+-	struct icc_message_hdr request;
+-	struct icc_message_hdr reply;
+-	u16 reply_extra_checksum;
+-	void *reply_buffer;
+-	int reply_length;
+-	wait_queue_head_t wq;
+-
+-	struct i2c_adapter i2c;
+-	struct input_dev *pwrbutton_dev;
+-};
+-
+-struct abpcie_dev {
+-	struct pci_dev *pdev;
+-	struct irq_domain *irqdomain;
+-	struct apcie_msi_domain_ctx *msi_domain_ctx;
+-	void __iomem *bar0;
+-	void __iomem *bar2;
+-	void __iomem *bar4;
+-
+-	int nvec;
+-	int irq_map[100];
+-	int serial_line[2];
+-	struct abpcie_icc_dev icc;
+-};
+-
+-#define BUF_FULL 0x7f0
+-#define BUF_EMPTY 0x7f4
+-#define HDR(x) (offsetof(struct icc_message_hdr, x))
+-
+-#define ICC_MAJOR	'I'
+-
+- struct icc_cmd {
+- 	u8 major;
+- 	u16 minor;
+- 	void __user *data;
+- 	u16 length;
+- 	void __user *reply;
+- 	u16 reply_length;
+- };
+-
+-#define ICC_IOCTL_CMD _IOWR(ICC_MAJOR, 1, struct icc_cmd)
+-
+-#define sc_err(...) dev_err(&sc->pdev->dev, __VA_ARGS__)
+-#define sc_warn(...) dev_warn(&sc->pdev->dev, __VA_ARGS__)
+-#define sc_notice(...) dev_notice(&sc->pdev->dev, __VA_ARGS__)
+-#define sc_info(...) dev_info(&sc->pdev->dev, __VA_ARGS__)
+-#define sc_dbg(...) dev_dbg(&sc->pdev->dev, __VA_ARGS__)
+-
+-int icc_i2c_init(struct abpcie_dev *sc);
+-void icc_i2c_remove(struct abpcie_dev *sc);
+-int icc_pwrbutton_init(struct abpcie_dev *sc);
+-void icc_pwrbutton_remove(struct abpcie_dev *sc);
+-void icc_pwrbutton_trigger(struct abpcie_dev *sc, int state);
+-
+-#endif
+diff --git a/drivers/ps4/aeolia.h b/drivers/ps4/aeolia.h
+index a4262732de7cee2737895058ec46e16dc76ed5e7..251b298a54f9acbfb91a33b98d666d834be34808 100644
+--- a/drivers/ps4/aeolia.h
++++ b/drivers/ps4/aeolia.h
+@@ -4,9 +4,9 @@
+ #include <linux/io.h>
+ #include <linux/pci.h>
+ #include <linux/i2c.h>
+-#include "aeolia-baikal.h"
++#include "ps4sb.h"
+ 
+-#define apcie_dev		abpcie_dev
++#define apcie_dev		ps4sb_dev
+ 
+ enum aeolia_func_id {
+ 	AEOLIA_FUNC_ID_ACPI = 0,
+@@ -111,17 +111,5 @@ static inline int apcie_irqnum(struct apcie_dev *sc, int index)
+ 	}
+ }
+ 
+-int apcie_icc_cmd(u8 major, u16 minor, const void *data, u16 length,
+-	    void *reply, u16 reply_length);
+-int apcie_uart_init(struct apcie_dev *sc);
+-void apcie_uart_remove(struct apcie_dev *sc);
+-int apcie_icc_init(struct apcie_dev *sc);
+-void apcie_icc_remove(struct apcie_dev *sc);
+-#ifdef CONFIG_PM
+-void apcie_uart_suspend(struct apcie_dev *sc, pm_message_t state);
+-void apcie_uart_resume(struct apcie_dev *sc);
+-void apcie_icc_suspend(struct apcie_dev *sc, pm_message_t state);
+-void apcie_icc_resume(struct apcie_dev *sc);
+-#endif
+ 
+ #endif
+diff --git a/drivers/ps4/baikal.h b/drivers/ps4/baikal.h
+index f1d0a88e351d670c57c19816cddb90d81cf5a4ff..baf2c40abac7f001a2e658612eec68b3882d5280 100644
+--- a/drivers/ps4/baikal.h
++++ b/drivers/ps4/baikal.h
+@@ -4,9 +4,9 @@
+ #include <linux/io.h>
+ #include <linux/pci.h>
+ #include <linux/i2c.h>
+-#include "aeolia-baikal.h"
++#include "ps4sb.h"
+ 
+-#define bpcie_dev		abpcie_dev
++#define bpcie_dev		ps4sb_dev
+ enum baikal_func_id {
+ 	BAIKAL_FUNC_ID_ACPI = 0,
+ 	BAIKAL_FUNC_ID_GBE,
+@@ -97,8 +97,6 @@ static inline int bpcie_irqnum(struct bpcie_dev *sc, int index)
+ 	}
+ }
+ 
+-int bpcie_icc_cmd(u8 major, u16 minor, const void *data, u16 length,
+-	    void *reply, u16 reply_length);
+ 
+ #define CHAR_BIT 8
+ static inline u32 rol (u32 n, unsigned int c) {
+@@ -162,7 +160,6 @@ static inline void pci_pm_stop_all(struct pci_dev *dev)
+ int bpcie_is_compatible_device(struct pci_dev *dev);
+ u32 glue_read32(struct bpcie_dev *sc, u32 offset);
+ void glue_write32(struct bpcie_dev *sc, u32 offset, u32 value);
+-int bpcie_uart_init(struct bpcie_dev *sc);
+ #ifdef CONFIG_RTC_CLASS
+ int bpcie_rtc_init(struct bpcie_dev *sc);
+ #else
+@@ -171,15 +168,6 @@ static inline int bpcie_rtc_init(struct bpcie_dev *sc)
+ 	return 0;
+ }
+ #endif
+-void bpcie_uart_remove(struct bpcie_dev *sc);
+-int bpcie_icc_init(struct bpcie_dev *sc);
+-void bpcie_icc_remove(struct bpcie_dev *sc);
+ int bpcie_baikal_sata_phy_init(struct pci_dev *pdev, void __iomem *ahci_mmio);
+-#ifdef CONFIG_PM
+-void bpcie_uart_suspend(struct bpcie_dev *sc, pm_message_t state);
+-void bpcie_uart_resume(struct bpcie_dev *sc);
+-void bpcie_icc_suspend(struct bpcie_dev *sc, pm_message_t state);
+-void bpcie_icc_resume(struct bpcie_dev *sc);
+-#endif
+ 
+ #endif
+diff --git a/drivers/ps4/icc/i2c.c b/drivers/ps4/icc/i2c.c
+index e5f6aeae3af46521e64f3993a4c7069afd1a077a..b7d10341971c654635b61ade7fbd90efbf11fbf4 100644
+--- a/drivers/ps4/icc/i2c.c
++++ b/drivers/ps4/icc/i2c.c
+@@ -9,7 +9,6 @@
+ #define ICC_MAX_READ_DATA 0xff
+ #define ICC_MAX_WRITE_DATA 0xf8
+ #define ICC_REPLY_HEADER_SIZE 0x14
+-#define ICC_REPLY_ERROR_OFF 0x0c
+ 
+ u32 icc_i2c_functionality(struct i2c_adapter *adap);
+ int icc_i2c_init(struct apcie_dev *sc);
+@@ -46,8 +45,8 @@ static int icc_i2c_smbus_xfer(struct i2c_adapter *adapter, u16 addr,
+ 	int ret;
+ 	struct icc_i2c_msg msg;
+ 	u8 resultbuf[ICC_REPLY_HEADER_SIZE + ICC_MAX_READ_DATA];
+-	int data_off = ICC_REPLY_HEADER_SIZE;
+-	int err_off = ICC_REPLY_ERROR_OFF;
++	int data_off = sc->family->i2c_data_off;
++	int err_off = sc->family->i2c_err_off;
+ 
+ 	msg.code = 4; /* Don't really know what this is */
+ 	msg.count = 1;
+@@ -99,11 +98,7 @@ static int icc_i2c_smbus_xfer(struct i2c_adapter *adapter, u16 addr,
+ 	}
+ 
+ 	msg.length = msg.cmd.length + 4;
+-	if (bpcie_status() > 0) {
+-		data_off = 8;
+-		err_off = 0;
+-	}
+-	ret = apcie_icc_cmd(0x10, 0x0, &msg, msg.length, resultbuf,
++	ret = ps4sb_icc_cmd(0x10, 0x0, &msg, msg.length, resultbuf,
+ 		      sizeof(resultbuf));
+ 	if (ret < err_off + 2 || ret > sizeof(resultbuf)) {
+ 		sc_err("icc-i2c: icc command failed: %d\n", ret);
+diff --git a/drivers/ps4/ps4-apcie-icc.c b/drivers/ps4/ps4-apcie-icc.c
+deleted file mode 100644
+index 618760246624eb178ab1169bbe9c2a9ed6e1d1f5..0000000000000000000000000000000000000000
+--- a/drivers/ps4/ps4-apcie-icc.c
++++ /dev/null
+@@ -1,746 +0,0 @@
+-#include <linux/kernel.h>
+-#include <linux/sched.h>
+-#include <linux/wait.h>
+-#include <linux/pci.h>
+-#include <linux/interrupt.h>
+-#include <linux/delay.h>
+-#include <linux/fs.h>
+-#include <linux/uaccess.h>
+-#include <linux/device.h>
+-#include <asm/ps4.h>
+-#include "aeolia.h"
+-
+-/* There should normally be only one Aeolia device in a system. This allows
+- * other kernel code in unrelated subsystems to issue icc requests without
+- * having to get a reference to the device. */
+-static struct apcie_dev *icc_sc;
+-DEFINE_MUTEX(icc_mutex);
+-#ifdef CONFIG_PS4_ICCNODE
+-static DEFINE_MUTEX(icc_ioctl_mutex);
+-static bool icc_chrdev_registered;
+-static int icc_major;
+-static struct class *icc_class;
+-static struct device *icc_device;
+-#endif
+-
+-/* The ICC message passing interface seems to be potentially designed to
+- * support multiple outstanding requests at once, but the original PS4 OS never
+- * does this, so we don't either. */
+-
+-#define REQUEST (sc->icc.spm + APCIE_SPM_ICC_REQUEST)
+-#define REPLY (sc->icc.spm + APCIE_SPM_ICC_REPLY)
+-
+-/* Seconds. Yes, some ICC requests can be slow. */
+-int icc_timeout = 15;
+-
+-int icc_i2c_init(struct apcie_dev *sc);
+-void icc_i2c_remove(struct apcie_dev *sc);
+-int icc_pwrbutton_init(struct apcie_dev *sc);
+-void icc_pwrbutton_remove(struct apcie_dev *sc);
+-void icc_pwrbutton_trigger(struct apcie_dev *sc, int state);
+-
+-void resetUsbPort(void); /* resetUsb used only in this file; maybe that should change */
+-void resetBtWlan(void);
+-
+-void do_icc_init(void);
+-void icc_reboot(void);
+-int apcie_icc_init(struct apcie_dev *sc);
+-void apcie_icc_remove(struct apcie_dev *sc);
+-
+-static u16 checksum(const void *p, int length)
+-{
+-	const u8 *pp = p;
+-	u16 sum = 0;
+-	while (length--)
+-		sum += *pp++;
+-	return sum;
+-}
+-
+-static void dump_message(struct apcie_dev *sc, int offset)
+-{
+-	int len;
+-	struct icc_message_hdr hdr;
+-	memcpy_fromio(&hdr, sc->icc.spm + offset, ICC_HDR_SIZE);
+-
+-	sc_err("icc: hdr: [%02x] %02x:%04x unk %x #%d len %d cksum 0x%x\n",
+-	       hdr.magic, hdr.major, hdr.minor, hdr.unknown, hdr.cookie,
+-	       hdr.length, hdr.checksum);
+-	len = min(hdr.length - ICC_HDR_SIZE, ICC_MAX_PAYLOAD);
+-	if (len > 0) {
+-		sc_err("icc: data:");
+-		while (len--)
+-			printk(" %02x", ioread8(sc->icc.spm + (offset++) +
+-			                         ICC_HDR_SIZE));
+-		printk("\n");
+-	}
+-}
+-
+-static void handle_event(struct apcie_dev *sc, struct icc_message_hdr *msg)
+-{
+-	switch ((msg->major << 16) | msg->minor) {
+-		case 0x088010:
+-			icc_pwrbutton_trigger(sc, 1);
+-			break;
+-		case 0x088011:
+-			icc_pwrbutton_trigger(sc, 0);
+-			break;
+-		default:
+-			sc_err("icc: event arrived, not yet supported.\n");
+-			dump_message(sc, APCIE_SPM_ICC_REPLY);
+-			break;
+-	}
+-}
+-
+-static void handle_message(struct apcie_dev *sc)
+-{
+-	u32 rep_empty, rep_full;
+-	int off, copy_size;
+-	struct icc_message_hdr msg;
+-
+-	rep_empty = ioread32(REPLY + BUF_EMPTY);
+-	rep_full = ioread32(REPLY + BUF_FULL);
+-
+-	if (rep_empty != 0 || rep_full != 1) {
+-		sc_err("icc: reply buffer in bad state (%d, %d)\n",
+-			rep_empty, rep_full);
+-		return;
+-	}
+-
+-	memcpy_fromio(&msg, REPLY, ICC_HDR_SIZE);
+-
+-	if (msg.minor & ICC_EVENT) {
+-		if (msg.magic != ICC_EVENT_MAGIC) {
+-			sc_err("icc: event has bad magic\n");
+-			dump_message(sc, APCIE_SPM_ICC_REPLY);
+-			return;
+-		}
+-		handle_event(sc, &msg);
+-	} else if (msg.minor & ICC_REPLY) {
+-		if (msg.magic != ICC_MAGIC) {
+-			sc_err("icc: reply has bad magic\n");
+-			dump_message(sc, APCIE_SPM_ICC_REPLY);
+-			return;
+-		}
+-		spin_lock(&sc->icc.reply_lock);
+-		if (!sc->icc.reply_pending) {
+-			spin_unlock(&sc->icc.reply_lock);
+-			sc_err("icc: unexpected reply\n");
+-			dump_message(sc, APCIE_SPM_ICC_REPLY);
+-			return;
+-		}
+-		if (msg.cookie != sc->icc.request.cookie) {
+-			spin_unlock(&sc->icc.reply_lock);
+-			sc_err("icc: reply has bad cookie %d\n", msg.cookie);
+-			dump_message(sc, APCIE_SPM_ICC_REPLY);
+-			return;
+-		}
+-		if (msg.length < ICC_HDR_SIZE || msg.length > ICC_MAX_SIZE) {
+-			spin_unlock(&sc->icc.reply_lock);
+-			sc_err("icc: reply has bad length %d\n", msg.length);
+-			dump_message(sc, APCIE_SPM_ICC_REPLY);
+-			return;
+-		}
+-		off = ICC_HDR_SIZE;
+-		copy_size = min(sc->icc.reply_length,
+-				(int)(msg.length - off));
+-		memcpy_fromio(sc->icc.reply_buffer, REPLY + off, copy_size);
+-		off += copy_size;
+-		sc->icc.reply_extra_checksum = 0;
+-		while (off < msg.length)
+-			sc->icc.reply_extra_checksum += ioread8(REPLY + off++);
+-		sc->icc.reply_pending = false;
+-		sc->icc.reply_length = copy_size;
+-		sc->icc.reply = msg;
+-		spin_unlock(&sc->icc.reply_lock);
+-		wake_up(&sc->icc.wq);
+-	} else {
+-		sc_err("icc: unknown message arrived\n");
+-		dump_message(sc, APCIE_SPM_ICC_REPLY);
+-	}
+-}
+-
+-static irqreturn_t icc_interrupt(int irq, void *arg)
+-{
+-	struct apcie_dev *sc = arg;
+-	u32 pending;
+-	u32 status;
+-	u32 ret = IRQ_NONE;
+-	int loops;
+-
+-	for (loops = 0; loops < 64; loops++) {
+-		status = ioread32(sc->bar4 + APCIE_REG_ICC_STATUS);
+-		pending = status & (APCIE_ICC_SEND | APCIE_ICC_ACK);
+-		if (!pending)
+-			return ret;
+-
+-		if (pending & APCIE_ICC_ACK) {
+-			iowrite32(APCIE_ICC_ACK,
+-				  sc->bar4 + APCIE_REG_ICC_STATUS);
+-			ret = IRQ_HANDLED;
+-		}
+-
+-		if (pending & APCIE_ICC_SEND) {
+-			iowrite32(APCIE_ICC_SEND,
+-				  sc->bar4 + APCIE_REG_ICC_STATUS);
+-			handle_message(sc);
+-			iowrite32(0, REPLY + BUF_FULL);
+-			iowrite32(1, REPLY + BUF_EMPTY);
+-			iowrite32(APCIE_ICC_ACK,
+-				  sc->bar4 + APCIE_REG_ICC_DOORBELL);
+-			ret = IRQ_HANDLED;
+-		}
+-	}
+-
+-	dev_warn_ratelimited(&sc->pdev->dev,
+-			     "icc: IRQ status stuck after 64 loops (status=0x%08x)\n",
+-			     status);
+-
+-	return ret;
+-}
+-
+-static int _apcie_icc_cmd(struct apcie_dev *sc, u8 major, u16 minor, const void *data,
+-		    u16 length, void *reply, u16 reply_length, bool intr)
+-{
+-	int ret;
+-	u32 req_empty, req_full;
+-	u16 rep_checksum;
+-
+-	if (length > ICC_MAX_PAYLOAD)
+-		return -E2BIG;
+-
+-	sc->icc.request.magic = ICC_MAGIC;
+-	sc->icc.request.major = major;
+-	sc->icc.request.minor = minor;
+-	sc->icc.request.cookie++;
+-	sc->icc.request.length = ICC_HDR_SIZE + length;
+-	sc->icc.request.checksum = 0;
+-	if (sc->icc.request.length < ICC_MIN_SIZE)
+-		sc->icc.request.length = ICC_MIN_SIZE;
+-
+-	sc->icc.request.checksum = checksum(&sc->icc.request, ICC_HDR_SIZE);
+-	sc->icc.request.checksum += checksum(data, length);
+-	sc->icc.reply_buffer = reply;
+-	sc->icc.reply_length = reply_length;
+-
+-	req_empty = ioread32(REQUEST + BUF_EMPTY);
+-	req_full = ioread32(REQUEST + BUF_FULL);
+-
+-	if (req_empty != 1 || req_full != 0) {
+-		sc_err("icc: request buffer is busy: empty=%d full=%d\n",
+-		       req_empty, req_full);
+-		return -EIO;
+-	}
+-
+-	iowrite32(0, REQUEST + BUF_EMPTY);
+-
+-	memcpy_toio(REQUEST, &sc->icc.request, ICC_HDR_SIZE);
+-	memcpy_toio(REQUEST + ICC_HDR_SIZE, data, length);
+-	if (length < ICC_MIN_PAYLOAD)
+-		memset_io(REQUEST + ICC_HDR_SIZE + length, 0,
+-			  ICC_MIN_PAYLOAD - length);
+-
+-	iowrite32(1, REQUEST + BUF_FULL);
+-
+-	spin_lock_irq(&sc->icc.reply_lock);
+-	sc->icc.reply_pending = true;
+-	spin_unlock_irq(&sc->icc.reply_lock);
+-
+-	iowrite32(APCIE_ICC_SEND, sc->bar4 + APCIE_REG_ICC_DOORBELL);
+-
+-	if (intr)
+-		ret = wait_event_interruptible_timeout(sc->icc.wq,
+-				!sc->icc.reply_pending, HZ * icc_timeout);
+-	else
+-		ret = wait_event_timeout(sc->icc.wq,
+-				!sc->icc.reply_pending, HZ * icc_timeout);
+-
+-	spin_lock_irq(&sc->icc.reply_lock);
+-	sc->icc.reply_buffer = NULL;
+-	if (ret < 0 || sc->icc.reply_pending) { /* interrupted or timed out */
+-		sc->icc.reply_pending = false;
+-		spin_unlock_irq(&sc->icc.reply_lock);
+-		sc_err("icc: interrupted or timeout: ret = %d\n", ret);
+-		return ret < 0 ? -EINTR : -ETIMEDOUT;
+-	}
+-	spin_unlock_irq(&sc->icc.reply_lock);
+-
+-	rep_checksum = sc->icc.reply.checksum;
+-	sc->icc.reply.checksum = 0;
+-	rep_checksum -= checksum(&sc->icc.reply, ICC_HDR_SIZE);
+-	rep_checksum -= checksum(reply, sc->icc.reply_length);
+-	rep_checksum -= sc->icc.reply_extra_checksum;
+-
+-	if (rep_checksum) {
+-		sc_err("icc: checksum mismatch (diff: %x)\n", rep_checksum);
+-		return -EIO;
+-	}
+-
+-	if (sc->icc.reply.major != major ) {
+-		sc_err("icc: major mismatch\n");
+-		return -EIO;
+-	}
+-	if (sc->icc.reply.minor != (minor | ICC_REPLY) ) {
+-		sc_err("icc: minor mismatch\n");
+-		return -EIO;
+-	}
+-
+-	return sc->icc.reply.length - ICC_HDR_SIZE;
+-}
+-
+-int apcie_icc_cmd(u8 major, u16 minor, const void *data, u16 length,
+-		   void *reply, u16 reply_length)
+-{
+-	int ret;
+-
+-	if (!icc_sc && bpcie_status() > 0)
+-		return bpcie_icc_cmd(major, minor, data, length, reply,
+-				     reply_length);
+-	mutex_lock(&icc_mutex);
+-	if (!icc_sc) {
+-		pr_err("icc: not ready\n");
+-		ret = -EAGAIN;
+-		goto out_unlock;
+-	}
+-	ret = _apcie_icc_cmd(icc_sc, major, minor, data, length, reply, reply_length,
+-		       false);
+-out_unlock:
+-	mutex_unlock(&icc_mutex);
+-	return ret;
+-}
+-EXPORT_SYMBOL(apcie_icc_cmd);
+-
+-__maybe_unused void resetUsbPort(void)
+-{
+-	u8 off = 0, on = 1;
+-	u8 resp[20];
+-	int ret;
+-
+-	//Turn OFF Usb
+-	ret = apcie_icc_cmd(5, 0x10, &off, sizeof(off), resp, 20);
+-	if (ret < 0) {
+-		pr_err("icc: USB disable failed: %d\n", ret);
+-		return;
+-	}
+-	if (resp[0] != 0 || resp[1] != 0) {
+-		pr_err("icc: USB disable reported failure: %d, %d\n",
+-			resp[0], resp[1]);
+-		return;
+-	}
+-	pr_debug("icc: USB disable ret=%d, reply %02x %02x %02x %02x\n",
+-		 ret, resp[0], resp[1], resp[2], resp[3]);
+-
+-	//Turn ON Usb
+-	ret = apcie_icc_cmd(5, 0x10, &on, sizeof(on), resp, 20);
+-	if (ret < 0) {
+-		pr_err("icc: USB enable failed: %d\n", ret);
+-		return;
+-	}
+-	if (resp[0] != 0 || resp[1] != 0) {
+-		pr_err("icc: USB enable reported failure: %d, %d\n",
+-			resp[0], resp[1]);
+-		return;
+-	}
+-	pr_debug("icc: USB enable ret=%d, reply %02x %02x %02x %02x\n",
+-		 ret, resp[0], resp[1], resp[2], resp[3]);
+-}
+-
+-void resetBtWlan(void)
+-{
+-	/* u8 off = 2; uncomment for disabling Bt/Wlan */
+-	u8 on = 3;
+-	u8 resp[20];
+-	int ret;
+-	
+-
+-	/* Get bt/wlan status */
+-//	ret = apcie_icc_cmd(5, 1, NULL, 0, resp, 20);
+-
+-	/** Turn off is done from linux-loader actually, if you want you can remove it from linux-loader and done it here **/
+-	
+-	//Turn OFF bt/wlan
+-
+-	//Turn ON bt/wlan
+-	ret = apcie_icc_cmd(5, 0, &on, sizeof(on), resp, 20);
+-	if (ret < 0) {
+-		pr_err("icc: BT/WLAN enable failed: %d\n", ret);
+-		return;
+-	}
+-	if (resp[0] != 0 || resp[1] != 0) {
+-		pr_err("icc: BT/WLAN enable reported failure: %d, %d\n",
+-			resp[0], resp[1]);
+-		return;
+-	}
+-	pr_debug("icc: BT/WLAN enable ret=%d, reply %02x %02x %02x %02x\n",
+-		 ret, resp[0], resp[1], resp[2], resp[3]);
+-}
+-
+-void do_icc_init(void) {
+-	u8 svc = 0x10;
+-	u8 reply[0x30];
+-	static const u8 led_config[] = {
+-		2, 1, 0, 0,
+-			0x10, 1,
+-				2, 0x00, 2, 1, 0x00,
+-			0x11, 1,
+-				2, 0xff, 2, 1, 0x00,
+-	};
+-	int ret;
+-	// test: get FW version
+-	ret = apcie_icc_cmd(2, 6, NULL, 0, reply, 0x30);
+-	if (ret < 0)
+-		pr_err("icc: firmware query failed: %d\n", ret);
+-	else
+-		pr_debug("icc: firmware query ret=%d, reply %02x %02x %02x %02x %02x %02x %02x %02x\n",
+-			 ret, reply[0], reply[1], reply[2], reply[3],
+-			 reply[4], reply[5], reply[6], reply[7]);
+-	ret = apcie_icc_cmd(1, 0, &svc, 1, reply, 0x30);
+-	if (ret < 0)
+-		pr_err("icc: service init failed: %d\n", ret);
+-	else
+-		pr_debug("icc: service init ret=%d, reply %02x %02x %02x %02x %02x %02x %02x %02x\n",
+-			 ret, reply[0], reply[1], reply[2], reply[3],
+-			 reply[4], reply[5], reply[6], reply[7]);
+-
+-	/* Set the LED to something nice */
+-	ret = apcie_icc_cmd(9, 0x20, led_config, ARRAY_SIZE(led_config), reply, 0x30);
+-	if (ret < 0)
+-		pr_err("icc: LED init failed: %d\n", ret);
+-	else
+-		pr_debug("icc: LED init ret=%d, reply %02x %02x %02x %02x %02x %02x %02x %02x\n",
+-			 ret, reply[0], reply[1], reply[2], reply[3],
+-			 reply[4], reply[5], reply[6], reply[7]);
+-}
+-
+-static int __init ps4_led_boot_complete(void)
+-{
+-	static const u8 led_config[] = {
+-		2, 1, 0, 0,
+-			0x10, 1,
+-				2, 0xff, 2, 1, 0x00,
+-			0x11, 1,
+-				2, 0x00, 2, 1, 0x00,
+-	};
+-	u8 reply[0x30];
+-	int ret;
+-
+-	if (!icc_sc)
+-		return 0;
+-
+-	ret = apcie_icc_cmd(9, 0x20, led_config, ARRAY_SIZE(led_config), reply, 0x30);
+-	if (ret < 0)
+-		pr_err("icc: boot-complete LED set failed: %d\n", ret);
+-
+-	return 0;
+-}
+-late_initcall(ps4_led_boot_complete);
+-
+-static void icc_shutdown(void)
+-{
+-	uint8_t command[] = {
+-		0, 0, 2, 0, 1, 0
+-	};
+-	if (apcie_status() != 1)
+-		return;
+-	apcie_icc_cmd(4, 1, command, sizeof(command), NULL, 0);
+-	msleep(3000);
+-	WARN_ON(1);
+-}
+-
+-void icc_reboot(void)
+-{
+-	uint8_t command[] = {
+-		0, 1, 2, 0, 1, 0
+-	};
+-	if (apcie_status() != 1)
+-		return;
+-	apcie_icc_cmd(4, 1, command, sizeof(command), NULL, 0);
+-	msleep(3000);
+-	WARN_ON(1);
+-}
+-
+-#ifdef CONFIG_PS4_ICCNODE
+-static void *ioctl_send_buf;
+-static void *ioctl_reply_buf;
+-
+- static long icc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+- {
+-	int ret;
+-	void __user *uap = (void __user *)arg;
+-
+-	switch (cmd) {
+-	case ICC_IOCTL_CMD: {
+-		struct icc_cmd cmd;
+-		void *reply_buf;
+-		const void *send_buf;
+-		int reply_len;
+-		size_t reply_copy_len;
+-
+-		ret = copy_from_user(&cmd, uap, sizeof(cmd));
+-		if (ret) {
+-			ret = -EFAULT;
+-			break;
+-		}
+-		if (cmd.length > ICC_MAX_PAYLOAD) {
+-			ret = -E2BIG;
+-			break;
+-		}
+-		if (cmd.reply_length > ICC_MAX_PAYLOAD) {
+-			ret = -E2BIG;
+-			break;
+-		}
+-		if (cmd.length && !cmd.data) {
+-			ret = -EINVAL;
+-			break;
+-		}
+-		if (cmd.reply_length && !cmd.reply) {
+-			ret = -EINVAL;
+-			break;
+-		}
+-
+-		if (!ioctl_send_buf || !ioctl_reply_buf) {
+-			ret = -ENODEV;
+-			break;
+-		}
+-
+-		mutex_lock(&icc_ioctl_mutex);
+-		if (cmd.length &&
+-		    copy_from_user(ioctl_send_buf, cmd.data, cmd.length)) {
+-			ret = -EFAULT;
+-			goto out_unlock_ioctl;
+-		}
+-
+-		send_buf = cmd.length ? ioctl_send_buf : NULL;
+-		reply_buf = cmd.reply_length ? ioctl_reply_buf : NULL;
+-
+-		reply_len = apcie_icc_cmd(cmd.major, cmd.minor, send_buf,
+-			cmd.length, reply_buf, cmd.reply_length);
+-		if (reply_len < 0) {
+-			ret = reply_len;
+-			goto out_unlock_ioctl;
+-		}
+-
+-		reply_copy_len = min_t(size_t, cmd.reply_length, reply_len);
+-		if (reply_copy_len &&
+-		    copy_to_user(cmd.reply, reply_buf, reply_copy_len)) {
+-			ret = -EFAULT;
+-			goto out_unlock_ioctl;
+-		}
+-
+-		ret = reply_len;
+-out_unlock_ioctl:
+-		mutex_unlock(&icc_ioctl_mutex);
+-		break;
+-	}
+-	default:
+-		ret = -ENOENT;
+-		break;
+-	}
+-	return ret;
+- }
+-
+- static const struct file_operations icc_fops = {
+- 	.owner = THIS_MODULE,
+- 	.unlocked_ioctl = icc_ioctl,
+- };
+-#endif
+-
+-int apcie_icc_init(struct apcie_dev *sc)
+-{
+-	int ret;
+-	unsigned int mem_devfn = PCI_DEVFN(PCI_SLOT(sc->pdev->devfn), AEOLIA_FUNC_ID_MEM);
+-	struct pci_dev *mem_dev;
+-	u32 req_empty, req_full;
+-
+-	/* ICC makes use of a segment of SPM memory, available via a different
+-	 * PCI function in Aeolia, so we need to get a handle to it. */
+-	mem_dev = pci_get_slot(sc->pdev->bus, mem_devfn);
+-	if (!mem_dev) {
+-		sc_err("icc: could not get handle to mem device\n");
+-		return -ENODEV;
+-	}
+-
+-	if (!request_mem_region(pci_resource_start(sc->pdev, 4) +
+-				APCIE_RGN_ICC_BASE, APCIE_RGN_ICC_SIZE,
+-				"apcie.icc")) {
+-		sc_err("icc: failed to request ICC register region\n");
+-		ret = -EBUSY;
+-		goto put_mem_dev;
+-	}
+-
+-	sc->icc.spm_base = pci_resource_start(mem_dev, 5) + APCIE_SPM_ICC_BASE;
+-	pci_dev_put(mem_dev);
+-	mem_dev = NULL;
+-	if (!request_mem_region(sc->icc.spm_base, APCIE_SPM_ICC_SIZE,
+-				"spm.icc")) {
+-		sc_err("icc: failed to request ICC SPM region\n");
+-		ret = -EBUSY;
+-		goto release_icc;
+-	}
+-
+-	sc->icc.spm = ioremap(sc->icc.spm_base, APCIE_SPM_ICC_SIZE);
+-	if (!sc->icc.spm) {
+-		sc_err("icc: failed to map ICC portion of SPM\n");
+-		ret = -EIO;
+-		goto release_spm;
+-	}
+-
+-	spin_lock_init(&sc->icc.reply_lock);
+-	init_waitqueue_head(&sc->icc.wq);
+-
+-	/* Clear flags */
+-	iowrite32(APCIE_ICC_SEND | APCIE_ICC_ACK,
+-		  sc->bar4 + APCIE_REG_ICC_STATUS);
+-
+-	ret = request_irq(apcie_irqnum(sc, APCIE_SUBFUNC_ICC),
+-			  icc_interrupt, IRQF_SHARED, "icc", sc);
+-	if (ret) {
+-		sc_err("icc: could not request IRQ: %d\n", ret);
+-		goto iounmap;
+-	}
+-
+-	req_empty = ioread32(REQUEST + BUF_EMPTY);
+-	req_full = ioread32(REQUEST + BUF_FULL);
+-
+-	if (req_empty != 1 || req_full != 0) {
+-		sc_err("icc: request buffer is busy: empty=%d full=%d\n",
+-		       req_empty, req_full);
+-		ret = -EIO;
+-		goto free_irq;
+-	}
+-
+-	mutex_lock(&icc_mutex);
+-	icc_sc = sc;
+-
+-	/* Enable IRQs */
+-	iowrite32(APCIE_ICC_SEND | APCIE_ICC_ACK,
+-		  sc->bar4 + APCIE_REG_ICC_IRQ_MASK);
+-	mutex_unlock(&icc_mutex);
+-
+-	ret = icc_i2c_init(sc);
+-	if (ret) {
+-		sc_err("icc: i2c init failed: %d\n", ret);
+-		goto unassign_global;
+-	}
+-	
+-	resetBtWlan();
+-//	resetUsbPort();
+-	
+-	ret = icc_pwrbutton_init(sc);
+-	/* Not fatal */
+-	if (ret)
+-		sc_err("icc: pwrbutton init failed: %d\n", ret);
+-
+-	do_icc_init();
+-	pm_power_off = &icc_shutdown;
+-
+-#ifdef CONFIG_PS4_ICCNODE
+-	ioctl_send_buf = kzalloc(ICC_MAX_PAYLOAD, GFP_KERNEL);
+-	if (!ioctl_send_buf) {
+-		sc_warn("icc: alloc ioctl_send_buf failed, leaving /dev/icc disabled\n");
+-		goto done;
+-	}
+-
+-	ioctl_reply_buf = kzalloc(ICC_MAX_PAYLOAD, GFP_KERNEL);
+-	if (!ioctl_reply_buf) {
+-		sc_warn("icc: alloc ioctl_reply_buf failed, leaving /dev/icc disabled\n");
+-		kfree(ioctl_send_buf);
+-		ioctl_send_buf = NULL;
+-		goto done;
+-	}
+-
+-	ret = register_chrdev(0, "icc", &icc_fops);
+-	if (ret < 0) {
+-		sc_warn("icc: register_chrdev failed: %d\n", ret);
+-		kfree(ioctl_reply_buf);
+-		kfree(ioctl_send_buf);
+-		ioctl_reply_buf = NULL;
+-		ioctl_send_buf = NULL;
+-		goto done;
+-	}
+-	icc_major = ret;
+-	icc_chrdev_registered = true;
+-
+-	icc_class = class_create("icc");
+-	if (IS_ERR(icc_class)) {
+-		sc_warn("icc: class_create failed (%ld), /dev/icc unavailable\n",
+-			PTR_ERR(icc_class));
+-		icc_class = NULL;
+-	} else {
+-		icc_device = device_create(icc_class, NULL,
+-					   MKDEV(icc_major, 0), NULL, "icc");
+-		if (IS_ERR(icc_device)) {
+-			sc_warn("icc: device_create failed (%ld), /dev/icc unavailable\n",
+-				PTR_ERR(icc_device));
+-			icc_device = NULL;
+-		}
+-	}
+- done:
+-#endif
+-
+-	return 0;
+-
+-unassign_global:
+-	mutex_lock(&icc_mutex);
+-	iowrite32(0, sc->bar4 + APCIE_REG_ICC_IRQ_MASK);
+-	icc_sc = NULL;
+-	mutex_unlock(&icc_mutex);
+-free_irq:
+-	free_irq(apcie_irqnum(sc, APCIE_SUBFUNC_ICC), sc);
+-iounmap:
+-	iounmap(sc->icc.spm);
+-release_spm:
+-	release_mem_region(sc->icc.spm_base, APCIE_SPM_ICC_SIZE);
+-release_icc:
+-	release_mem_region(pci_resource_start(sc->pdev, 4) +
+-			   APCIE_RGN_ICC_BASE, APCIE_RGN_ICC_SIZE);
+-put_mem_dev:
+-	if (mem_dev)
+-		pci_dev_put(mem_dev);
+-	return ret;
+-}
+-
+-void apcie_icc_remove(struct apcie_dev *sc)
+-{
+-	sc_err("apcie_icc_remove: shouldn't normally be called\n");
+-#ifdef CONFIG_PS4_ICCNODE
+-	if (icc_chrdev_registered) {
+-		if (icc_device) {
+-			device_destroy(icc_class, MKDEV(icc_major, 0));
+-			icc_device = NULL;
+-		}
+-		if (icc_class) {
+-			class_destroy(icc_class);
+-			icc_class = NULL;
+-		}
+-		unregister_chrdev(icc_major, "icc");
+-		icc_major = 0;
+-		icc_chrdev_registered = false;
+-	}
+-	kfree(ioctl_reply_buf);
+-	kfree(ioctl_send_buf);
+-	ioctl_reply_buf = NULL;
+-	ioctl_send_buf = NULL;
+-#endif
+-	pm_power_off = NULL;
+-	icc_pwrbutton_remove(sc);
+-	icc_i2c_remove(sc);
+-	mutex_lock(&icc_mutex);
+-	iowrite32(0, sc->bar4 + APCIE_REG_ICC_IRQ_MASK);
+-	icc_sc = NULL;
+-	mutex_unlock(&icc_mutex);
+-	free_irq(apcie_irqnum(sc, APCIE_SUBFUNC_ICC), sc);
+-	iounmap(sc->icc.spm);
+-	release_mem_region(sc->icc.spm_base, APCIE_SPM_ICC_SIZE);
+-	release_mem_region(pci_resource_start(sc->pdev, 4) +
+-			   APCIE_RGN_ICC_BASE, APCIE_RGN_ICC_SIZE);
+-}
+-
+-#ifdef CONFIG_PM
+-void apcie_icc_suspend(struct apcie_dev *sc, pm_message_t state)
+-{
+-}
+-
+-void apcie_icc_resume(struct apcie_dev *sc)
+-{
+-}
+-#endif
+diff --git a/drivers/ps4/ps4-apcie-pwrbutton.c b/drivers/ps4/ps4-apcie-pwrbutton.c
+index 46770e945533f4f79620293887d85421a68a7d2e..ed5c28f7f6baef8d46a0dd58d4b522f5ba9d4a64 100644
+--- a/drivers/ps4/ps4-apcie-pwrbutton.c
++++ b/drivers/ps4/ps4-apcie-pwrbutton.c
+@@ -21,8 +21,6 @@ int icc_pwrbutton_init(struct apcie_dev *sc)
+ 	int ret = 0;
+ 	u16 button;
+ 	struct input_dev *dev;
+-	int (*icc_cmd)(u8 major, u16 minor, const void *data, u16 length,
+-		      void *reply, u16 reply_length) = apcie_icc_cmd;
+ 
+ 	dev = input_allocate_device();
+ 	if (!dev) {
+@@ -53,9 +51,7 @@ int icc_pwrbutton_init(struct apcie_dev *sc)
+ 
+ 	// enable power button notifications
+ 	button = 0x100;
+-	if (sc->pdev->device == PCI_DEVICE_ID_SONY_BAIKAL_PCIE)
+-		icc_cmd = bpcie_icc_cmd;
+-	ret = icc_cmd(8, 1, &button, sizeof(button), NULL, 0);
++	ret = ps4sb_icc_cmd(8, 1, &button, sizeof(button), NULL, 0);
+ 	if (ret < 0) {
+ 		sc_info("%s: Failed to enable power notifications (%d)\n",
+ 			__func__, ret);
+@@ -63,7 +59,7 @@ int icc_pwrbutton_init(struct apcie_dev *sc)
+ 
+ 	// enable reset button notifications (?)
+ 	button = 0x102;
+-	ret = icc_cmd(8, 1, &button, sizeof(button), NULL, 0);
++	ret = ps4sb_icc_cmd(8, 1, &button, sizeof(button), NULL, 0);
+ 	if (ret < 0) {
+ 		sc_info("%s: Failed to enable reset notifications (%d)\n",
+ 		        __func__, ret);
+diff --git a/drivers/ps4/ps4-apcie-uart.c b/drivers/ps4/ps4-apcie-uart.c
+deleted file mode 100644
+index 44d9a7fd2b80acbd4211972cf832e5b8338514d5..0000000000000000000000000000000000000000
+--- a/drivers/ps4/ps4-apcie-uart.c
++++ /dev/null
+@@ -1,93 +0,0 @@
+-#include <linux/serial_8250.h>
+-#include <linux/serial_core.h>
+-#include <linux/serial_reg.h>
+-
+-#include "aeolia.h"
+-
+-int apcie_uart_init(struct apcie_dev *sc); /* Don't know why the compiler complains about prototypes despite the definition*/
+-void apcie_uart_remove(struct apcie_dev *sc);
+-
+-#ifdef CONFIG_SERIAL_8250
+-int apcie_uart_init(struct apcie_dev *sc)
+-{
+-	int i;
+-	struct uart_8250_port uart;
+-
+-	for (i = 0; i < APCIE_NR_UARTS; i++) {
+-		sc->serial_line[i] = -1;
+-	}
+-
+-	for (i = 0; i < APCIE_NR_UARTS; i++) {
+-		uint32_t off = APCIE_RGN_UART_BASE + (i << 12);
+-		memset(&uart, 0, sizeof(uart));
+-		uart.port.irq		= apcie_irqnum(sc, APCIE_SUBFUNC_UART0 + i);
+-		uart.port.uartclk	= 58500000;
+-		uart.port.flags		= UPF_SHARE_IRQ;
+-		uart.port.iotype	= UPIO_MEM32;
+-		uart.port.mapbase	= pci_resource_start(sc->pdev, 4) + off;
+-		uart.port.membase	= sc->bar4 + off;
+-		uart.port.regshift	= 2;
+-		uart.port.dev		= &sc->pdev->dev;
+-
+-		sc->serial_line[i] = serial8250_register_8250_port(&uart);
+-		if (sc->serial_line[i] < 0) {
+-			sc_err("Failed to register serial port %d\n", i);
+-			apcie_uart_remove(sc);
+-			return -EIO;
+-		}
+-	}
+-	return 0;
+-}
+-
+-void apcie_uart_remove(struct apcie_dev *sc)
+-{
+-	int i;
+-	for (i = 0; i < APCIE_NR_UARTS; i++) {
+-		if (sc->serial_line[i] >= 0) {
+-			serial8250_unregister_port(sc->serial_line[i]);
+-			sc->serial_line[i] = -1;
+-		}
+-	}
+-}
+-
+-#ifdef CONFIG_PM
+-void apcie_uart_suspend(struct apcie_dev *sc, pm_message_t state);
+-void apcie_uart_resume(struct apcie_dev *sc);
+-
+-void apcie_uart_suspend(struct apcie_dev *sc, pm_message_t state)
+-{
+-	int i;
+-	for (i = 0; i < APCIE_NR_UARTS; i++)
+-		if (sc->serial_line[i] >= 0)
+-			serial8250_suspend_port(sc->serial_line[i]);
+-}
+-
+-void apcie_uart_resume(struct apcie_dev *sc)
+-{
+-	int i;
+-	for (i = 0; i < APCIE_NR_UARTS; i++)
+-		if (sc->serial_line[i] >= 0)
+-			serial8250_resume_port(sc->serial_line[i]);
+-}
+-#endif
+-
+-#else
+-int apcie_uart_init(struct apcie_dev *sc)
+-{
+-	return 0;
+-}
+-
+-void apcie_uart_remove(struct apcie_dev *sc)
+-{
+-}
+-
+-#ifdef CONFIG_PM
+-void apcie_uart_suspend(struct apcie_dev *sc, pm_message_t state)
+-{
+-}
+-
+-void apcie_uart_resume(struct apcie_dev *sc)
+-{
+-}
+-#endif
+-#endif
+diff --git a/drivers/ps4/ps4-apcie.c b/drivers/ps4/ps4-apcie.c
+index 10d4b2a778eb23884e7a070ac4b676262b6ed871..f06526507fd88c3b82ad44bad7fd663b5643c19e 100644
+--- a/drivers/ps4/ps4-apcie.c
++++ b/drivers/ps4/ps4-apcie.c
+@@ -557,20 +557,35 @@ static int apcie_glue_resume(struct apcie_dev *sc) {
+ #endif
+ 
+ 
+-int apcie_uart_init(struct apcie_dev *sc);
+-int apcie_icc_init(struct apcie_dev *sc);
+-void apcie_uart_remove(struct apcie_dev *sc);
+-void apcie_icc_remove(struct apcie_dev *sc);
++int ps4sb_uart_init(struct apcie_dev *sc);
++int ps4sb_icc_init(struct apcie_dev *sc);
++void ps4sb_uart_remove(struct apcie_dev *sc);
++void ps4sb_icc_remove(struct apcie_dev *sc);
+ #ifdef CONFIG_PM
+-void apcie_uart_suspend(struct apcie_dev *sc, pm_message_t state);
+-void apcie_icc_suspend(struct apcie_dev *sc, pm_message_t state);
+-void apcie_uart_resume(struct apcie_dev *sc);
+-void apcie_icc_resume(struct apcie_dev *sc);
++void ps4sb_uart_suspend(struct apcie_dev *sc, pm_message_t state);
++void ps4sb_icc_suspend(struct apcie_dev *sc, pm_message_t state);
++void ps4sb_uart_resume(struct apcie_dev *sc);
++void ps4sb_icc_resume(struct apcie_dev *sc);
+ #endif
+ 
+ /* From arch/x86/platform/ps4/ps4.c */
+ extern bool apcie_initialized;
+ 
++static const struct ps4sb_family aeolia_family = {
++	.name		= "Aeolia",
++	.uart_bar	= 4,
++	.uart_base	= APCIE_RGN_UART_BASE,
++	.uart_clock	= 58500000,
++	.uart_subfunc	= APCIE_SUBFUNC_UART0,
++	.uart_count	= APCIE_NR_UARTS,
++	.icc_bar	= 4,
++	.icc_base	= APCIE_RGN_ICC_BASE,
++	.icc_claim_regs	= true,
++	.icc_boot_led	= true,
++	.i2c_data_off	= 0x14,
++	.i2c_err_off	= 0x0c,
++};
++
+ static int apcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+ 	struct apcie_dev *sc;
+ 	int ret;
+@@ -591,6 +606,7 @@ static int apcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+ 		goto disable_dev;
+ 	}
+ 	sc->pdev = dev;
++	sc->family = &aeolia_family;
+ 	memset(sc->irq_map, -1, sizeof(sc->irq_map));
+ 	memset(sc->serial_line, -1, sizeof(sc->serial_line));
+ 	pci_set_drvdata(dev, sc);
+@@ -610,7 +626,7 @@ static int apcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+ 
+ 	if ((ret = apcie_glue_init(sc)) < 0)
+ 		goto free_bars;
+-	if ((ret = apcie_icc_init(sc)) < 0)
++	if ((ret = ps4sb_icc_init(sc)) < 0)
+ 		goto remove_glue;
+ 
+ 	WRITE_ONCE(apcie_initialized, true);
+@@ -636,8 +652,8 @@ static void apcie_remove(struct pci_dev *dev) {
+ 	sc = pci_get_drvdata(dev);
+ 
+ 	WRITE_ONCE(apcie_initialized, false);
+-	apcie_icc_remove(sc);
+-	apcie_uart_remove(sc);
++	ps4sb_icc_remove(sc);
++	ps4sb_uart_remove(sc);
+ 	apcie_glue_remove(sc);
+ 
+ 	if (sc->bar0)
+@@ -655,8 +671,8 @@ static int apcie_suspend(struct pci_dev *dev, pm_message_t state) {
+ 	struct apcie_dev *sc;
+ 	sc = pci_get_drvdata(dev);
+ 
+-	apcie_icc_suspend(sc, state);
+-	apcie_uart_suspend(sc, state);
++	ps4sb_icc_suspend(sc, state);
++	ps4sb_uart_suspend(sc, state);
+ 	apcie_glue_suspend(sc, state);
+ 	return 0;
+ }
+@@ -665,9 +681,9 @@ static int apcie_resume(struct pci_dev *dev) {
+ 	struct apcie_dev *sc;
+ 	sc = pci_get_drvdata(dev);
+ 
+-	apcie_icc_resume(sc);
++	ps4sb_icc_resume(sc);
+ 	apcie_glue_resume(sc);
+-	apcie_uart_resume(sc);
++	ps4sb_uart_resume(sc);
+ 	return 0;
+ }
+ #endif
+diff --git a/drivers/ps4/ps4-bpcie-icc.c b/drivers/ps4/ps4-bpcie-icc.c
+deleted file mode 100644
+index 2e2c7fe0ec968d8aa5e6e5160538f50e826e97ea..0000000000000000000000000000000000000000
+--- a/drivers/ps4/ps4-bpcie-icc.c
++++ /dev/null
+@@ -1,758 +0,0 @@
+-#include <linux/kernel.h>
+-#include <linux/sched.h>
+-#include <linux/wait.h>
+-#include <linux/pci.h>
+-#include <linux/interrupt.h>
+-#include <linux/delay.h>
+-#include <linux/fs.h>
+-#include <linux/uaccess.h>
+-#include <linux/device.h>
+-#include <linux/reboot.h>
+-#include <linux/spinlock.h>
+-#include <linux/workqueue.h>
+-#include <asm/ps4.h>
+-#include "baikal.h"
+-
+-#define bpcie_icc_dev abpcie_icc_dev
+-
+-static struct bpcie_dev *icc_sc;
+-
+-DEFINE_MUTEX(bcpie_icc_mutex);
+-
+-#define REQUEST (sc->icc.spm + BPCIE_SPM_ICC_REQUEST)
+-#define REPLY (sc->icc.spm + BPCIE_SPM_ICC_REPLY)
+-
+-static u16 checksum(const void *p, int length)
+-{
+-	const u8 *pp = p;
+-	u16 sum = 0;
+-	while (length--)
+-		sum += *pp++;
+-	return sum;
+-}
+-
+-static void dump_message(struct bpcie_dev *sc, int offset)
+-{
+-	int len;
+-	struct icc_message_hdr hdr;
+-	memcpy_fromio(&hdr, sc->icc.spm + offset, ICC_HDR_SIZE);
+-
+-	sc_err("icc: hdr: [%02x] %02x:%04x unk %x #%d len %d cksum 0x%x\n",
+-	       hdr.magic, hdr.major, hdr.minor, hdr.unknown, hdr.cookie,
+-	       hdr.length, hdr.checksum);
+-	len = min(hdr.length - ICC_HDR_SIZE, ICC_MAX_PAYLOAD);
+-	if (len > 0) {
+-		sc_err("icc: data:");
+-		while (len--)
+-			printk(" %02x", ioread8(sc->icc.spm + (offset++) +
+-			                         ICC_HDR_SIZE));
+-		printk("\n");
+-	}
+-}
+-
+-#define ICC_EVENT_RING 8
+-
+-struct icc_event {
+-	u16 minor;
+-	u16 length;
+-	u8 data[ICC_MAX_PAYLOAD];
+-};
+-
+-static void icc_event_work_fn(struct work_struct *work);
+-
+-static DEFINE_SPINLOCK(icc_event_lock);
+-static DECLARE_WORK(icc_event_work, icc_event_work_fn);
+-static struct icc_event icc_event_ring[ICC_EVENT_RING];
+-static struct icc_event icc_event_current;
+-static unsigned int icc_event_head;
+-static unsigned int icc_event_tail;
+-static u8 icc_event_major;
+-static bpcie_icc_event_fn icc_event_handler;
+-static void *icc_event_ctx;
+-
+-static bool icc_event_queue(struct bpcie_dev *sc, struct icc_message_hdr *msg)
+-{
+-	struct icc_event *event;
+-	unsigned long flags;
+-	bool queued = false;
+-	u16 length;
+-
+-	spin_lock_irqsave(&icc_event_lock, flags);
+-	if (icc_event_handler && msg->major == icc_event_major &&
+-	    icc_event_head - icc_event_tail < ICC_EVENT_RING) {
+-		length = msg->length > ICC_HDR_SIZE ? msg->length - ICC_HDR_SIZE : 0;
+-		length = min_t(u16, length, ICC_MAX_PAYLOAD);
+-		event = &icc_event_ring[icc_event_head % ICC_EVENT_RING];
+-		event->minor = msg->minor;
+-		event->length = length;
+-		memcpy_fromio(event->data, sc->icc.spm + BPCIE_SPM_ICC_REPLY +
+-			      ICC_HDR_SIZE, length);
+-		icc_event_head++;
+-		queued = true;
+-	}
+-	spin_unlock_irqrestore(&icc_event_lock, flags);
+-
+-	if (queued)
+-		schedule_work(&icc_event_work);
+-	return queued;
+-}
+-
+-static void icc_event_work_fn(struct work_struct *work)
+-{
+-	bpcie_icc_event_fn handler;
+-	unsigned long flags;
+-	void *ctx;
+-
+-	for (;;) {
+-		spin_lock_irqsave(&icc_event_lock, flags);
+-		if (icc_event_head == icc_event_tail) {
+-			spin_unlock_irqrestore(&icc_event_lock, flags);
+-			return;
+-		}
+-		icc_event_current = icc_event_ring[icc_event_tail % ICC_EVENT_RING];
+-		icc_event_tail++;
+-		handler = icc_event_handler;
+-		ctx = icc_event_ctx;
+-		spin_unlock_irqrestore(&icc_event_lock, flags);
+-
+-		if (handler)
+-			handler(ctx, icc_event_current.minor,
+-				icc_event_current.data, icc_event_current.length);
+-	}
+-}
+-
+-int bpcie_icc_register_event_handler(u8 major, bpcie_icc_event_fn fn, void *ctx)
+-{
+-	unsigned long flags;
+-	int ret = 0;
+-
+-	spin_lock_irqsave(&icc_event_lock, flags);
+-	if (icc_event_handler) {
+-		ret = -EBUSY;
+-	} else {
+-		icc_event_major = major;
+-		icc_event_ctx = ctx;
+-		icc_event_tail = icc_event_head;
+-		icc_event_handler = fn;
+-	}
+-	spin_unlock_irqrestore(&icc_event_lock, flags);
+-	return ret;
+-}
+-EXPORT_SYMBOL_GPL(bpcie_icc_register_event_handler);
+-
+-void bpcie_icc_unregister_event_handler(u8 major)
+-{
+-	unsigned long flags;
+-
+-	spin_lock_irqsave(&icc_event_lock, flags);
+-	if (icc_event_handler && icc_event_major == major) {
+-		icc_event_handler = NULL;
+-		icc_event_ctx = NULL;
+-		icc_event_tail = icc_event_head;
+-	}
+-	spin_unlock_irqrestore(&icc_event_lock, flags);
+-	flush_work(&icc_event_work);
+-}
+-EXPORT_SYMBOL_GPL(bpcie_icc_unregister_event_handler);
+-
+-static void handle_event(struct bpcie_dev *sc, struct icc_message_hdr *msg)
+-{
+-	switch ((msg->major << 16) | msg->minor) {
+-		case 0x088010:
+-			icc_pwrbutton_trigger(sc, 1);
+-			break;
+-		case 0x088011:
+-			icc_pwrbutton_trigger(sc, 0);
+-			break;
+-		default:
+-			if (icc_event_queue(sc, msg))
+-				break;
+-			sc_err("icc: event arrived, not yet supported.\n");
+-			dump_message(sc, BPCIE_SPM_ICC_REPLY);
+-			break;
+-	}
+-}
+-
+-static void handle_message(struct bpcie_dev *sc)
+-{
+-	u32 rep_empty, rep_full;
+-	int off, copy_size;
+-	struct icc_message_hdr msg;
+-
+-	rep_empty = ioread32(REPLY + BUF_EMPTY);
+-	rep_full = ioread32(REPLY + BUF_FULL);
+-
+-	if (rep_empty != 0 || rep_full != 1) {
+-		sc_err("icc: reply buffer in bad state (%d, %d)\n",
+-			rep_empty, rep_full);
+-		return;
+-	}
+-
+-	memcpy_fromio(&msg, REPLY, ICC_HDR_SIZE);
+-
+-	if (msg.minor & ICC_EVENT) {
+-		if (msg.magic != ICC_EVENT_MAGIC) {
+-			sc_err("icc: event has bad magic\n");
+-			dump_message(sc, BPCIE_SPM_ICC_REPLY);
+-			return;
+-		}
+-		handle_event(sc, &msg);
+-	} else if (msg.minor & ICC_REPLY) {
+-		if (msg.magic != ICC_MAGIC) {
+-			sc_err("icc: reply has bad magic\n");
+-			dump_message(sc, BPCIE_SPM_ICC_REPLY);
+-			return;
+-		}
+-		spin_lock(&sc->icc.reply_lock);
+-		if (!sc->icc.reply_pending) {
+-			spin_unlock(&sc->icc.reply_lock);
+-			sc_err("icc: unexpected reply\n");
+-			dump_message(sc, BPCIE_SPM_ICC_REPLY);
+-			return;
+-		}
+-		if (msg.cookie != sc->icc.request.cookie) {
+-			spin_unlock(&sc->icc.reply_lock);
+-			sc_err("icc: reply has bad cookie %d\n", msg.cookie);
+-			dump_message(sc, BPCIE_SPM_ICC_REPLY);
+-			return;
+-		}
+-		if (msg.length < ICC_HDR_SIZE || msg.length > ICC_MAX_SIZE) {
+-			spin_unlock(&sc->icc.reply_lock);
+-			sc_err("icc: reply has bad length %d\n", msg.length);
+-			dump_message(sc, BPCIE_SPM_ICC_REPLY);
+-			return;
+-		}
+-		off = ICC_HDR_SIZE;
+-		copy_size = min(sc->icc.reply_length,
+-				(int)(msg.length - off));
+-		memcpy_fromio(sc->icc.reply_buffer, REPLY + off, copy_size);
+-		off += copy_size;
+-		sc->icc.reply_extra_checksum = 0;
+-		while (off < msg.length)
+-			sc->icc.reply_extra_checksum += ioread8(REPLY + off++);
+-		sc->icc.reply_pending = false;
+-		sc->icc.reply_length = copy_size;
+-		sc->icc.reply = msg;
+-		spin_unlock(&sc->icc.reply_lock);
+-		wake_up(&sc->icc.wq);
+-	} else {
+-		sc_err("icc: unknown message arrived\n");
+-		dump_message(sc, BPCIE_SPM_ICC_REPLY);
+-	}
+-}
+-
+-static irqreturn_t icc_interrupt(int irq, void *arg)
+-{
+-	struct bpcie_dev *sc = arg;
+-	u32 status;
+-	u32 ret = IRQ_NONE;
+-
+-	do {
+-		status = ioread32(sc->bar2 + BPCIE_REG_ICC_STATUS);
+-
+-		if (status & BPCIE_ICC_ACK) {
+-			iowrite32(BPCIE_ICC_ACK,
+-				  sc->bar2 + BPCIE_REG_ICC_STATUS);
+-			ret = IRQ_HANDLED;
+-		}
+-
+-		if (status & BPCIE_ICC_SEND) {
+-			iowrite32(BPCIE_ICC_SEND,
+-				  sc->bar2 + BPCIE_REG_ICC_STATUS);
+-			handle_message(sc);
+-			iowrite32(0, REPLY + BUF_FULL);
+-			iowrite32(1, REPLY + BUF_EMPTY);
+-			iowrite32(BPCIE_ICC_ACK,
+-				  sc->bar2 + BPCIE_REG_ICC_DOORBELL);
+-			ret = IRQ_HANDLED;
+-		}
+-	} while (status);
+-
+-	return ret;
+-}
+-
+-static int icc_post_request(struct bpcie_dev *sc, u8 major, u16 minor,
+-			    const void *data, u16 length)
+-{
+-	u32 req_empty, req_full;
+-
+-	if (length > ICC_MAX_PAYLOAD)
+-		return -E2BIG;
+-
+-	sc->icc.request.magic = ICC_MAGIC;
+-	sc->icc.request.major = major;
+-	sc->icc.request.minor = minor;
+-	sc->icc.request.cookie++;
+-	sc->icc.request.length = ICC_HDR_SIZE + length;
+-	sc->icc.request.checksum = 0;
+-	if (sc->icc.request.length < ICC_MIN_SIZE)
+-		sc->icc.request.length = ICC_MIN_SIZE;
+-
+-	sc->icc.request.checksum = checksum(&sc->icc.request, ICC_HDR_SIZE);
+-	sc->icc.request.checksum += checksum(data, length);
+-
+-	req_empty = ioread32(REQUEST + BUF_EMPTY);
+-	req_full = ioread32(REQUEST + BUF_FULL);
+-
+-	if (req_empty != 1 || req_full != 0) {
+-		sc_err("icc: request buffer is busy: empty=%d full=%d\n",
+-		       req_empty, req_full);
+-		return -EIO;
+-	}
+-
+-	iowrite32(0, REQUEST + BUF_EMPTY);
+-
+-	memcpy_toio(REQUEST, &sc->icc.request, ICC_HDR_SIZE);
+-	memcpy_toio(REQUEST + ICC_HDR_SIZE, data, length);
+-	if (length < ICC_MIN_PAYLOAD)
+-		memset_io(REQUEST + ICC_HDR_SIZE + length, 0,
+-			  ICC_MIN_PAYLOAD - length);
+-
+-	iowrite32(1, REQUEST + BUF_FULL);
+-	return 0;
+-}
+-
+-static int _bpcie_icc_cmd(struct bpcie_dev *sc, u8 major, u16 minor, const void *data,
+-		    u16 length, void *reply, u16 reply_length, bool intr)
+-{
+-	int ret;
+-	u16 rep_checksum;
+-
+-	sc->icc.reply_buffer = reply;
+-	sc->icc.reply_length = reply_length;
+-
+-	ret = icc_post_request(sc, major, minor, data, length);
+-	if (ret)
+-		return ret;
+-
+-	spin_lock_irq(&sc->icc.reply_lock);
+-	sc->icc.reply_pending = true;
+-	spin_unlock_irq(&sc->icc.reply_lock);
+-
+-	iowrite32(BPCIE_ICC_SEND, sc->bar2 + BPCIE_REG_ICC_DOORBELL);
+-
+-	if (intr)
+-		ret = wait_event_interruptible_timeout(sc->icc.wq,
+-				!sc->icc.reply_pending, HZ * ICC_TIMEOUT);
+-	else
+-		ret = wait_event_timeout(sc->icc.wq,
+-				!sc->icc.reply_pending, HZ * ICC_TIMEOUT);
+-
+-	spin_lock_irq(&sc->icc.reply_lock);
+-	sc->icc.reply_buffer = NULL;
+-	if (ret < 0 || sc->icc.reply_pending) {
+-		sc->icc.reply_pending = false;
+-		spin_unlock_irq(&sc->icc.reply_lock);
+-		sc_err("icc: interrupted or timeout: ret = %d\n", ret);
+-		return ret < 0 ? -EINTR : -ETIMEDOUT;
+-	}
+-	spin_unlock_irq(&sc->icc.reply_lock);
+-
+-	rep_checksum = sc->icc.reply.checksum;
+-	sc->icc.reply.checksum = 0;
+-	rep_checksum -= checksum(&sc->icc.reply, ICC_HDR_SIZE);
+-	rep_checksum -= checksum(reply, sc->icc.reply_length);
+-	rep_checksum -= sc->icc.reply_extra_checksum;
+-
+-	if (rep_checksum) {
+-		sc_err("icc: checksum mismatch (diff: %x)\n", rep_checksum);
+-		return -EIO;
+-	}
+-
+-	if (sc->icc.reply.major != major ) {
+-		sc_err("icc: major mismatch\n");
+-		return -EIO;
+-	}
+-	if (sc->icc.reply.minor != (minor | ICC_REPLY) ) {
+-		sc_err("icc: minor mismatch\n");
+-		return -EIO;
+-	}
+-
+-	return sc->icc.reply.length - ICC_HDR_SIZE;
+-}
+-
+-int bpcie_icc_cmd(u8 major, u16 minor, const void *data, u16 length,
+-		   void *reply, u16 reply_length)
+-{
+-	int ret;
+-
+-	mutex_lock(&bcpie_icc_mutex);
+-	if (!icc_sc) {
+-		pr_err("icc: not ready\n");
+-		ret = -EAGAIN;
+-		goto out_unlock;
+-	}
+-	ret = _bpcie_icc_cmd(icc_sc, major, minor, data, length, reply, reply_length,
+-		       false);
+-out_unlock:
+-	mutex_unlock(&bcpie_icc_mutex);
+-	return ret;
+-}
+-EXPORT_SYMBOL_GPL(bpcie_icc_cmd);
+-
+-static int bpcie_icc_post_atomic(u8 major, u16 minor, const void *data, u16 length)
+-{
+-	struct bpcie_dev *sc = READ_ONCE(icc_sc);
+-	int ret;
+-
+-	if (!sc)
+-		return -ENODEV;
+-	if (reboot_force || READ_ONCE(sc->icc.reply_pending))
+-		return -EBUSY;
+-
+-	sc->icc.reply_buffer = NULL;
+-	sc->icc.reply_length = 0;
+-	ret = icc_post_request(sc, major, minor, data, length);
+-	if (ret)
+-		return ret;
+-
+-	iowrite32(BPCIE_ICC_SEND | BPCIE_ICC_ACK, sc->bar2 + BPCIE_REG_ICC_STATUS);
+-	iowrite32(BPCIE_ICC_SEND, sc->bar2 + BPCIE_REG_ICC_DOORBELL);
+-	return 0;
+-}
+-
+-static void __maybe_unused bpcie_init_usb(struct bpcie_dev *sc, int usb_no)
+-{
+-	u32 value_to_write;
+-	u32 offset;
+-	void __iomem *addr;
+-
+-	offset = usb_no ? 0x68 : 0x64;
+-
+-	addr = sc->bar2 + BPCIE_USB_BASE + offset;
+-	value_to_write = ioread32(addr) | 1;
+-	iowrite32(value_to_write, addr);
+-
+-	offset = usb_no ? 0x28 : 0x24;
+-
+-	addr = sc->bar2 + BPCIE_USB_BASE + offset;
+-	value_to_write = ioread32(addr) | 1;
+-	iowrite32(value_to_write, addr);
+-
+-	offset = usb_no ? 0x68 : 0x64;
+-
+-	addr = sc->bar2 + BPCIE_USB_BASE + offset;
+-	value_to_write = ioread32(addr) & ~1U;
+-	iowrite32(value_to_write, addr);
+-}
+-
+-static void __maybe_unused resetUsbPort(void)
+-{
+-	u8 on = 1;
+-	u8 resp[20];
+-	int ret;
+-	
+-	ret = bpcie_icc_cmd(5, 0x11, NULL, 0, resp, 20);
+-	printk("usb0 status: ret=%d, reply %02x %02x %02x %02x", ret, resp[0], resp[1], resp[2], resp[3]);
+-	if(ret < 0) {
+-		printk("USB status failed");
+-	} else if (resp[2]) {
+-		printk("USB is already turned ON!");
+-		return;
+-	}
+-	ret = bpcie_icc_cmd(5, 0x10, &on, sizeof(on), resp, 20);
+-	printk("Turn ON USB: ret=%d, reply %02x %02x %02x %02x", ret, resp[0], resp[1], resp[2], resp[3]);
+-	if(ret < 0)
+-	{
+-		printk("Turn on USB failed");
+-		return;
+-	}
+-}
+-
+-static void __maybe_unused resetBtWlan(void)
+-{
+-	u8 on = 3;
+-	u8 resp[20];
+-	int ret;
+-	
+-
+-	
+-
+-	ret = bpcie_icc_cmd(5, 0, &on, sizeof(on), resp, 20);
+-	printk("Turn ON BT/WLAN: ret=%d, reply %02x %02x %02x %02x", ret, resp[0], resp[1], resp[2], resp[3]);
+-	if(ret < 0)
+-	{
+-		printk("Turn on bt/wlan failed");
+-		return;
+-	}
+-}
+-
+-static void do_icc_init(void) {
+-	u8 svc = 0x10;
+-	u8 reply[0x30];
+-	static const u8 led_config[] = {
+-		2, 1, 0, 0,
+-			0x10, 1,
+-				2, 0x00, 2, 1, 0x00,
+-			0x11, 1,
+-				2, 0xff, 2, 1, 0x00,
+-	};
+-	int ret;
+-	ret = bpcie_icc_cmd(2, 6, NULL, 0, reply, 0x30);
+-	printk("ret=%d, reply %02x %02x %02x %02x %02x %02x %02x %02x\n", ret,
+-		reply[0], reply[1], reply[2], reply[3],
+-		reply[4], reply[5], reply[6], reply[7]);
+-	ret = bpcie_icc_cmd(1, 0, &svc, 1, reply, 0x30);
+-	printk("ret=%d, reply %02x %02x %02x %02x %02x %02x %02x %02x\n", ret,
+-		reply[0], reply[1], reply[2], reply[3],
+-		reply[4], reply[5], reply[6], reply[7]);
+-
+-	ret = bpcie_icc_cmd(9, 0x20, led_config, ARRAY_SIZE(led_config), reply, 0x30);
+-	printk("ret=%d, reply %02x %02x %02x %02x %02x %02x %02x %02x\n", ret,
+-		reply[0], reply[1], reply[2], reply[3],
+-		reply[4], reply[5], reply[6], reply[7]);
+-}
+-
+-static void icc_power_request(u8 restart)
+-{
+-	uint8_t command[] = {
+-		0, restart, 2, 0, 1, 0
+-	};
+-	if (bpcie_status() != 1)
+-		return;
+-	if (bpcie_icc_post_atomic(4, 1, command, sizeof(command)))
+-		return;
+-	mdelay(3000);
+-	WARN_ON(1);
+-}
+-
+-static void icc_shutdown(void)
+-{
+-	icc_power_request(0);
+-}
+-
+-void bpcie_icc_reboot(void)
+-{
+-	icc_power_request(1);
+-}
+-
+-static struct sys_off_handler *icc_sys_off;
+-
+-static int icc_sys_off_cb(struct sys_off_data *data)
+-{
+-	icc_shutdown();
+-	return NOTIFY_DONE;
+-}
+-
+-static void *ioctl_tmp_buf = NULL;
+-static bool icc_chrdev_registered;
+-#ifdef CONFIG_PS4_ICCNODE
+-static struct class *icc_class;
+-static struct device *icc_device;
+-#endif
+-
+- static long icc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+- {
+- 	int ret;
+- 	void __user *uap = (void __user *)arg;
+- 	switch (cmd) {
+- 	case ICC_IOCTL_CMD: {
+- 		struct icc_cmd cmd;
+- 		int reply_len;
+- 		ret = copy_from_user(&cmd, uap, sizeof(cmd));
+- 		if (ret) {
+- 			ret = -EFAULT;
+- 			break;
+- 		}
+- 		ret = copy_from_user(ioctl_tmp_buf, cmd.data, cmd.length);
+- 		if (ret) {
+- 			ret = -EFAULT;
+- 			break;
+- 		}
+- 		reply_len = bpcie_icc_cmd(cmd.major, cmd.minor, ioctl_tmp_buf,
+- 			cmd.length, ioctl_tmp_buf, cmd.reply_length);
+- 		if (reply_len < 0) {
+- 			ret = reply_len;
+- 			break;
+- 		}
+- 		ret = copy_to_user(cmd.reply, ioctl_tmp_buf, cmd.reply_length);
+- 		if (ret) {
+- 			ret = -EFAULT;
+- 			break;
+- 		}
+- 		ret = reply_len;
+- 		} break;
+- 	default:
+- 		ret = -ENOENT;
+- 		break;
+- 	}
+- 	return ret;
+- }
+-
+- static const struct file_operations icc_fops = {
+- 	.owner = THIS_MODULE,
+- 	.unlocked_ioctl = icc_ioctl,
+- };
+-
+-int bpcie_icc_init(struct bpcie_dev *sc)
+-{
+-	int ret;
+-	unsigned int mem_devfn = PCI_DEVFN(PCI_SLOT(sc->pdev->devfn), BAIKAL_FUNC_ID_MEM);
+-	struct pci_dev *mem_dev;
+-	u32 req_empty, req_full;
+-
+-	mem_dev = pci_get_slot(sc->pdev->bus, mem_devfn);
+-	if (!mem_dev) {
+-		sc_err("icc: could not get handle to mem device\n");
+-		return -ENODEV;
+-	}
+-	sc->icc.spm_base = pci_resource_start(mem_dev, 5) + BPCIE_SPM_ICC_BASE;
+-	if (!request_mem_region(sc->icc.spm_base, BPCIE_SPM_ICC_SIZE,
+-				"spm.icc")) {
+-		sc_err("icc: failed to request ICC SPM region\n");
+-		ret = -EBUSY;
+-		goto put_mem_dev;
+-	}
+-
+-	sc->icc.spm = ioremap(sc->icc.spm_base, BPCIE_SPM_ICC_SIZE);
+-	if (!sc->icc.spm) {
+-		sc_err("icc: failed to map ICC portion of SPM\n");
+-		ret = -EIO;
+-		goto release_spm;
+-	}
+-
+-	spin_lock_init(&sc->icc.reply_lock);
+-	init_waitqueue_head(&sc->icc.wq);
+-
+-	iowrite32(BPCIE_ICC_SEND | BPCIE_ICC_ACK,
+-		  sc->bar2 + BPCIE_REG_ICC_STATUS);
+-
+-	ret = request_irq(bpcie_irqnum(sc, BPCIE_SUBFUNC_ICC),
+-			  icc_interrupt, IRQF_SHARED, "icc", sc);
+-	if (ret) {
+-		sc_err("icc: could not request IRQ: %d\n", ret);
+-		goto iounmap;
+-	}
+-
+-	req_empty = ioread32(REQUEST + BUF_EMPTY);
+-	req_full = ioread32(REQUEST + BUF_FULL);
+-
+-	if (req_empty != 1 || req_full != 0) {
+-		sc_err("icc: request buffer is busy: empty=%d full=%d\n",
+-		       req_empty, req_full);
+-		ret = -EIO;
+-		goto free_irq;
+-	}
+-
+-	mutex_lock(&bcpie_icc_mutex);
+-	icc_sc = sc;
+-
+-	iowrite32(BPCIE_ICC_SEND | BPCIE_ICC_ACK,
+-		  sc->bar2 + BPCIE_REG_ICC_IRQ_MASK);
+-	mutex_unlock(&bcpie_icc_mutex);
+-
+-	ret = icc_i2c_init(sc);
+-	if (ret) {
+-		sc_err("icc: i2c init failed: %d\n", ret);
+-		goto unassign_global;
+-	}
+-	resetBtWlan();
+-	resetUsbPort();
+-
+-	ret = icc_pwrbutton_init(sc);
+-	if (ret)
+-		sc_err("icc: pwrbutton init failed: %d\n", ret);
+-
+-	do_icc_init();
+-	icc_sys_off = register_sys_off_handler(SYS_OFF_MODE_POWER_OFF,
+-					       SYS_OFF_PRIO_FIRMWARE + 1,
+-					       icc_sys_off_cb, NULL);
+-	if (IS_ERR(icc_sys_off)) {
+-		sc_err("icc: power-off handler failed: %ld\n", PTR_ERR(icc_sys_off));
+-		icc_sys_off = NULL;
+-	}
+-
+-	ioctl_tmp_buf = kzalloc(1 << 16, GFP_KERNEL);
+- 	if (!ioctl_tmp_buf) {
+- 		sc_err("icc: alloc ioctl_tmp_buf failed\n");
+- 		goto done;
+- 	}
+- 	ret = register_chrdev(ICC_MAJOR, "icc", &icc_fops);
+- 	if (ret) {
+- 		sc_err("icc: register_chrdev failed: %d\n", ret);
+-		kfree(ioctl_tmp_buf);
+-		ioctl_tmp_buf = NULL;
+- 		goto done;
+- 	}
+-	icc_chrdev_registered = true;
+-
+-#ifdef CONFIG_PS4_ICCNODE
+-	icc_class = class_create("icc");
+-	if (IS_ERR(icc_class)) {
+-		sc_warn("icc: class_create failed (%ld), /dev/icc unavailable\n",
+-			PTR_ERR(icc_class));
+-		icc_class = NULL;
+-	} else {
+-		icc_device = device_create(icc_class, NULL,
+-					   MKDEV(ICC_MAJOR, 0), NULL, "icc");
+-		if (IS_ERR(icc_device)) {
+-			sc_warn("icc: device_create failed (%ld), /dev/icc unavailable\n",
+-				PTR_ERR(icc_device));
+-			icc_device = NULL;
+-		}
+-	}
+-#endif
+- done:
+-	pci_dev_put(mem_dev);
+-
+-	return 0;
+-
+-unassign_global:
+-	mutex_lock(&bcpie_icc_mutex);
+-	iowrite32(0, sc->bar2 + BPCIE_REG_ICC_IRQ_MASK);
+-	icc_sc = NULL;
+-	mutex_unlock(&bcpie_icc_mutex);
+-free_irq:
+-	free_irq(bpcie_irqnum(sc, BPCIE_SUBFUNC_ICC), sc);
+-iounmap:
+-	iounmap(sc->icc.spm);
+-release_spm:
+-	release_mem_region(sc->icc.spm_base, BPCIE_SPM_ICC_SIZE);
+-put_mem_dev:
+-	pci_dev_put(mem_dev);
+-	return ret;
+-}
+-
+-void bpcie_icc_remove(struct bpcie_dev *sc)
+-{
+-	sc_err("bpcie_icc_remove: shouldn't normally be called\n");
+-	if (icc_chrdev_registered) {
+-#ifdef CONFIG_PS4_ICCNODE
+-		if (icc_device) {
+-			device_destroy(icc_class, MKDEV(ICC_MAJOR, 0));
+-			icc_device = NULL;
+-		}
+-		if (icc_class) {
+-			class_destroy(icc_class);
+-			icc_class = NULL;
+-		}
+-#endif
+-		unregister_chrdev(ICC_MAJOR, "icc");
+-		icc_chrdev_registered = false;
+-	}
+-	kfree(ioctl_tmp_buf);
+-	ioctl_tmp_buf = NULL;
+-	if (icc_sys_off) {
+-		unregister_sys_off_handler(icc_sys_off);
+-		icc_sys_off = NULL;
+-	}
+-	icc_pwrbutton_remove(sc);
+-	icc_i2c_remove(sc);
+-	mutex_lock(&bcpie_icc_mutex);
+-	iowrite32(0, sc->bar2 + BPCIE_REG_ICC_IRQ_MASK);
+-	icc_sc = NULL;
+-	mutex_unlock(&bcpie_icc_mutex);
+-	free_irq(bpcie_irqnum(sc, BPCIE_SUBFUNC_ICC), sc);
+-	iounmap(sc->icc.spm);
+-	release_mem_region(sc->icc.spm_base, BPCIE_SPM_ICC_SIZE);
+-}
+-
+-#ifdef CONFIG_PM
+-void bpcie_icc_suspend(struct bpcie_dev *sc, pm_message_t state)
+-{
+-}
+-
+-void bpcie_icc_resume(struct bpcie_dev *sc)
+-{
+-}
+-#endif
+diff --git a/drivers/ps4/ps4-bpcie-uart.c b/drivers/ps4/ps4-bpcie-uart.c
+deleted file mode 100644
+index 101e82c172ebd9461c8c9024982dcb19e6362788..0000000000000000000000000000000000000000
+--- a/drivers/ps4/ps4-bpcie-uart.c
++++ /dev/null
+@@ -1,88 +0,0 @@
+-#include <linux/serial_8250.h>
+-#include <linux/serial_core.h>
+-#include <linux/serial_reg.h>
+-
+-#include "baikal.h"
+-void bpcie_uart_remove(struct bpcie_dev *sc);
+-
+-#ifdef CONFIG_SERIAL_8250
+-int bpcie_uart_init(struct bpcie_dev *sc)
+-{
+-	int i;
+-	struct uart_8250_port uart;
+-
+-	for (i = 0; i < BPCIE_NR_UARTS; i++) {
+-		sc->serial_line[i] = -1;
+-	}
+-
+-	for (i = 0; i < BPCIE_NR_UARTS; i++) {
+-		uint32_t off = BPCIE_RGN_UART_BASE + (i << 12);
+-		memset(&uart, 0, sizeof(uart));
+-		uart.port.irq		= bpcie_irqnum(sc, BPCIE_SUBFUNC_UART0 + i);
+-		uart.port.uartclk	= 25000000;
+-		uart.port.flags		= UPF_SHARE_IRQ;
+-		uart.port.iotype	= UPIO_MEM32;
+-		uart.port.mapbase	= pci_resource_start(sc->pdev, 2) + off;
+-		uart.port.membase	= sc->bar2 + off;
+-		uart.port.regshift	= 2;
+-		uart.port.dev		= &sc->pdev->dev;
+-
+-		sc->serial_line[i] = serial8250_register_8250_port(&uart);
+-		if (sc->serial_line[i] < 0) {
+-			sc_err("Failed to register serial port %d\n", i);
+-			bpcie_uart_remove(sc);
+-			return -EIO;
+-		}
+-	}
+-	return 0;
+-}
+-
+-void bpcie_uart_remove(struct bpcie_dev *sc)
+-{
+-	int i;
+-	for (i = 0; i < BPCIE_NR_UARTS; i++) {
+-		if (sc->serial_line[i] >= 0) {
+-			serial8250_unregister_port(sc->serial_line[i]);
+-			sc->serial_line[i] = -1;
+-		}
+-	}
+-}
+-
+-#ifdef CONFIG_PM
+-void bpcie_uart_suspend(struct bpcie_dev *sc, pm_message_t state)
+-{
+-	int i;
+-	for (i = 0; i < BPCIE_NR_UARTS; i++)
+-		if (sc->serial_line[i] >= 0)
+-			serial8250_suspend_port(sc->serial_line[i]);
+-}
+-
+-void bpcie_uart_resume(struct bpcie_dev *sc)
+-{
+-	int i;
+-	for (i = 0; i < BPCIE_NR_UARTS; i++)
+-		if (sc->serial_line[i] >= 0)
+-			serial8250_resume_port(sc->serial_line[i]);
+-}
+-#endif
+-
+-#else
+-int bpcie_uart_init(struct bpcie_dev *sc)
+-{
+-	return 0;
+-}
+-
+-void bpcie_uart_remove(struct bpcie_dev *sc)
+-{
+-}
+-
+-#ifdef CONFIG_PM
+-void bpcie_uart_suspend(struct bpcie_dev *sc, pm_message_t state)
+-{
+-}
+-
+-void bpcie_uart_resume(struct bpcie_dev *sc)
+-{
+-}
+-#endif
+-#endif
+diff --git a/drivers/ps4/ps4-bpcie.c b/drivers/ps4/ps4-bpcie.c
+index b68abbb6f4550dddcdc1ee4bd5ade776d66fed09..56107d38a096376f208f551e91498ac0f7103c84 100644
+--- a/drivers/ps4/ps4-bpcie.c
++++ b/drivers/ps4/ps4-bpcie.c
+@@ -403,19 +403,26 @@ static int bpcie_glue_resume(struct bpcie_dev *sc) {
+ }
+ #endif
+ 
+-int bpcie_uart_init(struct bpcie_dev *sc);
+-int bpcie_icc_init(struct bpcie_dev *sc);
+-void bpcie_uart_remove(struct bpcie_dev *sc);
+-void bpcie_icc_remove(struct bpcie_dev *sc);
+ #ifdef CONFIG_PM
+-void bpcie_uart_suspend(struct bpcie_dev *sc, pm_message_t state);
+-void bpcie_icc_suspend(struct bpcie_dev *sc, pm_message_t state);
+-void bpcie_uart_resume(struct bpcie_dev *sc);
+-void bpcie_icc_resume(struct bpcie_dev *sc);
+ #endif
+ 
+ extern bool bpcie_initialized;
+ 
++static const struct ps4sb_family baikal_family = {
++	.name			= "Baikal",
++	.uart_bar		= 2,
++	.uart_base		= BPCIE_RGN_UART_BASE,
++	.uart_clock		= 25000000,
++	.uart_subfunc		= BPCIE_SUBFUNC_UART0,
++	.uart_count		= BPCIE_NR_UARTS,
++	.icc_bar		= 2,
++	.icc_base		= BPCIE_RGN_ICC_BASE,
++	.icc_atomic_power	= true,
++	.icc_usb_power		= true,
++	.i2c_data_off		= 8,
++	.i2c_err_off		= 0,
++};
++
+ static int bpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+ 	struct bpcie_dev *sc;
+ 	int ret;
+@@ -436,6 +443,7 @@ static int bpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+ 		goto disable_dev;
+ 	}
+ 	sc->pdev = dev;
++	sc->family = &baikal_family;
+ 	memset(sc->irq_map, -1, sizeof(sc->irq_map));
+ 	pci_set_drvdata(dev, sc);
+ 
+@@ -451,18 +459,18 @@ static int bpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+ 
+ 	if ((ret = bpcie_glue_init(sc)) < 0)
+ 		goto free_bars;
+-	if (bpcie_uart_init(sc) < 0)
++	if (ps4sb_uart_init(sc) < 0)
+ 		sc_err("uart not registered\n");
+ 	if (bpcie_rtc_init(sc) < 0)
+ 		sc_err("rtc not registered\n");
+-	if ((ret = bpcie_icc_init(sc)) < 0)
++	if ((ret = ps4sb_icc_init(sc)) < 0)
+ 		goto remove_uart;
+ 
+ 	WRITE_ONCE(bpcie_initialized, true);
+ 	return 0;
+ 
+ remove_uart:
+-	bpcie_uart_remove(sc);
++	ps4sb_uart_remove(sc);
+ 	bpcie_glue_remove(sc);
+ free_bars:
+ 	if (sc->bar0)
+@@ -482,8 +490,8 @@ static void bpcie_remove(struct pci_dev *dev) {
+ 	sc = pci_get_drvdata(dev);
+ 
+ 	WRITE_ONCE(bpcie_initialized, false);
+-	bpcie_icc_remove(sc);
+-	bpcie_uart_remove(sc);
++	ps4sb_icc_remove(sc);
++	ps4sb_uart_remove(sc);
+ 	bpcie_glue_remove(sc);
+ 
+ 	if (sc->bar0)
+@@ -501,8 +509,8 @@ static int bpcie_suspend(struct pci_dev *dev, pm_message_t state) {
+ 	struct bpcie_dev *sc;
+ 	sc = pci_get_drvdata(dev);
+ 
+-	bpcie_icc_suspend(sc, state);
+-	bpcie_uart_suspend(sc, state);
++	ps4sb_icc_suspend(sc, state);
++	ps4sb_uart_suspend(sc, state);
+ 	bpcie_glue_suspend(sc, state);
+ 	return 0;
+ }
+@@ -511,9 +519,9 @@ static int bpcie_resume(struct pci_dev *dev) {
+ 	struct bpcie_dev *sc;
+ 	sc = pci_get_drvdata(dev);
+ 
+-	bpcie_icc_resume(sc);
++	ps4sb_icc_resume(sc);
+ 	bpcie_glue_resume(sc);
+-	bpcie_uart_resume(sc);
++	ps4sb_uart_resume(sc);
+ 	return 0;
+ }
+ #endif
+diff --git a/drivers/ps4/ps4-buzzer.c b/drivers/ps4/ps4-buzzer.c
+index 31ef8b743aaa66833e06a38887897afae56f8875..89c254b411cbc8d7dc9ef3fa5e3a37ef8355d8a0 100644
+--- a/drivers/ps4/ps4-buzzer.c
++++ b/drivers/ps4/ps4-buzzer.c
+@@ -15,7 +15,7 @@ static int ps4_buzzer_send(u8 value)
+ 	int ret;
+ 
+ 	mutex_lock(&ps4_buzzer_lock);
+-	ret = apcie_icc_cmd(PS4_BUZZER_ICC_MAJOR, PS4_BUZZER_ICC_MINOR,
++	ret = ps4sb_icc_cmd(PS4_BUZZER_ICC_MAJOR, PS4_BUZZER_ICC_MINOR,
+ 			    &payload, PS4_BUZZER_PAYLOAD_LEN,
+ 			    reply, sizeof(reply));
+ 	mutex_unlock(&ps4_buzzer_lock);
+diff --git a/drivers/ps4/ps4-fan.c b/drivers/ps4/ps4-fan.c
+index ebc4f08fcb45470c8803d49a367503c4dafc051b..2b0ba6757ab3c2da13f6d7dd77b40757073aa1e5 100644
+--- a/drivers/ps4/ps4-fan.c
++++ b/drivers/ps4/ps4-fan.c
+@@ -34,7 +34,7 @@ static int icc_read_apu_temp(long *temp_mc)
+ 	int ret;
+ 
+ 	memset(reply, 0, sizeof(reply));
+-	ret = apcie_icc_cmd(PS4_FAN_TEMP_ICC_MAJOR, PS4_FAN_TEMP_ICC_MINOR,
++	ret = ps4sb_icc_cmd(PS4_FAN_TEMP_ICC_MAJOR, PS4_FAN_TEMP_ICC_MINOR,
+ 			    NULL, 0, reply, sizeof(reply));
+ 	if (ret < 0)
+ 		return ret;
+@@ -51,7 +51,7 @@ static int icc_read_fan_threshold(long *thresh_mc)
+ 	int ret;
+ 
+ 	memset(reply, 0, sizeof(reply));
+-	ret = apcie_icc_cmd(PS4_FAN_ICC_MAJOR, PS4_FAN_ICC_MINOR_GET,
++	ret = ps4sb_icc_cmd(PS4_FAN_ICC_MAJOR, PS4_FAN_ICC_MINOR_GET,
+ 			    NULL, 0, reply, sizeof(reply));
+ 	if (ret < 0)
+ 		return ret;
+@@ -79,7 +79,7 @@ static int icc_write_fan_threshold(long thresh_mc)
+ 	thresh_c = (u8)(thresh_mc / 1000L);
+ 
+ 	memset(config, 0, sizeof(config));
+-	ret = apcie_icc_cmd(PS4_FAN_ICC_MAJOR, PS4_FAN_ICC_MINOR_GET,
++	ret = ps4sb_icc_cmd(PS4_FAN_ICC_MAJOR, PS4_FAN_ICC_MINOR_GET,
+ 			    NULL, 0, config, sizeof(config));
+ 	if (ret < 0)
+ 		return ret;
+@@ -89,7 +89,7 @@ static int icc_write_fan_threshold(long thresh_mc)
+ 	config[PS4_FAN_THRESH_BYTE] = thresh_c;
+ 
+ 	memset(reply, 0, sizeof(reply));
+-	ret = apcie_icc_cmd(PS4_FAN_ICC_MAJOR, PS4_FAN_ICC_MINOR_SET,
++	ret = ps4sb_icc_cmd(PS4_FAN_ICC_MAJOR, PS4_FAN_ICC_MINOR_SET,
+ 			    config, PS4_FAN_CONFIG_LEN,
+ 			    reply, sizeof(reply));
+ 	if (ret < 0)
+diff --git a/drivers/ps4/ps4-led.c b/drivers/ps4/ps4-led.c
+index 55998ccc8452e8def75b7f951371064d8e323bab..34de02e15aa58906769ecfc798915186718600dc 100644
+--- a/drivers/ps4/ps4-led.c
++++ b/drivers/ps4/ps4-led.c
+@@ -139,7 +139,7 @@ static int ps4_led_set_blocking(struct led_classdev *led_cdev,
+ 		return 0;
+ 	}
+ 
+-	ret = apcie_icc_cmd(PS4_LED_ICC_MAJOR, PS4_LED_ICC_MINOR,
++	ret = ps4sb_icc_cmd(PS4_LED_ICC_MAJOR, PS4_LED_ICC_MINOR,
+ 			    data, PS4_LED_PAYLOAD_LEN,
+ 			    reply, sizeof(reply));
+ 	if (ret < 0) {
+@@ -279,7 +279,7 @@ static int ps4_led_probe(struct platform_device *pdev)
+ 	boot_payload = bpcie_status() > 0 ? led_violet_blue : led_purple;
+ 
+ 	memset(reply, 0, sizeof(reply));
+-	ret = apcie_icc_cmd(PS4_LED_ICC_MAJOR, PS4_LED_ICC_MINOR,
++	ret = ps4sb_icc_cmd(PS4_LED_ICC_MAJOR, PS4_LED_ICC_MINOR,
+ 			    boot_payload, PS4_LED_PAYLOAD_LEN,
+ 			    reply, sizeof(reply));
+ 	if (ret < 0 || reply[0] != 0 || reply[1] != 0)
+diff --git a/drivers/ps4/ps4sb.h b/drivers/ps4/ps4sb.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..e8a97298aee5a1c84f6939d81632c02abe10cb09
+--- /dev/null
++++ b/drivers/ps4/ps4sb.h
+@@ -0,0 +1,149 @@
++#ifndef _PS4SB_H
++#define _PS4SB_H
++
++#include <linux/io.h>
++#include <linux/pci.h>
++#include <linux/i2c.h>
++#include <asm/ps4.h>
++
++struct apcie_msi_domain_ctx;
++
++#define ICC_REPLY 0x4000
++#define ICC_EVENT 0x8000
++
++#define ICC_MAGIC 0x42
++#define ICC_EVENT_MAGIC 0x24
++
++struct icc_message_hdr {
++	u8 magic;
++ 	u8 major;
++ 	u16 minor;
++	u16 unknown;
++	u16 cookie;
++	u16 length;
++	u16 checksum;
++} __packed;
++
++#define ICC_HDR_SIZE sizeof(struct icc_message_hdr)
++#define ICC_MIN_SIZE 0x20
++#define ICC_MAX_SIZE 0x7f0
++#define ICC_MIN_PAYLOAD (ICC_MIN_SIZE - ICC_HDR_SIZE)
++#define ICC_MAX_PAYLOAD (ICC_MAX_SIZE - ICC_HDR_SIZE)
++
++#define ICC_TIMEOUT 15
++
++#define ICC_REG_DOORBELL 0x804
++#define ICC_REG_STATUS 0x814
++#define ICC_REG_IRQ_MASK 0x824
++#define ICC_SEND 0x01
++#define ICC_ACK 0x02
++#define ICC_SUBFUNC 3
++
++#define ICC_SPM_BASE 0x2c000
++#define ICC_SPM_SIZE 0x1000
++#define ICC_SPM_REQUEST 0x0
++#define ICC_SPM_REPLY 0x800
++
++#define PS4SB_FUNC_ID_MEM 6
++
++struct ps4sb_family {
++	const char *name;
++	unsigned int uart_bar;
++	u32 uart_base;
++	unsigned int uart_clock;
++	unsigned int uart_subfunc;
++	int uart_count;
++	unsigned int icc_bar;
++	u32 icc_base;
++	bool icc_claim_regs;
++	bool icc_atomic_power;
++	bool icc_usb_power;
++	bool icc_boot_led;
++	u8 i2c_data_off;
++	u8 i2c_err_off;
++};
++
++struct ps4sb_icc_dev {
++	phys_addr_t spm_base;
++	void __iomem *spm;
++	void __iomem *regs;
++
++	spinlock_t reply_lock;
++	bool reply_pending;
++
++	struct icc_message_hdr request;
++	struct icc_message_hdr reply;
++	u16 reply_extra_checksum;
++	void *reply_buffer;
++	int reply_length;
++	wait_queue_head_t wq;
++
++	struct i2c_adapter i2c;
++	struct input_dev *pwrbutton_dev;
++};
++
++struct ps4sb_dev {
++	struct pci_dev *pdev;
++	const struct ps4sb_family *family;
++	struct irq_domain *irqdomain;
++	struct apcie_msi_domain_ctx *msi_domain_ctx;
++	void __iomem *bar0;
++	void __iomem *bar2;
++	void __iomem *bar4;
++
++	int nvec;
++	int irq_map[100];
++	int serial_line[2];
++	struct ps4sb_icc_dev icc;
++};
++
++#define BUF_FULL 0x7f0
++#define BUF_EMPTY 0x7f4
++#define HDR(x) (offsetof(struct icc_message_hdr, x))
++
++#define ICC_MAJOR	'I'
++
++ struct icc_cmd {
++ 	u8 major;
++ 	u16 minor;
++ 	void __user *data;
++ 	u16 length;
++ 	void __user *reply;
++ 	u16 reply_length;
++ };
++
++#define ICC_IOCTL_CMD _IOWR(ICC_MAJOR, 1, struct icc_cmd)
++
++#define sc_err(...) dev_err(&sc->pdev->dev, __VA_ARGS__)
++#define sc_warn(...) dev_warn(&sc->pdev->dev, __VA_ARGS__)
++#define sc_notice(...) dev_notice(&sc->pdev->dev, __VA_ARGS__)
++#define sc_info(...) dev_info(&sc->pdev->dev, __VA_ARGS__)
++#define sc_dbg(...) dev_dbg(&sc->pdev->dev, __VA_ARGS__)
++
++static inline void __iomem *ps4sb_bar(struct ps4sb_dev *sc, unsigned int bar)
++{
++	return bar == 2 ? sc->bar2 : sc->bar4;
++}
++
++static inline int ps4sb_irqnum(struct ps4sb_dev *sc, int index)
++{
++	return sc->nvec > 1 ? sc->pdev->irq + index : sc->pdev->irq;
++}
++
++int ps4sb_uart_init(struct ps4sb_dev *sc);
++void ps4sb_uart_remove(struct ps4sb_dev *sc);
++int ps4sb_icc_init(struct ps4sb_dev *sc);
++void ps4sb_icc_remove(struct ps4sb_dev *sc);
++#ifdef CONFIG_PM
++void ps4sb_uart_suspend(struct ps4sb_dev *sc, pm_message_t state);
++void ps4sb_uart_resume(struct ps4sb_dev *sc);
++void ps4sb_icc_suspend(struct ps4sb_dev *sc, pm_message_t state);
++void ps4sb_icc_resume(struct ps4sb_dev *sc);
++#endif
++int icc_i2c_init(struct ps4sb_dev *sc);
++void icc_i2c_remove(struct ps4sb_dev *sc);
++int icc_pwrbutton_init(struct ps4sb_dev *sc);
++void icc_pwrbutton_remove(struct ps4sb_dev *sc);
++void icc_pwrbutton_trigger(struct ps4sb_dev *sc, int state);
++
++#endif
+diff --git a/drivers/ps4/sb-icc.c b/drivers/ps4/sb-icc.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..24619679ece4fc08cdad7f10e8c75ebc94c8346b
+--- /dev/null
++++ b/drivers/ps4/sb-icc.c
+@@ -0,0 +1,770 @@
++#include <linux/kernel.h>
++#include <linux/sched.h>
++#include <linux/wait.h>
++#include <linux/pci.h>
++#include <linux/interrupt.h>
++#include <linux/delay.h>
++#include <linux/fs.h>
++#include <linux/uaccess.h>
++#include <linux/device.h>
++#include <linux/reboot.h>
++#include <linux/spinlock.h>
++#include <linux/workqueue.h>
++#include <asm/ps4.h>
++#include "ps4sb.h"
++
++
++static struct ps4sb_dev *icc_sc;
++
++DEFINE_MUTEX(icc_mutex);
++
++#define ICC_REGION_SIZE 0x1000
++#define REQUEST (sc->icc.spm + ICC_SPM_REQUEST)
++#define REPLY (sc->icc.spm + ICC_SPM_REPLY)
++
++static u16 checksum(const void *p, int length)
++{
++	const u8 *pp = p;
++	u16 sum = 0;
++	while (length--)
++		sum += *pp++;
++	return sum;
++}
++
++static void dump_message(struct ps4sb_dev *sc, int offset)
++{
++	int len;
++	struct icc_message_hdr hdr;
++	memcpy_fromio(&hdr, sc->icc.spm + offset, ICC_HDR_SIZE);
++
++	sc_err("icc: hdr: [%02x] %02x:%04x unk %x #%d len %d cksum 0x%x\n",
++	       hdr.magic, hdr.major, hdr.minor, hdr.unknown, hdr.cookie,
++	       hdr.length, hdr.checksum);
++	len = min(hdr.length - ICC_HDR_SIZE, ICC_MAX_PAYLOAD);
++	if (len > 0) {
++		sc_err("icc: data:");
++		while (len--)
++			printk(" %02x", ioread8(sc->icc.spm + (offset++) +
++			                         ICC_HDR_SIZE));
++		printk("\n");
++	}
++}
++
++#define ICC_EVENT_RING 8
++
++struct icc_event {
++	u16 minor;
++	u16 length;
++	u8 data[ICC_MAX_PAYLOAD];
++};
++
++static void icc_event_work_fn(struct work_struct *work);
++
++static DEFINE_SPINLOCK(icc_event_lock);
++static DECLARE_WORK(icc_event_work, icc_event_work_fn);
++static struct icc_event icc_event_ring[ICC_EVENT_RING];
++static struct icc_event icc_event_current;
++static unsigned int icc_event_head;
++static unsigned int icc_event_tail;
++static u8 icc_event_major;
++static ps4sb_icc_event_fn icc_event_handler;
++static void *icc_event_ctx;
++
++static bool icc_event_queue(struct ps4sb_dev *sc, struct icc_message_hdr *msg)
++{
++	struct icc_event *event;
++	unsigned long flags;
++	bool queued = false;
++	u16 length;
++
++	spin_lock_irqsave(&icc_event_lock, flags);
++	if (icc_event_handler && msg->major == icc_event_major &&
++	    icc_event_head - icc_event_tail < ICC_EVENT_RING) {
++		length = msg->length > ICC_HDR_SIZE ? msg->length - ICC_HDR_SIZE : 0;
++		length = min_t(u16, length, ICC_MAX_PAYLOAD);
++		event = &icc_event_ring[icc_event_head % ICC_EVENT_RING];
++		event->minor = msg->minor;
++		event->length = length;
++		memcpy_fromio(event->data, sc->icc.spm + ICC_SPM_REPLY +
++			      ICC_HDR_SIZE, length);
++		icc_event_head++;
++		queued = true;
++	}
++	spin_unlock_irqrestore(&icc_event_lock, flags);
++
++	if (queued)
++		schedule_work(&icc_event_work);
++	return queued;
++}
++
++static void icc_event_work_fn(struct work_struct *work)
++{
++	ps4sb_icc_event_fn handler;
++	unsigned long flags;
++	void *ctx;
++
++	for (;;) {
++		spin_lock_irqsave(&icc_event_lock, flags);
++		if (icc_event_head == icc_event_tail) {
++			spin_unlock_irqrestore(&icc_event_lock, flags);
++			return;
++		}
++		icc_event_current = icc_event_ring[icc_event_tail % ICC_EVENT_RING];
++		icc_event_tail++;
++		handler = icc_event_handler;
++		ctx = icc_event_ctx;
++		spin_unlock_irqrestore(&icc_event_lock, flags);
++
++		if (handler)
++			handler(ctx, icc_event_current.minor,
++				icc_event_current.data, icc_event_current.length);
++	}
++}
++
++int ps4sb_icc_register_event_handler(u8 major, ps4sb_icc_event_fn fn, void *ctx)
++{
++	unsigned long flags;
++	int ret = 0;
++
++	spin_lock_irqsave(&icc_event_lock, flags);
++	if (icc_event_handler) {
++		ret = -EBUSY;
++	} else {
++		icc_event_major = major;
++		icc_event_ctx = ctx;
++		icc_event_tail = icc_event_head;
++		icc_event_handler = fn;
++	}
++	spin_unlock_irqrestore(&icc_event_lock, flags);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(ps4sb_icc_register_event_handler);
++
++void ps4sb_icc_unregister_event_handler(u8 major)
++{
++	unsigned long flags;
++
++	spin_lock_irqsave(&icc_event_lock, flags);
++	if (icc_event_handler && icc_event_major == major) {
++		icc_event_handler = NULL;
++		icc_event_ctx = NULL;
++		icc_event_tail = icc_event_head;
++	}
++	spin_unlock_irqrestore(&icc_event_lock, flags);
++	flush_work(&icc_event_work);
++}
++EXPORT_SYMBOL_GPL(ps4sb_icc_unregister_event_handler);
++
++static void handle_event(struct ps4sb_dev *sc, struct icc_message_hdr *msg)
++{
++	switch ((msg->major << 16) | msg->minor) {
++		case 0x088010:
++			icc_pwrbutton_trigger(sc, 1);
++			break;
++		case 0x088011:
++			icc_pwrbutton_trigger(sc, 0);
++			break;
++		default:
++			if (icc_event_queue(sc, msg))
++				break;
++			sc_err("icc: event arrived, not yet supported.\n");
++			dump_message(sc, ICC_SPM_REPLY);
++			break;
++	}
++}
++
++static void handle_message(struct ps4sb_dev *sc)
++{
++	u32 rep_empty, rep_full;
++	int off, copy_size;
++	struct icc_message_hdr msg;
++
++	rep_empty = ioread32(REPLY + BUF_EMPTY);
++	rep_full = ioread32(REPLY + BUF_FULL);
++
++	if (rep_empty != 0 || rep_full != 1) {
++		sc_err("icc: reply buffer in bad state (%d, %d)\n",
++			rep_empty, rep_full);
++		return;
++	}
++
++	memcpy_fromio(&msg, REPLY, ICC_HDR_SIZE);
++
++	if (msg.minor & ICC_EVENT) {
++		if (msg.magic != ICC_EVENT_MAGIC) {
++			sc_err("icc: event has bad magic\n");
++			dump_message(sc, ICC_SPM_REPLY);
++			return;
++		}
++		handle_event(sc, &msg);
++	} else if (msg.minor & ICC_REPLY) {
++		if (msg.magic != ICC_MAGIC) {
++			sc_err("icc: reply has bad magic\n");
++			dump_message(sc, ICC_SPM_REPLY);
++			return;
++		}
++		spin_lock(&sc->icc.reply_lock);
++		if (!sc->icc.reply_pending) {
++			spin_unlock(&sc->icc.reply_lock);
++			sc_err("icc: unexpected reply\n");
++			dump_message(sc, ICC_SPM_REPLY);
++			return;
++		}
++		if (msg.cookie != sc->icc.request.cookie) {
++			spin_unlock(&sc->icc.reply_lock);
++			sc_err("icc: reply has bad cookie %d\n", msg.cookie);
++			dump_message(sc, ICC_SPM_REPLY);
++			return;
++		}
++		if (msg.length < ICC_HDR_SIZE || msg.length > ICC_MAX_SIZE) {
++			spin_unlock(&sc->icc.reply_lock);
++			sc_err("icc: reply has bad length %d\n", msg.length);
++			dump_message(sc, ICC_SPM_REPLY);
++			return;
++		}
++		off = ICC_HDR_SIZE;
++		copy_size = min(sc->icc.reply_length,
++				(int)(msg.length - off));
++		memcpy_fromio(sc->icc.reply_buffer, REPLY + off, copy_size);
++		off += copy_size;
++		sc->icc.reply_extra_checksum = 0;
++		while (off < msg.length)
++			sc->icc.reply_extra_checksum += ioread8(REPLY + off++);
++		sc->icc.reply_pending = false;
++		sc->icc.reply_length = copy_size;
++		sc->icc.reply = msg;
++		spin_unlock(&sc->icc.reply_lock);
++		wake_up(&sc->icc.wq);
++	} else {
++		sc_err("icc: unknown message arrived\n");
++		dump_message(sc, ICC_SPM_REPLY);
++	}
++}
++
++static irqreturn_t icc_interrupt(int irq, void *arg)
++{
++	struct ps4sb_dev *sc = arg;
++	u32 pending;
++	u32 status;
++	u32 ret = IRQ_NONE;
++	int loops;
++
++	for (loops = 0; loops < 64; loops++) {
++		status = ioread32(sc->icc.regs + ICC_REG_STATUS);
++		pending = status & (ICC_SEND | ICC_ACK);
++		if (!pending)
++			return ret;
++
++		if (pending & ICC_ACK) {
++			iowrite32(ICC_ACK, sc->icc.regs + ICC_REG_STATUS);
++			ret = IRQ_HANDLED;
++		}
++
++		if (pending & ICC_SEND) {
++			iowrite32(ICC_SEND, sc->icc.regs + ICC_REG_STATUS);
++			handle_message(sc);
++			iowrite32(0, REPLY + BUF_FULL);
++			iowrite32(1, REPLY + BUF_EMPTY);
++			iowrite32(ICC_ACK, sc->icc.regs + ICC_REG_DOORBELL);
++			ret = IRQ_HANDLED;
++		}
++	}
++
++	dev_warn_ratelimited(&sc->pdev->dev,
++			     "icc: IRQ status stuck after 64 loops (status=0x%08x)\n",
++			     status);
++
++	return ret;
++}
++
++static int icc_post_request(struct ps4sb_dev *sc, u8 major, u16 minor,
++			    const void *data, u16 length)
++{
++	u32 req_empty, req_full;
++
++	if (length > ICC_MAX_PAYLOAD)
++		return -E2BIG;
++
++	sc->icc.request.magic = ICC_MAGIC;
++	sc->icc.request.major = major;
++	sc->icc.request.minor = minor;
++	sc->icc.request.cookie++;
++	sc->icc.request.length = ICC_HDR_SIZE + length;
++	sc->icc.request.checksum = 0;
++	if (sc->icc.request.length < ICC_MIN_SIZE)
++		sc->icc.request.length = ICC_MIN_SIZE;
++
++	sc->icc.request.checksum = checksum(&sc->icc.request, ICC_HDR_SIZE);
++	sc->icc.request.checksum += checksum(data, length);
++
++	req_empty = ioread32(REQUEST + BUF_EMPTY);
++	req_full = ioread32(REQUEST + BUF_FULL);
++
++	if (req_empty != 1 || req_full != 0) {
++		sc_err("icc: request buffer is busy: empty=%d full=%d\n",
++		       req_empty, req_full);
++		return -EIO;
++	}
++
++	iowrite32(0, REQUEST + BUF_EMPTY);
++
++	memcpy_toio(REQUEST, &sc->icc.request, ICC_HDR_SIZE);
++	memcpy_toio(REQUEST + ICC_HDR_SIZE, data, length);
++	if (length < ICC_MIN_PAYLOAD)
++		memset_io(REQUEST + ICC_HDR_SIZE + length, 0,
++			  ICC_MIN_PAYLOAD - length);
++
++	iowrite32(1, REQUEST + BUF_FULL);
++	return 0;
++}
++
++static int _ps4sb_icc_cmd(struct ps4sb_dev *sc, u8 major, u16 minor, const void *data,
++		    u16 length, void *reply, u16 reply_length, bool intr)
++{
++	int ret;
++	u16 rep_checksum;
++
++	sc->icc.reply_buffer = reply;
++	sc->icc.reply_length = reply_length;
++
++	ret = icc_post_request(sc, major, minor, data, length);
++	if (ret)
++		return ret;
++
++	spin_lock_irq(&sc->icc.reply_lock);
++	sc->icc.reply_pending = true;
++	spin_unlock_irq(&sc->icc.reply_lock);
++
++	iowrite32(ICC_SEND, sc->icc.regs + ICC_REG_DOORBELL);
++
++	if (intr)
++		ret = wait_event_interruptible_timeout(sc->icc.wq,
++				!sc->icc.reply_pending, HZ * ICC_TIMEOUT);
++	else
++		ret = wait_event_timeout(sc->icc.wq,
++				!sc->icc.reply_pending, HZ * ICC_TIMEOUT);
++
++	spin_lock_irq(&sc->icc.reply_lock);
++	sc->icc.reply_buffer = NULL;
++	if (ret < 0 || sc->icc.reply_pending) {
++		sc->icc.reply_pending = false;
++		spin_unlock_irq(&sc->icc.reply_lock);
++		sc_err("icc: interrupted or timeout: ret = %d\n", ret);
++		return ret < 0 ? -EINTR : -ETIMEDOUT;
++	}
++	spin_unlock_irq(&sc->icc.reply_lock);
++
++	rep_checksum = sc->icc.reply.checksum;
++	sc->icc.reply.checksum = 0;
++	rep_checksum -= checksum(&sc->icc.reply, ICC_HDR_SIZE);
++	rep_checksum -= checksum(reply, sc->icc.reply_length);
++	rep_checksum -= sc->icc.reply_extra_checksum;
++
++	if (rep_checksum) {
++		sc_err("icc: checksum mismatch (diff: %x)\n", rep_checksum);
++		return -EIO;
++	}
++
++	if (sc->icc.reply.major != major ) {
++		sc_err("icc: major mismatch\n");
++		return -EIO;
++	}
++	if (sc->icc.reply.minor != (minor | ICC_REPLY) ) {
++		sc_err("icc: minor mismatch\n");
++		return -EIO;
++	}
++
++	return sc->icc.reply.length - ICC_HDR_SIZE;
++}
++
++int ps4sb_icc_cmd(u8 major, u16 minor, const void *data, u16 length,
++		   void *reply, u16 reply_length)
++{
++	int ret;
++
++	mutex_lock(&icc_mutex);
++	if (!icc_sc) {
++		pr_err("icc: not ready\n");
++		ret = -EAGAIN;
++		goto out_unlock;
++	}
++	ret = _ps4sb_icc_cmd(icc_sc, major, minor, data, length, reply, reply_length,
++		       false);
++out_unlock:
++	mutex_unlock(&icc_mutex);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(ps4sb_icc_cmd);
++
++static int ps4sb_icc_post_atomic(u8 major, u16 minor, const void *data, u16 length)
++{
++	struct ps4sb_dev *sc = READ_ONCE(icc_sc);
++	int ret;
++
++	if (!sc)
++		return -ENODEV;
++	if (reboot_force || READ_ONCE(sc->icc.reply_pending))
++		return -EBUSY;
++
++	sc->icc.reply_buffer = NULL;
++	sc->icc.reply_length = 0;
++	ret = icc_post_request(sc, major, minor, data, length);
++	if (ret)
++		return ret;
++
++	iowrite32(ICC_SEND | ICC_ACK, sc->icc.regs + ICC_REG_STATUS);
++	iowrite32(ICC_SEND, sc->icc.regs + ICC_REG_DOORBELL);
++	return 0;
++}
++
++static void icc_usb_power_on(void)
++{
++	u8 on = 1;
++	u8 resp[20];
++	int ret;
++
++	ret = ps4sb_icc_cmd(5, 0x11, NULL, 0, resp, 20);
++	if (ret < 0) {
++		pr_err("icc: USB status failed: %d\n", ret);
++	} else if (resp[2]) {
++		return;
++	}
++
++	ret = ps4sb_icc_cmd(5, 0x10, &on, sizeof(on), resp, 20);
++	if (ret < 0)
++		pr_err("icc: USB enable failed: %d\n", ret);
++}
++
++static void icc_wlan_power_on(void)
++{
++	u8 on = 3;
++	u8 resp[20];
++	int ret;
++
++	ret = ps4sb_icc_cmd(5, 0, &on, sizeof(on), resp, 20);
++	if (ret < 0)
++		pr_err("icc: BT/WLAN enable failed: %d\n", ret);
++}
++
++static void icc_set_led(u8 blue, u8 white)
++{
++	const u8 led_config[] = {
++		2, 1, 0, 0,
++			0x10, 1,
++				2, blue, 2, 1, 0x00,
++			0x11, 1,
++				2, white, 2, 1, 0x00,
++	};
++	u8 reply[0x30];
++	int ret;
++
++	ret = ps4sb_icc_cmd(9, 0x20, led_config, ARRAY_SIZE(led_config), reply, 0x30);
++	if (ret < 0)
++		pr_err("icc: LED set failed: %d\n", ret);
++}
++
++static void do_icc_init(void)
++{
++	u8 svc = 0x10;
++	u8 reply[0x30];
++	int ret;
++
++	ret = ps4sb_icc_cmd(2, 6, NULL, 0, reply, 0x30);
++	if (ret < 0)
++		pr_err("icc: firmware query failed: %d\n", ret);
++	ret = ps4sb_icc_cmd(1, 0, &svc, 1, reply, 0x30);
++	if (ret < 0)
++		pr_err("icc: service init failed: %d\n", ret);
++
++	icc_set_led(0x00, 0xff);
++}
++
++static int __init icc_boot_complete(void)
++{
++	if (icc_sc && icc_sc->family->icc_boot_led)
++		icc_set_led(0xff, 0x00);
++	return 0;
++}
++late_initcall(icc_boot_complete);
++
++static void icc_power_request(u8 restart)
++{
++	struct ps4sb_dev *sc = READ_ONCE(icc_sc);
++	uint8_t command[] = {
++		0, restart, 2, 0, 1, 0
++	};
++
++	if (!sc)
++		return;
++
++	if (sc->family->icc_atomic_power) {
++		if (ps4sb_icc_post_atomic(4, 1, command, sizeof(command)))
++			return;
++		mdelay(3000);
++	} else {
++		ps4sb_icc_cmd(4, 1, command, sizeof(command), NULL, 0);
++		msleep(3000);
++	}
++	WARN_ON(1);
++}
++
++static void icc_shutdown(void)
++{
++	icc_power_request(0);
++}
++
++void ps4sb_icc_reboot(void)
++{
++	icc_power_request(1);
++}
++
++static struct sys_off_handler *icc_sys_off;
++
++static int icc_sys_off_cb(struct sys_off_data *data)
++{
++	icc_shutdown();
++	return NOTIFY_DONE;
++}
++
++static void *ioctl_send_buf;
++static void *ioctl_reply_buf;
++static DEFINE_MUTEX(icc_ioctl_mutex);
++static bool icc_chrdev_registered;
++#ifdef CONFIG_PS4_ICCNODE
++static struct class *icc_class;
++static struct device *icc_device;
++#endif
++
++static long icc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
++{
++	void __user *uap = (void __user *)arg;
++	struct icc_cmd req;
++	size_t copy_len;
++	int ret;
++
++	if (cmd != ICC_IOCTL_CMD)
++		return -ENOENT;
++	if (copy_from_user(&req, uap, sizeof(req)))
++		return -EFAULT;
++	if (req.length > ICC_MAX_PAYLOAD || req.reply_length > ICC_MAX_SIZE)
++		return -E2BIG;
++	if ((req.length && !req.data) || (req.reply_length && !req.reply))
++		return -EINVAL;
++
++	mutex_lock(&icc_ioctl_mutex);
++	if (req.length && copy_from_user(ioctl_send_buf, req.data, req.length)) {
++		ret = -EFAULT;
++		goto out;
++	}
++
++	ret = ps4sb_icc_cmd(req.major, req.minor,
++			    req.length ? ioctl_send_buf : NULL, req.length,
++			    req.reply_length ? ioctl_reply_buf : NULL,
++			    req.reply_length);
++	if (ret < 0)
++		goto out;
++
++	copy_len = min_t(size_t, req.reply_length, ret);
++	if (copy_len && copy_to_user(req.reply, ioctl_reply_buf, copy_len))
++		ret = -EFAULT;
++out:
++	mutex_unlock(&icc_ioctl_mutex);
++	return ret;
++}
++
++static const struct file_operations icc_fops = {
++	.owner = THIS_MODULE,
++	.unlocked_ioctl = icc_ioctl,
++};
++
++int ps4sb_icc_init(struct ps4sb_dev *sc)
++{
++	int ret;
++	unsigned int mem_devfn = PCI_DEVFN(PCI_SLOT(sc->pdev->devfn), PS4SB_FUNC_ID_MEM);
++	struct pci_dev *mem_dev;
++	u32 req_empty, req_full;
++
++	mem_dev = pci_get_slot(sc->pdev->bus, mem_devfn);
++	if (!mem_dev) {
++		sc_err("icc: could not get handle to mem device\n");
++		return -ENODEV;
++	}
++
++	sc->icc.regs = ps4sb_bar(sc, sc->family->icc_bar) + sc->family->icc_base;
++	if (sc->family->icc_claim_regs &&
++	    !request_mem_region(pci_resource_start(sc->pdev, sc->family->icc_bar) +
++				sc->family->icc_base, ICC_REGION_SIZE, "ps4sb.icc")) {
++		sc_err("icc: failed to request ICC register region\n");
++		ret = -EBUSY;
++		goto put_mem_dev;
++	}
++
++	sc->icc.spm_base = pci_resource_start(mem_dev, 5) + ICC_SPM_BASE;
++	if (!request_mem_region(sc->icc.spm_base, ICC_SPM_SIZE,
++				"spm.icc")) {
++		sc_err("icc: failed to request ICC SPM region\n");
++		ret = -EBUSY;
++		goto release_regs;
++	}
++
++	sc->icc.spm = ioremap(sc->icc.spm_base, ICC_SPM_SIZE);
++	if (!sc->icc.spm) {
++		sc_err("icc: failed to map ICC portion of SPM\n");
++		ret = -EIO;
++		goto release_spm;
++	}
++
++	spin_lock_init(&sc->icc.reply_lock);
++	init_waitqueue_head(&sc->icc.wq);
++
++	iowrite32(ICC_SEND | ICC_ACK,
++		  sc->icc.regs + ICC_REG_STATUS);
++
++	ret = request_irq(ps4sb_irqnum(sc, ICC_SUBFUNC),
++			  icc_interrupt, IRQF_SHARED, "icc", sc);
++	if (ret) {
++		sc_err("icc: could not request IRQ: %d\n", ret);
++		goto iounmap;
++	}
++
++	req_empty = ioread32(REQUEST + BUF_EMPTY);
++	req_full = ioread32(REQUEST + BUF_FULL);
++
++	if (req_empty != 1 || req_full != 0) {
++		sc_err("icc: request buffer is busy: empty=%d full=%d\n",
++		       req_empty, req_full);
++		ret = -EIO;
++		goto free_irq;
++	}
++
++	mutex_lock(&icc_mutex);
++	icc_sc = sc;
++
++	iowrite32(ICC_SEND | ICC_ACK,
++		  sc->icc.regs + ICC_REG_IRQ_MASK);
++	mutex_unlock(&icc_mutex);
++
++	ret = icc_i2c_init(sc);
++	if (ret) {
++		sc_err("icc: i2c init failed: %d\n", ret);
++		goto unassign_global;
++	}
++	icc_wlan_power_on();
++	if (sc->family->icc_usb_power)
++		icc_usb_power_on();
++
++	ret = icc_pwrbutton_init(sc);
++	if (ret)
++		sc_err("icc: pwrbutton init failed: %d\n", ret);
++
++	do_icc_init();
++	icc_sys_off = register_sys_off_handler(SYS_OFF_MODE_POWER_OFF,
++					       SYS_OFF_PRIO_FIRMWARE + 1,
++					       icc_sys_off_cb, NULL);
++	if (IS_ERR(icc_sys_off)) {
++		sc_err("icc: power-off handler failed: %ld\n", PTR_ERR(icc_sys_off));
++		icc_sys_off = NULL;
++	}
++
++	ioctl_send_buf = kzalloc(ICC_MAX_PAYLOAD, GFP_KERNEL);
++	ioctl_reply_buf = kzalloc(ICC_MAX_SIZE, GFP_KERNEL);
++	if (!ioctl_send_buf || !ioctl_reply_buf) {
++		sc_err("icc: alloc ioctl buffers failed\n");
++		goto done;
++	}
++	ret = register_chrdev(ICC_MAJOR, "icc", &icc_fops);
++	if (ret) {
++		sc_err("icc: register_chrdev failed: %d\n", ret);
++		goto done;
++	}
++	icc_chrdev_registered = true;
++
++#ifdef CONFIG_PS4_ICCNODE
++	icc_class = class_create("icc");
++	if (IS_ERR(icc_class)) {
++		sc_warn("icc: class_create failed (%ld), /dev/icc unavailable\n",
++			PTR_ERR(icc_class));
++		icc_class = NULL;
++	} else {
++		icc_device = device_create(icc_class, NULL,
++					   MKDEV(ICC_MAJOR, 0), NULL, "icc");
++		if (IS_ERR(icc_device)) {
++			sc_warn("icc: device_create failed (%ld), /dev/icc unavailable\n",
++				PTR_ERR(icc_device));
++			icc_device = NULL;
++		}
++	}
++#endif
++ done:
++	pci_dev_put(mem_dev);
++
++	return 0;
++
++unassign_global:
++	mutex_lock(&icc_mutex);
++	iowrite32(0, sc->icc.regs + ICC_REG_IRQ_MASK);
++	icc_sc = NULL;
++	mutex_unlock(&icc_mutex);
++free_irq:
++	free_irq(ps4sb_irqnum(sc, ICC_SUBFUNC), sc);
++iounmap:
++	iounmap(sc->icc.spm);
++release_spm:
++	release_mem_region(sc->icc.spm_base, ICC_SPM_SIZE);
++release_regs:
++	if (sc->family->icc_claim_regs)
++		release_mem_region(pci_resource_start(sc->pdev, sc->family->icc_bar) +
++				   sc->family->icc_base, ICC_REGION_SIZE);
++put_mem_dev:
++	pci_dev_put(mem_dev);
++	return ret;
++}
++
++void ps4sb_icc_remove(struct ps4sb_dev *sc)
++{
++	sc_err("ps4sb_icc_remove: shouldn't normally be called\n");
++	if (icc_chrdev_registered) {
++#ifdef CONFIG_PS4_ICCNODE
++		if (icc_device) {
++			device_destroy(icc_class, MKDEV(ICC_MAJOR, 0));
++			icc_device = NULL;
++		}
++		if (icc_class) {
++			class_destroy(icc_class);
++			icc_class = NULL;
++		}
++#endif
++		unregister_chrdev(ICC_MAJOR, "icc");
++		icc_chrdev_registered = false;
++	}
++	kfree(ioctl_reply_buf);
++	kfree(ioctl_send_buf);
++	ioctl_reply_buf = NULL;
++	ioctl_send_buf = NULL;
++	if (icc_sys_off) {
++		unregister_sys_off_handler(icc_sys_off);
++		icc_sys_off = NULL;
++	}
++	icc_pwrbutton_remove(sc);
++	icc_i2c_remove(sc);
++	mutex_lock(&icc_mutex);
++	iowrite32(0, sc->icc.regs + ICC_REG_IRQ_MASK);
++	icc_sc = NULL;
++	mutex_unlock(&icc_mutex);
++	free_irq(ps4sb_irqnum(sc, ICC_SUBFUNC), sc);
++	iounmap(sc->icc.spm);
++	release_mem_region(sc->icc.spm_base, ICC_SPM_SIZE);
++	if (sc->family->icc_claim_regs)
++		release_mem_region(pci_resource_start(sc->pdev, sc->family->icc_bar) +
++				   sc->family->icc_base, ICC_REGION_SIZE);
++}
++
++#ifdef CONFIG_PM
++void ps4sb_icc_suspend(struct ps4sb_dev *sc, pm_message_t state)
++{
++}
++
++void ps4sb_icc_resume(struct ps4sb_dev *sc)
++{
++}
++#endif
+diff --git a/drivers/ps4/sb-uart.c b/drivers/ps4/sb-uart.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..643935a1e9ed62c2c9bb5e60f626fa227140fa3f
+--- /dev/null
++++ b/drivers/ps4/sb-uart.c
+@@ -0,0 +1,87 @@
++#include <linux/serial_8250.h>
++#include <linux/serial_core.h>
++#include <linux/serial_reg.h>
++
++#include "ps4sb.h"
++#ifdef CONFIG_SERIAL_8250
++int ps4sb_uart_init(struct ps4sb_dev *sc)
++{
++	const struct ps4sb_family *f = sc->family;
++	struct uart_8250_port uart;
++	int i;
++
++	for (i = 0; i < sc->family->uart_count; i++) {
++		sc->serial_line[i] = -1;
++	}
++
++	for (i = 0; i < sc->family->uart_count; i++) {
++		u32 off = f->uart_base + (i << 12);
++		memset(&uart, 0, sizeof(uart));
++		uart.port.irq		= ps4sb_irqnum(sc, f->uart_subfunc + i);
++		uart.port.uartclk	= f->uart_clock;
++		uart.port.flags		= UPF_SHARE_IRQ;
++		uart.port.iotype	= UPIO_MEM32;
++		uart.port.mapbase	= pci_resource_start(sc->pdev, f->uart_bar) + off;
++		uart.port.membase	= ps4sb_bar(sc, f->uart_bar) + off;
++		uart.port.regshift	= 2;
++		uart.port.dev		= &sc->pdev->dev;
++
++		sc->serial_line[i] = serial8250_register_8250_port(&uart);
++		if (sc->serial_line[i] < 0) {
++			sc_err("Failed to register serial port %d\n", i);
++			ps4sb_uart_remove(sc);
++			return -EIO;
++		}
++	}
++	return 0;
++}
++
++void ps4sb_uart_remove(struct ps4sb_dev *sc)
++{
++	int i;
++	for (i = 0; i < sc->family->uart_count; i++) {
++		if (sc->serial_line[i] >= 0) {
++			serial8250_unregister_port(sc->serial_line[i]);
++			sc->serial_line[i] = -1;
++		}
++	}
++}
++
++#ifdef CONFIG_PM
++void ps4sb_uart_suspend(struct ps4sb_dev *sc, pm_message_t state)
++{
++	int i;
++	for (i = 0; i < sc->family->uart_count; i++)
++		if (sc->serial_line[i] >= 0)
++			serial8250_suspend_port(sc->serial_line[i]);
++}
++
++void ps4sb_uart_resume(struct ps4sb_dev *sc)
++{
++	int i;
++	for (i = 0; i < sc->family->uart_count; i++)
++		if (sc->serial_line[i] >= 0)
++			serial8250_resume_port(sc->serial_line[i]);
++}
++#endif
++
++#else
++int ps4sb_uart_init(struct ps4sb_dev *sc)
++{
++	return 0;
++}
++
++void ps4sb_uart_remove(struct ps4sb_dev *sc)
++{
++}
++
++#ifdef CONFIG_PM
++void ps4sb_uart_suspend(struct ps4sb_dev *sc, pm_message_t state)
++{
++}
++
++void ps4sb_uart_resume(struct ps4sb_dev *sc)
++{
++}
++#endif
++#endif

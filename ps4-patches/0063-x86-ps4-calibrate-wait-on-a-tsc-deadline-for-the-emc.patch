@@ -1,0 +1,44 @@
+From dc128cd080fe5d72fde57143412f5499914db4f1 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Fri, 6 Nov 2026 18:16:59 +0100
+Subject: [PATCH 063/124] x86: ps4: calibrate: wait on a tsc deadline for the
+ emc timer reset
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ arch/x86/include/asm/ps4.h        | 1 +
+ arch/x86/platform/ps4/calibrate.c | 9 ++++++---
+ 2 files changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/arch/x86/include/asm/ps4.h b/arch/x86/include/asm/ps4.h
+index 61e4c031b1c5ca3e8b540bdcd95368b57a39aea9..70f56c40f40f9dc1699f5a4416ba33715adfd4d9 100644
+--- a/arch/x86/include/asm/ps4.h
++++ b/arch/x86/include/asm/ps4.h
+@@ -16,6 +16,7 @@
+ #ifdef CONFIG_X86_PS4
+ 
+ #define PS4_DEFAULT_TSC_FREQ 1594000000
++#define PS4_PRO_TSC_FREQ 2100000000
+ 
+ #define EMC_TIMER_BASE 0xd0281000
+ #define EMC_TIMER_VALUE 0x28
+diff --git a/arch/x86/platform/ps4/calibrate.c b/arch/x86/platform/ps4/calibrate.c
+index 59969060c5437aad57cd899fb01700c55dd4ee61..9862bb8b5ba4174ec6c071cb8894eade49c76d36 100644
+--- a/arch/x86/platform/ps4/calibrate.c
++++ b/arch/x86/platform/ps4/calibrate.c
+@@ -67,9 +67,12 @@ static __init unsigned long ps4_measure_tsc_freq(void)
+ 
+ 	// reset/start the timer
+ 	emctimer_write32(0x84, emctimer_read32(0x84) & (~0x01));
+-	// udelay is not calibrated yet, so this is likely wildly off, but good
+-	// enough to work.
+-	udelay(300);
++	{
++		u64 reset_deadline = rdtsc() + (PS4_PRO_TSC_FREQ / 1000000) * 300;
++
++		while (rdtsc() < reset_deadline)
++			cpu_relax();
++	}
+ 	emctimer_write32(0x00, emctimer_read32(0x00) | 0x01);
+ 	emctimer_write32(0x84, emctimer_read32(0x84) | 0x01);
+ 

@@ -1,0 +1,1556 @@
+From fb5439fda94911efab576284cd2bd870d670d46d Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Thu, 5 Nov 2026 21:04:11 +0100
+Subject: [PATCH 054/124] ps4: add the samu core, ccp, trng and ps4crypt
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ arch/x86/Kconfig                         |  14 +
+ arch/x86/include/asm/ps4.h               |   7 +
+ config                                   |   2 +
+ drivers/gpu/drm/amd/amdgpu/Makefile      |   2 +-
+ drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c    |   9 +
+ drivers/gpu/drm/amd/amdgpu/ps4_samu_vm.c | 532 ++++++++++++++++
+ drivers/gpu/drm/amd/amdgpu/ps4_samu_vm.h |  29 +
+ drivers/ps4/Makefile                     |   2 +
+ drivers/ps4/ps4-ccp.c                    | 772 +++++++++++++++++++++++
+ drivers/ps4/ps4-trng.c                   |  49 ++
+ 10 files changed, 1417 insertions(+), 1 deletion(-)
+ create mode 100644 drivers/gpu/drm/amd/amdgpu/ps4_samu_vm.c
+ create mode 100644 drivers/gpu/drm/amd/amdgpu/ps4_samu_vm.h
+ create mode 100644 drivers/ps4/ps4-ccp.c
+ create mode 100644 drivers/ps4/ps4-trng.c
+
+diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
+index 534d89668b9297568fca53df38367446272d8a61..c6cd7cc8905cd0f719f9c441351b7173fc8f785c 100644
+--- a/arch/x86/Kconfig
++++ b/arch/x86/Kconfig
+@@ -618,6 +618,20 @@ config X86_PS4_BAIKAL
+ 	help
+ 	  Enable support for the Baikal southbridge used by PlayStation 4
+ 	  Slim and Pro systems.
++
++config PS4_CCP
++	bool "PS4 SAMU CCP hardware crypto engine"
++	depends on X86_PS4
++	depends on DRM_AMDGPU=y
++	help
++	  Enable the PS4 SAMU AES-XTS bulk storage crypto driver (ps4-ccp).
++
++config PS4_TRNG
++	bool "PS4 SAMU hardware random number generator"
++	depends on X86_PS4
++	depends on DRM_AMDGPU=y
++	help
++	  Enable the PS4 SAMU true random number generator driver (ps4-trng).
+  
+ config X86_VSMP
+ 	bool "ScaleMP vSMP"
+diff --git a/arch/x86/include/asm/ps4.h b/arch/x86/include/asm/ps4.h
+index 02faa09ae797200112b77193f3679bc90ae53983..61e4c031b1c5ca3e8b540bdcd95368b57a39aea9 100644
+--- a/arch/x86/include/asm/ps4.h
++++ b/arch/x86/include/asm/ps4.h
+@@ -36,6 +36,13 @@ extern void apcie_free_irqs(unsigned int virq, unsigned int nr_irqs);
+ 
+ typedef void (*bpcie_icc_event_fn)(void *ctx, u16 minor, const u8 *data,
+ 				   u16 length);
++extern void ps4_samu_lock(void);
++extern void ps4_samu_unlock(void);
++extern void *ps4_samu_data(u64 *va, size_t *size);
++extern int ps4_samu_map(struct page **pages, unsigned int count, u64 *va);
++extern void ps4_samu_unmap(void);
++extern int ps4_samu_rng(void *buf, size_t len);
++extern int ps4_samu_ccp(void *op);
+ extern int apcie_status(void);
+ extern int apcie_icc_cmd(u8 major, u16 minor, const void *data,
+ 			 u16 length, void *reply, u16 reply_length);
+diff --git a/config b/config
+index aa664a231fdc57c866822064d42a9806f3891686..a366d049790194d66cad00c97f74eb95b29df188 100644
+--- a/config
++++ b/config
+@@ -363,6 +363,8 @@ CONFIG_X86_MPPARSE=y
+ CONFIG_X86_EXTENDED_PLATFORM=y
+ CONFIG_X86_PS4=y
+ CONFIG_X86_PS4_BAIKAL=y
++CONFIG_PS4_CCP=y
++CONFIG_PS4_TRNG=y
+ # CONFIG_X86_VSMP is not set
+ # CONFIG_X86_INTEL_MID is not set
+ # CONFIG_X86_GOLDFISH is not set
+diff --git a/drivers/gpu/drm/amd/amdgpu/Makefile b/drivers/gpu/drm/amd/amdgpu/Makefile
+index 3f6b17f8b9e848ad80d6f80a68deaa7656ec61d3..913b69ca403a5a85d65f2f0d4f7681f4483a1ab5 100644
+--- a/drivers/gpu/drm/amd/amdgpu/Makefile
++++ b/drivers/gpu/drm/amd/amdgpu/Makefile
+@@ -323,7 +323,7 @@ amdgpu-$(CONFIG_COMPAT) += amdgpu_ioc32.o
+ amdgpu-$(CONFIG_VGA_SWITCHEROO) += amdgpu_atpx_handler.o
+ amdgpu-$(CONFIG_ACPI) += amdgpu_acpi.o
+ amdgpu-$(CONFIG_HMM_MIRROR) += amdgpu_hmm.o
+-amdgpu-$(CONFIG_X86_PS4) += ps4_bridge.o
++amdgpu-$(CONFIG_X86_PS4) += ps4_bridge.o ps4_samu_vm.o
+ 
+ include $(FULL_AMD_PATH)/pm/Makefile
+ 
+diff --git a/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c b/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c
+index ce3d2a68056ebdbf4ce3db532a0ca92e7ac33f0b..c3ca5a47659e1e4aa2c993935f61a1da0d62ef05 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c
+@@ -27,6 +27,7 @@
+ 
+ #include <drm/drm_cache.h>
+ #include "amdgpu.h"
++#include "ps4_samu_vm.h"
+ #include "cikd.h"
+ #include "cik.h"
+ #include "gmc_v7_0.h"
+@@ -711,6 +712,8 @@ static int gmc_v7_0_gart_enable(struct amdgpu_device *adev)
+ 	else
+ 		gmc_v7_0_set_fault_enable_default(adev, true);
+ 
++	ps4_samu_vm_enable(adev);
++
+ 	if (adev->asic_type == CHIP_KAVERI) {
+ 		tmp = RREG32(mmCHUB_CONTROL);
+ 		tmp &= ~BYPASS_VM;
+@@ -1059,6 +1062,10 @@ static int gmc_v7_0_sw_init(struct amdgpu_ip_block *ip_block)
+ 	if (r)
+ 		return r;
+ 
++	r = ps4_samu_vm_init(adev);
++	if (r)
++		return r;
++
+ 	dev_info(adev->dev, "Done gart\n");
+ 
+ 	/*
+@@ -1097,6 +1104,7 @@ static int gmc_v7_0_sw_fini(struct amdgpu_ip_block *ip_block)
+ 	amdgpu_gem_force_release(adev);
+ 	amdgpu_vm_manager_fini(adev);
+ 	kfree(adev->gmc.vm_fault_info);
++	ps4_samu_vm_fini(adev);
+ 	amdgpu_gart_table_vram_free(adev);
+ 	amdgpu_bo_fini(adev);
+ 	amdgpu_ucode_release(&adev->gmc.fw);
+@@ -1312,6 +1320,7 @@ static int gmc_v7_0_process_interrupt(struct amdgpu_device *adev,
+ 
+ 	vmid = REG_GET_FIELD(status, VM_CONTEXT1_PROTECTION_FAULT_STATUS,
+ 			     VMID);
++	ps4_samu_vm_fault(adev, vmid, addr);
+ 	if (amdgpu_amdkfd_is_kfd_vmid(adev, vmid)
+ 		&& !atomic_read_acquire(&adev->gmc.vm_fault_info_updated)) {
+ 		struct kfd_vm_fault_info *info = adev->gmc.vm_fault_info;
+diff --git a/drivers/gpu/drm/amd/amdgpu/ps4_samu_vm.c b/drivers/gpu/drm/amd/amdgpu/ps4_samu_vm.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..b0f5c03c7e2092182b06efd64164e5f7b4bf80f0
+--- /dev/null
++++ b/drivers/gpu/drm/amd/amdgpu/ps4_samu_vm.c
+@@ -0,0 +1,532 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#include <linux/delay.h>
++#include <linux/dma-mapping.h>
++#include <linux/jiffies.h>
++#include <linux/ktime.h>
++#include <linux/mutex.h>
++#include <linux/sizes.h>
++#include <linux/slab.h>
++#include <asm/ps4.h>
++
++#include "amdgpu.h"
++#include "amdgpu_vm.h"
++#include "ps4_samu_vm.h"
++
++#include "bif/bif_4_1_d.h"
++#include "gmc/gmc_7_1_d.h"
++
++#define PS4_SAMU_VMID			15
++#define PS4_SAMU_PTE_FLAGS		(AMDGPU_PTE_VALID | AMDGPU_PTE_SYSTEM | \
++					 AMDGPU_PTE_SNOOPED | AMDGPU_PTE_READABLE | \
++					 AMDGPU_PTE_WRITEABLE)
++
++#define SAM_INDEX			(0x22000 / 4)
++#define SAM_DATA			(0x22004 / 4)
++#define SAM_DOORBELL			0x32
++#define SAM_MAILBOX_HIGH		0x33
++#define SAM_MAILBOX_LOW			0x34
++#define SAM_ACK				0x37
++#define SAM_STATUS			0x4a
++#define SAM_STATUS_BUSY			BIT(0)
++
++#define SHARED_SIZE			SZ_1M
++#define SHARED_PAGES			(SHARED_SIZE / AMDGPU_GPU_PAGE_SIZE)
++#define MSG_OFFSET			0x1000
++#define MSG_SIZE			0xa8
++#define DATA_VA				SZ_1M
++#define DATA_SIZE			SZ_1M
++#define MAP_VA				SZ_2M
++#define MAP_PAGES			(SZ_1M / PAGE_SIZE + 1)
++#define SEND_TIMEOUT_MS			2000
++#define PROBE_TIMEOUT_MS		200
++#define SPIN_US				200
++#define INVALIDATE_TIMEOUT_US		10000
++
++#define RNG_MSG_TYPE			0x0a
++#define RNG_DATA_OFFSET			0x18
++#define RNG_FILL			0xa5
++#define CCP_MSG_TYPE			8
++#define CCP_OP_OFFSET			0x18
++#define CCP_OP_SIZE			0x88
++
++struct ps4_samu_vm {
++	struct amdgpu_device *adev;
++	struct amdgpu_bo *bo;
++	u64 gpu_addr;
++	u64 *table;
++	unsigned int pt_entries;
++	void *shared;
++	dma_addr_t shared_dma;
++	void *data;
++	dma_addr_t data_dma;
++	dma_addr_t map_dma[MAP_PAGES];
++	unsigned int map_count;
++	bool map_broken;
++	u64 base;
++	u32 end;
++	bool ready;
++	bool probing;
++	u32 fault_page;
++	u64 tag;
++	struct mutex lock;
++};
++
++static struct ps4_samu_vm *ps4_samu_vm;
++
++static bool ps4_samu_vm_supported(struct amdgpu_device *adev)
++{
++	return adev->asic_type == CHIP_LIVERPOOL ||
++	       adev->asic_type == CHIP_GLADIUS;
++}
++
++static u64 *ps4_samu_vm_pd(struct ps4_samu_vm *vm)
++{
++	return vm->table;
++}
++
++static u64 *ps4_samu_vm_pt(struct ps4_samu_vm *vm, unsigned int index)
++{
++	return vm->table + (AMDGPU_GPU_PAGE_SIZE / sizeof(u64)) +
++	       index * vm->pt_entries;
++}
++
++static u64 ps4_samu_vm_pt_addr(struct ps4_samu_vm *vm, unsigned int index)
++{
++	return vm->gpu_addr + AMDGPU_GPU_PAGE_SIZE +
++	       index * vm->pt_entries * sizeof(u64);
++}
++
++static int ps4_samu_vm_invalidate(struct ps4_samu_vm *vm)
++{
++	struct amdgpu_device *adev = vm->adev;
++	u32 bit = 1 << PS4_SAMU_VMID;
++	ktime_t timeout;
++
++	mb();
++	amdgpu_device_flush_hdp(adev, NULL);
++	WREG32(mmGARLIC_FLUSH_REQ, 1);
++	WREG32(mmVM_INVALIDATE_RESPONSE, RREG32(mmVM_INVALIDATE_RESPONSE));
++	WREG32(mmVM_INVALIDATE_REQUEST, bit);
++	timeout = ktime_add_us(ktime_get(), INVALIDATE_TIMEOUT_US);
++	while (!(RREG32(mmVM_INVALIDATE_RESPONSE) & bit)) {
++		if (ktime_after(ktime_get(), timeout)) {
++			dev_err_ratelimited(adev->dev,
++					    "samu: vmid %d invalidate timed out\n",
++					    PS4_SAMU_VMID);
++			return -ETIMEDOUT;
++		}
++		udelay(1);
++	}
++	WREG32(mmVM_INVALIDATE_RESPONSE, bit);
++	return 0;
++}
++
++static void sam_write(struct amdgpu_device *adev, u32 index, u32 value)
++{
++	WREG32(SAM_INDEX, index);
++	WREG32(SAM_DATA, value);
++}
++
++static u32 sam_read(struct amdgpu_device *adev, u32 index)
++{
++	WREG32(SAM_INDEX, index);
++	return RREG32(SAM_DATA);
++}
++
++static int sam_send(struct ps4_samu_vm *vm, u64 word)
++{
++	struct amdgpu_device *adev = vm->adev;
++	unsigned long timeout = jiffies + msecs_to_jiffies(SEND_TIMEOUT_MS);
++	ktime_t spin;
++
++	dma_wmb();
++	sam_write(adev, SAM_MAILBOX_LOW, lower_32_bits(word));
++	sam_write(adev, SAM_MAILBOX_HIGH, upper_32_bits(word));
++	sam_write(adev, SAM_DOORBELL, 1);
++	spin = ktime_add_us(ktime_get(), SPIN_US);
++	while (sam_read(adev, SAM_STATUS) & SAM_STATUS_BUSY) {
++		if (ktime_before(ktime_get(), spin)) {
++			udelay(1);
++			continue;
++		}
++		if (time_after(jiffies, timeout))
++			return -ETIMEDOUT;
++		usleep_range(20, 50);
++	}
++	dma_rmb();
++	return 0;
++}
++
++int ps4_samu_vm_init(struct amdgpu_device *adev)
++{
++	struct ps4_samu_vm *vm;
++	size_t size;
++	int r;
++
++	if (!ps4_samu_vm_supported(adev) || ps4_samu_vm)
++		return 0;
++
++	vm = kzalloc(sizeof(*vm), GFP_KERNEL);
++	if (!vm)
++		return -ENOMEM;
++
++	vm->adev = adev;
++	vm->pt_entries = 1U << adev->vm_manager.block_size;
++	mutex_init(&vm->lock);
++
++	vm->shared = dma_alloc_coherent(adev->dev, SHARED_SIZE, &vm->shared_dma,
++					GFP_KERNEL);
++	if (!vm->shared) {
++		r = -ENOMEM;
++		goto err_free;
++	}
++
++	vm->data = dma_alloc_coherent(adev->dev, DATA_SIZE, &vm->data_dma,
++				      GFP_KERNEL);
++	if (!vm->data) {
++		r = -ENOMEM;
++		goto err_shared;
++	}
++
++	size = AMDGPU_GPU_PAGE_SIZE + 2 * vm->pt_entries * sizeof(u64);
++	r = amdgpu_bo_create_kernel(adev, size, AMDGPU_GPU_PAGE_SIZE,
++				    AMDGPU_GEM_DOMAIN_VRAM, &vm->bo,
++				    &vm->gpu_addr, (void **)&vm->table);
++	if (r)
++		goto err_data;
++
++	memset(vm->table, 0, size);
++	vm->end = vm->pt_entries - 1;
++	ps4_samu_vm = vm;
++	return 0;
++
++err_data:
++	dma_free_coherent(adev->dev, DATA_SIZE, vm->data, vm->data_dma);
++err_shared:
++	dma_free_coherent(adev->dev, SHARED_SIZE, vm->shared, vm->shared_dma);
++err_free:
++	kfree(vm);
++	return r;
++}
++
++void ps4_samu_vm_fini(struct amdgpu_device *adev)
++{
++	struct ps4_samu_vm *vm = ps4_samu_vm;
++
++	if (!vm || vm->adev != adev)
++		return;
++
++	ps4_samu_vm = NULL;
++	amdgpu_bo_free_kernel(&vm->bo, &vm->gpu_addr, (void **)&vm->table);
++	dma_free_coherent(adev->dev, DATA_SIZE, vm->data, vm->data_dma);
++	dma_free_coherent(adev->dev, SHARED_SIZE, vm->shared, vm->shared_dma);
++	kfree(vm);
++}
++
++static void ps4_samu_map_pages(u64 *pt, unsigned int first, dma_addr_t addr,
++			       unsigned int count)
++{
++	unsigned int i;
++
++	for (i = 0; i < count; i++)
++		WRITE_ONCE(pt[first + i], (addr + (u64)i * AMDGPU_GPU_PAGE_SIZE) |
++			   PS4_SAMU_PTE_FLAGS);
++}
++
++static void ps4_samu_map_shared_pt(struct ps4_samu_vm *vm)
++{
++	struct amdgpu_device *adev = vm->adev;
++	unsigned int pde = vm->base >> (12 + adev->vm_manager.block_size);
++
++	ps4_samu_map_pages(ps4_samu_vm_pt(vm, 1),
++			   (vm->base >> 12) & (vm->pt_entries - 1),
++			   vm->shared_dma, SHARED_PAGES);
++	ps4_samu_vm_pd(vm)[pde] = ps4_samu_vm_pt_addr(vm, 1) | AMDGPU_PTE_VALID;
++}
++
++void ps4_samu_vm_enable(struct amdgpu_device *adev)
++{
++	struct ps4_samu_vm *vm = ps4_samu_vm;
++
++	if (!vm || vm->adev != adev)
++		return;
++
++	ps4_samu_map_pages(ps4_samu_vm_pt(vm, 0), DATA_VA >> 12, vm->data_dma,
++			   DATA_SIZE / AMDGPU_GPU_PAGE_SIZE);
++	if (!vm->map_count && (MAP_VA >> 12) + MAP_PAGES <= vm->pt_entries)
++		memset(ps4_samu_vm_pt(vm, 0) + (MAP_VA >> 12), 0,
++		       MAP_PAGES * sizeof(u64));
++	ps4_samu_vm_pd(vm)[0] = ps4_samu_vm_pt_addr(vm, 0) | AMDGPU_PTE_VALID;
++	if (vm->ready)
++		ps4_samu_map_shared_pt(vm);
++
++	WREG32(mmVM_CONTEXT15_PAGE_TABLE_BASE_ADDR, vm->gpu_addr >> 12);
++	WREG32(mmVM_CONTEXT8_PAGE_TABLE_START_ADDR + PS4_SAMU_VMID - 8, 0);
++	WREG32(mmVM_CONTEXT8_PAGE_TABLE_END_ADDR + PS4_SAMU_VMID - 8, vm->end);
++	ps4_samu_vm_invalidate(vm);
++}
++
++void ps4_samu_vm_fault(struct amdgpu_device *adev, u32 vmid, u32 page)
++{
++	struct ps4_samu_vm *vm = ps4_samu_vm;
++
++	if (!vm || vm->adev != adev || vmid != PS4_SAMU_VMID)
++		return;
++	if (READ_ONCE(vm->probing) && !READ_ONCE(vm->fault_page))
++		WRITE_ONCE(vm->fault_page, page);
++}
++
++static int ps4_samu_map_shared(struct ps4_samu_vm *vm)
++{
++	struct amdgpu_device *adev = vm->adev;
++	unsigned int pde = vm->base >> (12 + adev->vm_manager.block_size);
++	unsigned int first = (vm->base >> 12) & (vm->pt_entries - 1);
++
++	if (!pde || pde >= AMDGPU_GPU_PAGE_SIZE / sizeof(u64) ||
++	    first + SHARED_PAGES > vm->pt_entries)
++		return -ERANGE;
++
++	ps4_samu_map_shared_pt(vm);
++	vm->end = max_t(u32, vm->end, ((vm->base + SHARED_SIZE) >> 12) - 1);
++	WREG32(mmVM_CONTEXT8_PAGE_TABLE_END_ADDR + PS4_SAMU_VMID - 8, vm->end);
++	ps4_samu_vm_invalidate(vm);
++	return 0;
++}
++
++static int ps4_samu_setup(struct ps4_samu_vm *vm)
++{
++	struct amdgpu_device *adev = vm->adev;
++	unsigned long timeout;
++	int r;
++
++	if (vm->ready)
++		return 0;
++
++	WRITE_ONCE(vm->fault_page, 0);
++	WRITE_ONCE(vm->probing, true);
++	r = sam_send(vm, MSG_OFFSET);
++	timeout = jiffies + msecs_to_jiffies(PROBE_TIMEOUT_MS);
++	while (!r && !READ_ONCE(vm->fault_page) && !time_after(jiffies, timeout))
++		usleep_range(500, 1000);
++	WRITE_ONCE(vm->probing, false);
++	if (r) {
++		dev_err(adev->dev, "samu: probe request timed out\n");
++		return r;
++	}
++	if (!vm->fault_page) {
++		dev_err(adev->dev, "samu: probe gave no vmid %d fault\n",
++			PS4_SAMU_VMID);
++		return -ENODEV;
++	}
++
++	vm->base = ((u64)vm->fault_page << 12) - MSG_OFFSET;
++	if (vm->base % SHARED_SIZE) {
++		dev_err(adev->dev, "samu: base 0x%llx is not 1 MiB aligned\n",
++			vm->base);
++		return -EINVAL;
++	}
++
++	memset(vm->shared, 0, SHARED_SIZE);
++	r = ps4_samu_map_shared(vm);
++	if (r) {
++		dev_err(adev->dev, "samu: base 0x%llx out of range\n", vm->base);
++		return r;
++	}
++
++	vm->ready = true;
++	dev_info(adev->dev, "samu: shared buffer at vmid %d va 0x%llx\n",
++		 PS4_SAMU_VMID, vm->base);
++	return 0;
++}
++
++void ps4_samu_lock(void)
++{
++	if (ps4_samu_vm)
++		mutex_lock(&ps4_samu_vm->lock);
++}
++EXPORT_SYMBOL_GPL(ps4_samu_lock);
++
++void ps4_samu_unlock(void)
++{
++	if (ps4_samu_vm)
++		mutex_unlock(&ps4_samu_vm->lock);
++}
++EXPORT_SYMBOL_GPL(ps4_samu_unlock);
++
++void *ps4_samu_data(u64 *va, size_t *size)
++{
++	struct ps4_samu_vm *vm = ps4_samu_vm;
++
++	if (!vm)
++		return NULL;
++	lockdep_assert_held(&vm->lock);
++	if (ps4_samu_setup(vm))
++		return NULL;
++	*va = DATA_VA;
++	*size = DATA_SIZE;
++	return vm->data;
++}
++EXPORT_SYMBOL_GPL(ps4_samu_data);
++
++void ps4_samu_unmap(void)
++{
++	struct ps4_samu_vm *vm = ps4_samu_vm;
++	unsigned int i;
++	u64 *pt;
++
++	if (!vm || !vm->map_count)
++		return;
++	lockdep_assert_held(&vm->lock);
++	pt = ps4_samu_vm_pt(vm, 0) + (MAP_VA >> 12);
++	for (i = 0; i < vm->map_count; i++)
++		WRITE_ONCE(pt[i], 0);
++	if (ps4_samu_vm_invalidate(vm))
++		vm->map_broken = true;
++	for (i = 0; i < vm->map_count; i++)
++		dma_unmap_page(vm->adev->dev, vm->map_dma[i], PAGE_SIZE,
++			       DMA_BIDIRECTIONAL);
++	vm->map_count = 0;
++}
++EXPORT_SYMBOL_GPL(ps4_samu_unmap);
++
++int ps4_samu_map(struct page **pages, unsigned int count, u64 *va)
++{
++	struct ps4_samu_vm *vm = ps4_samu_vm;
++	struct device *dev;
++	dma_addr_t addr;
++	unsigned int i;
++	u64 *pt;
++	int r;
++
++	if (!vm)
++		return -ENODEV;
++	lockdep_assert_held(&vm->lock);
++	if (!count || count > MAP_PAGES || vm->map_count || vm->map_broken ||
++	    (MAP_VA >> 12) + MAP_PAGES > vm->pt_entries)
++		return -EINVAL;
++	r = ps4_samu_setup(vm);
++	if (r)
++		return r;
++
++	dev = vm->adev->dev;
++	pt = ps4_samu_vm_pt(vm, 0) + (MAP_VA >> 12);
++	for (i = 0; i < count; i++) {
++		addr = dma_map_page(dev, pages[i], 0, PAGE_SIZE,
++				    DMA_BIDIRECTIONAL);
++		if (dma_mapping_error(dev, addr)) {
++			ps4_samu_unmap();
++			return -ENOMEM;
++		}
++		vm->map_dma[i] = addr;
++		vm->map_count = i + 1;
++		WRITE_ONCE(pt[i], addr | PS4_SAMU_PTE_FLAGS);
++	}
++	r = ps4_samu_vm_invalidate(vm);
++	if (r) {
++		ps4_samu_unmap();
++		return r;
++	}
++	*va = MAP_VA;
++	return 0;
++}
++EXPORT_SYMBOL_GPL(ps4_samu_map);
++
++int ps4_samu_rng(void *buf, size_t len)
++{
++	struct ps4_samu_vm *vm = ps4_samu_vm;
++	u8 *msg;
++	int r;
++
++	if (!vm)
++		return -EPROBE_DEFER;
++	if (!len || len > 16)
++		return -EINVAL;
++
++	mutex_lock(&vm->lock);
++	r = ps4_samu_setup(vm);
++	if (r)
++		goto out;
++
++	msg = vm->shared + MSG_OFFSET;
++	memset(msg, 0, MSG_SIZE);
++	memset(msg + RNG_DATA_OFFSET, RNG_FILL, 16);
++	*(u32 *)msg = RNG_MSG_TYPE;
++
++	r = sam_send(vm, vm->base + MSG_OFFSET);
++	if (r)
++		goto out;
++	if (*(u32 *)(msg + 4) || !memchr_inv(msg + RNG_DATA_OFFSET, RNG_FILL, 16)) {
++		r = -EIO;
++		goto out;
++	}
++	memcpy(buf, msg + RNG_DATA_OFFSET, len);
++out:
++	mutex_unlock(&vm->lock);
++	return r;
++}
++EXPORT_SYMBOL_GPL(ps4_samu_rng);
++
++int ps4_samu_ccp(void *op)
++{
++	struct ps4_samu_vm *vm = ps4_samu_vm;
++	struct amdgpu_device *adev;
++	unsigned long timeout;
++	u8 *msg, *reply;
++	u32 cmd, status;
++	ktime_t spin;
++	int r;
++
++	if (!vm)
++		return -ENODEV;
++	lockdep_assert_held(&vm->lock);
++	adev = vm->adev;
++	msg = vm->shared + MSG_OFFSET;
++	reply = vm->shared;
++	r = ps4_samu_setup(vm);
++	if (r)
++		return r;
++
++	memset(reply, 0, MSG_SIZE);
++	memset(msg, 0, MSG_SIZE);
++	*(u32 *)msg = CCP_MSG_TYPE;
++	*(u64 *)(msg + 8) = ++vm->tag << 16;
++	memcpy(msg + CCP_OP_OFFSET, op, CCP_OP_SIZE);
++
++	r = sam_send(vm, vm->base + MSG_OFFSET);
++	if (r)
++		return r;
++	status = *(u32 *)(msg + 4);
++	if (status)
++		return (s32)status < 0 && (s32)status >= -MAX_ERRNO ? (s32)status : -EIO;
++
++	timeout = jiffies + msecs_to_jiffies(SEND_TIMEOUT_MS);
++	spin = ktime_add_us(ktime_get(), SPIN_US);
++	for (;;) {
++		cmd = READ_ONCE(*(u32 *)reply);
++		if (cmd == CCP_MSG_TYPE)
++			break;
++		if (cmd) {
++			dev_warn_ratelimited(adev->dev,
++					     "samu: host message cmd %u ignored\n",
++					     cmd);
++			WRITE_ONCE(*(u32 *)reply, 0);
++			sam_write(adev, SAM_ACK, 1);
++		}
++		if (ktime_before(ktime_get(), spin)) {
++			cpu_relax();
++			continue;
++		}
++		if (time_after(jiffies, timeout))
++			return -ETIMEDOUT;
++		usleep_range(10, 30);
++	}
++	dma_rmb();
++	status = *(u32 *)(reply + 4);
++	memcpy(op, reply + CCP_OP_OFFSET, CCP_OP_SIZE);
++	*(u32 *)reply = 0;
++	*(u64 *)(reply + 8) = 0;
++	dma_wmb();
++	sam_write(adev, SAM_ACK, 1);
++	return status ? -EIO : 0;
++}
++EXPORT_SYMBOL_GPL(ps4_samu_ccp);
+diff --git a/drivers/gpu/drm/amd/amdgpu/ps4_samu_vm.h b/drivers/gpu/drm/amd/amdgpu/ps4_samu_vm.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..6a67abe8985322fd1137b64d14674c36c721de33
+--- /dev/null
++++ b/drivers/gpu/drm/amd/amdgpu/ps4_samu_vm.h
+@@ -0,0 +1,29 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef __PS4_SAMU_VM_H__
++#define __PS4_SAMU_VM_H__
++
++struct amdgpu_device;
++
++#ifdef CONFIG_X86_PS4
++int ps4_samu_vm_init(struct amdgpu_device *adev);
++void ps4_samu_vm_fini(struct amdgpu_device *adev);
++void ps4_samu_vm_enable(struct amdgpu_device *adev);
++void ps4_samu_vm_fault(struct amdgpu_device *adev, u32 vmid, u32 page);
++#else
++static inline int ps4_samu_vm_init(struct amdgpu_device *adev)
++{
++	return 0;
++}
++static inline void ps4_samu_vm_fini(struct amdgpu_device *adev)
++{
++}
++static inline void ps4_samu_vm_enable(struct amdgpu_device *adev)
++{
++}
++static inline void ps4_samu_vm_fault(struct amdgpu_device *adev, u32 vmid,
++				     u32 page)
++{
++}
++#endif
++
++#endif
+diff --git a/drivers/ps4/Makefile b/drivers/ps4/Makefile
+index 3a754d1633602a4c0b6a9297828099cabc796274..f727b51e5df25ee9806bb76e5f825355d57d023d 100644
+--- a/drivers/ps4/Makefile
++++ b/drivers/ps4/Makefile
+@@ -16,3 +16,5 @@ endif
+ obj-y += ps4-led.o
+ obj-y += ps4-fan.o
+ obj-y += ps4-buzzer.o
++obj-$(CONFIG_PS4_TRNG) += ps4-trng.o
++obj-$(CONFIG_PS4_CCP) += ps4-ccp.o
+diff --git a/drivers/ps4/ps4-ccp.c b/drivers/ps4/ps4-ccp.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..ca0bf0a1f0b9bb44cca1091d1a5ccaee6fcde857
+--- /dev/null
++++ b/drivers/ps4/ps4-ccp.c
+@@ -0,0 +1,772 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#define pr_fmt(fmt) "ps4-ccp: " fmt
++
++#include <crypto/internal/skcipher.h>
++#include <crypto/xts.h>
++#include <linux/bio.h>
++#include <linux/device-mapper.h>
++#include <linux/hex.h>
++#include <linux/initrd.h>
++#include <linux/kernel_read_file.h>
++#include <linux/kobject.h>
++#include <linux/module.h>
++#include <linux/scatterlist.h>
++#include <linux/delay.h>
++#include <linux/sizes.h>
++#include <linux/slab.h>
++#include <linux/sysfs.h>
++#include <linux/unaligned.h>
++#include <linux/vmalloc.h>
++#include <linux/workqueue.h>
++#include <asm/ps4.h>
++
++#define DM_MSG_PREFIX		"ps4crypt"
++#define PS4_CCP_SECTOR		512
++#define PS4_CCP_OP_SIZE		0x88
++#define PS4_CCP_XTS_CMD		0x02000000
++#define PS4_CCP_ENCRYPT		0x00001000
++#define PS4_CCP_KEY_SIZE	32
++#define PS4_CCP_PRIORITY	300
++
++#define PS4_EAP_KEY_PATH	"/key/eap_hdd_key.bin"
++#define PS4_EAP_KEY_SIZE	32
++
++struct ps4_ccp_ctx {
++	u8 key[PS4_CCP_KEY_SIZE];
++};
++
++static u8 ps4_eap_key[PS4_EAP_KEY_SIZE];
++static struct kobject *ps4_fw_kobj;
++
++static void ps4_ccp_reverse_key(u8 *dst, const u8 *src)
++{
++	int i;
++
++	for (i = 0; i < 16; i++) {
++		dst[i] = src[15 - i];
++		dst[16 + i] = src[31 - i];
++	}
++}
++
++struct ps4_ccp_req {
++	struct list_head list;
++	struct skcipher_request *req;
++	bool encrypt;
++};
++
++static LIST_HEAD(ps4_ccp_queue);
++static DEFINE_SPINLOCK(ps4_ccp_queue_lock);
++static struct workqueue_struct *ps4_ccp_wq;
++static struct work_struct ps4_ccp_work;
++static struct ps4_ccp_req **ps4_ccp_batch;
++static unsigned int ps4_ccp_batch_max;
++static unsigned long ps4_ccp_ops;
++static unsigned long ps4_ccp_sectors;
++static unsigned long ps4_ccp_mapped;
++static bool ps4_ccp_map_ok;
++module_param_named(ops, ps4_ccp_ops, ulong, 0444);
++module_param_named(sectors, ps4_ccp_sectors, ulong, 0444);
++module_param_named(mapped, ps4_ccp_mapped, ulong, 0444);
++module_param_named(zero_copy, ps4_ccp_map_ok, bool, 0644);
++
++static int ps4_ccp_run(const u8 *key, u64 va, u64 sector, u32 count,
++		       bool encrypt)
++{
++	u8 op[PS4_CCP_OP_SIZE] = { 0 };
++
++	*(u32 *)op = PS4_CCP_XTS_CMD | (encrypt ? PS4_CCP_ENCRYPT : 0);
++	*(u32 *)(op + 0x08) = count;
++	*(u64 *)(op + 0x10) = va;
++	*(u64 *)(op + 0x18) = va;
++	*(u64 *)(op + 0x20) = sector;
++	memcpy(op + 0x28, key, PS4_CCP_KEY_SIZE);
++	return ps4_samu_ccp(op);
++}
++
++static int ps4_ccp_setkey(struct crypto_skcipher *tfm, const u8 *key,
++			  unsigned int len)
++{
++	struct ps4_ccp_ctx *ctx = crypto_skcipher_ctx(tfm);
++	int ret;
++
++	if (len != PS4_CCP_KEY_SIZE)
++		return -EINVAL;
++	ret = xts_verify_key(tfm, key, len);
++	if (ret)
++		return ret;
++	ps4_ccp_reverse_key(ctx->key, key);
++	return 0;
++}
++
++static u64 ps4_ccp_req_sector(struct ps4_ccp_req *r)
++{
++	return get_unaligned_le64(r->req->iv);
++}
++
++static struct ps4_ccp_ctx *ps4_ccp_req_ctx(struct ps4_ccp_req *r)
++{
++	return crypto_skcipher_ctx(crypto_skcipher_reqtfm(r->req));
++}
++
++static void ps4_ccp_process(struct ps4_ccp_req **batch, unsigned int count)
++{
++	struct ps4_ccp_ctx *ctx = ps4_ccp_req_ctx(batch[0]);
++	size_t window;
++	unsigned int i;
++	u64 va;
++	u8 *buf;
++	int ret;
++
++	ps4_samu_lock();
++	buf = ps4_samu_data(&va, &window);
++	if (!buf) {
++		ret = -ENODEV;
++		goto out;
++	}
++	for (i = 0; i < count; i++)
++		sg_pcopy_to_buffer(batch[i]->req->src, sg_nents(batch[i]->req->src),
++				   buf + i * PS4_CCP_SECTOR, PS4_CCP_SECTOR, 0);
++	ret = ps4_ccp_run(ctx->key, va, ps4_ccp_req_sector(batch[0]), count,
++			  batch[0]->encrypt);
++	ps4_ccp_ops++;
++	ps4_ccp_sectors += count;
++	if (!ret)
++		for (i = 0; i < count; i++)
++			sg_pcopy_from_buffer(batch[i]->req->dst,
++					     sg_nents(batch[i]->req->dst),
++					     buf + i * PS4_CCP_SECTOR,
++					     PS4_CCP_SECTOR, 0);
++out:
++	ps4_samu_unlock();
++	local_bh_disable();
++	for (i = 0; i < count; i++)
++		skcipher_request_complete(batch[i]->req, ret);
++	local_bh_enable();
++}
++
++static bool ps4_ccp_joins(struct ps4_ccp_req *first, unsigned int count,
++			  struct ps4_ccp_req *next)
++{
++	return count < ps4_ccp_batch_max &&
++	       next->encrypt == first->encrypt &&
++	       ps4_ccp_req_ctx(next) == ps4_ccp_req_ctx(first) &&
++	       ps4_ccp_req_sector(next) == ps4_ccp_req_sector(first) + count;
++}
++
++static void ps4_ccp_worker(struct work_struct *work)
++{
++	struct ps4_ccp_req *r, *tmp;
++	unsigned int count;
++	LIST_HEAD(local);
++
++	for (;;) {
++		spin_lock_bh(&ps4_ccp_queue_lock);
++		list_splice_tail_init(&ps4_ccp_queue, &local);
++		spin_unlock_bh(&ps4_ccp_queue_lock);
++		if (list_empty(&local))
++			return;
++
++		count = 0;
++		list_for_each_entry_safe(r, tmp, &local, list) {
++			if (count && !ps4_ccp_joins(ps4_ccp_batch[0], count, r)) {
++				ps4_ccp_process(ps4_ccp_batch, count);
++				count = 0;
++			}
++			list_del(&r->list);
++			ps4_ccp_batch[count++] = r;
++		}
++		if (count)
++			ps4_ccp_process(ps4_ccp_batch, count);
++	}
++}
++
++static int ps4_ccp_queue_req(struct skcipher_request *req, bool encrypt)
++{
++	struct ps4_ccp_req *r = skcipher_request_ctx(req);
++
++	if (req->cryptlen != PS4_CCP_SECTOR ||
++	    get_unaligned_le64(req->iv + 8))
++		return -EINVAL;
++
++	r->req = req;
++	r->encrypt = encrypt;
++	spin_lock_bh(&ps4_ccp_queue_lock);
++	list_add_tail(&r->list, &ps4_ccp_queue);
++	spin_unlock_bh(&ps4_ccp_queue_lock);
++	queue_work(ps4_ccp_wq, &ps4_ccp_work);
++	return -EINPROGRESS;
++}
++
++static int ps4_ccp_encrypt(struct skcipher_request *req)
++{
++	return ps4_ccp_queue_req(req, true);
++}
++
++static int ps4_ccp_decrypt(struct skcipher_request *req)
++{
++	return ps4_ccp_queue_req(req, false);
++}
++
++static int ps4_ccp_init_tfm(struct crypto_skcipher *tfm)
++{
++	crypto_skcipher_set_reqsize(tfm, sizeof(struct ps4_ccp_req));
++	return 0;
++}
++
++static struct skcipher_alg ps4_ccp_alg = {
++	.base.cra_name = "xts(aes)",
++	.base.cra_driver_name = "xts-aes-ps4ccp",
++	.base.cra_priority = PS4_CCP_PRIORITY,
++	.base.cra_flags = CRYPTO_ALG_ASYNC | CRYPTO_ALG_KERN_DRIVER_ONLY,
++	.base.cra_blocksize = 16,
++	.base.cra_ctxsize = sizeof(struct ps4_ccp_ctx),
++	.base.cra_module = THIS_MODULE,
++	.min_keysize = PS4_CCP_KEY_SIZE,
++	.max_keysize = PS4_CCP_KEY_SIZE,
++	.ivsize = 16,
++	.init = ps4_ccp_init_tfm,
++	.setkey = ps4_ccp_setkey,
++	.encrypt = ps4_ccp_encrypt,
++	.decrypt = ps4_ccp_decrypt,
++};
++
++static int ps4_ccp_reference(const u8 *key, u8 *data, u64 sector)
++{
++	struct crypto_sync_skcipher *tfm;
++	struct scatterlist sg;
++	u8 iv[16] = { 0 };
++	int ret;
++
++	tfm = crypto_alloc_sync_skcipher("xts(aes)", 0, 0);
++	if (IS_ERR(tfm))
++		return PTR_ERR(tfm);
++	put_unaligned_le64(sector, iv);
++	ret = crypto_sync_skcipher_setkey(tfm, key, PS4_CCP_KEY_SIZE);
++	if (!ret) {
++		SYNC_SKCIPHER_REQUEST_ON_STACK(req, tfm);
++
++		sg_init_one(&sg, data, PS4_CCP_SECTOR);
++		skcipher_request_set_sync_tfm(req, tfm);
++		skcipher_request_set_callback(req, 0, NULL, NULL);
++		skcipher_request_set_crypt(req, &sg, &sg, PS4_CCP_SECTOR, iv);
++		ret = crypto_skcipher_encrypt(req);
++		skcipher_request_zero(req);
++	}
++	crypto_free_sync_skcipher(tfm);
++	return ret;
++}
++
++#define PS4_CCP_MAP_TEST_PAGES	3
++#define PS4_CCP_MAP_TEST_SECTORS	10
++
++static void ps4_ccp_map_copy(struct page **pages, unsigned int first, u8 *data,
++			     size_t len, bool to_pages)
++{
++	size_t pos, chunk;
++	u8 *p;
++
++	for (pos = 0; pos < len; pos += chunk) {
++		p = page_address(pages[(first + pos) / PAGE_SIZE]) +
++		    (first + pos) % PAGE_SIZE;
++		chunk = min_t(size_t, len - pos,
++			      PAGE_SIZE - (first + pos) % PAGE_SIZE);
++		if (to_pages)
++			memcpy(p, data + pos, chunk);
++		else
++			memcpy(data + pos, p, chunk);
++	}
++}
++
++static int ps4_ccp_map_round(const u8 *samu_key, struct page **pages,
++			     unsigned int first, u64 sector)
++{
++	u64 va;
++	int ret;
++
++	ps4_samu_lock();
++	ret = ps4_samu_map(pages, PS4_CCP_MAP_TEST_PAGES, &va);
++	if (!ret) {
++		ret = ps4_ccp_run(samu_key, va + first, sector,
++				  PS4_CCP_MAP_TEST_SECTORS, true);
++		ps4_samu_unmap();
++	}
++	ps4_samu_unlock();
++	return ret;
++}
++
++static int ps4_ccp_map_check(const u8 *key, struct page **pages,
++			     unsigned int first, u8 *plain, u8 *got,
++			     u64 sector)
++{
++	size_t len = PS4_CCP_MAP_TEST_SECTORS * PS4_CCP_SECTOR;
++	int ret = 0, i;
++
++	for (i = 0; i < PS4_CCP_MAP_TEST_SECTORS && !ret; i++)
++		ret = ps4_ccp_reference(key, plain + i * PS4_CCP_SECTOR,
++					sector + i);
++	ps4_ccp_map_copy(pages, first, got, len, false);
++	if (!ret && memcmp(got, plain, len))
++		ret = -EBADMSG;
++	return ret;
++}
++
++static int ps4_ccp_map_selftest(const u8 *key, const u8 *samu_key)
++{
++	size_t len = PS4_CCP_MAP_TEST_SECTORS * PS4_CCP_SECTOR;
++	unsigned int first = PAGE_SIZE - PS4_CCP_SECTOR;
++	struct page *pages[2 * PS4_CCP_MAP_TEST_PAGES] = { NULL };
++	struct page **a = pages, **b = pages + PS4_CCP_MAP_TEST_PAGES;
++	u64 sector_a = 0x5678, sector_b = 0x9abc;
++	u8 *plain_a, *plain_b, *got;
++	int ret = -ENOMEM, i;
++
++	plain_a = kmalloc(len, GFP_KERNEL);
++	plain_b = kmalloc(len, GFP_KERNEL);
++	got = kmalloc(len, GFP_KERNEL);
++	if (!plain_a || !plain_b || !got)
++		goto out;
++	for (i = ARRAY_SIZE(pages) - 1; i >= 0; i--) {
++		pages[i] = alloc_page(GFP_KERNEL);
++		if (!pages[i])
++			goto out;
++	}
++	for (i = 0; i < len; i++) {
++		plain_a[i] = (u8)(i * 7 + 3);
++		plain_b[i] = (u8)(i * 11 + 5);
++	}
++	ps4_ccp_map_copy(a, first, plain_a, len, true);
++	ps4_ccp_map_copy(b, first, plain_b, len, true);
++
++	ret = ps4_ccp_map_round(samu_key, a, first, sector_a);
++	if (!ret)
++		ret = ps4_ccp_map_round(samu_key, b, first, sector_b);
++	if (!ret)
++		ret = ps4_ccp_map_check(key, a, first, plain_a, got, sector_a);
++	if (!ret)
++		ret = ps4_ccp_map_check(key, b, first, plain_b, got, sector_b);
++out:
++	for (i = 0; i < ARRAY_SIZE(pages); i++)
++		if (pages[i])
++			__free_page(pages[i]);
++	kfree(got);
++	kfree(plain_b);
++	kfree(plain_a);
++	return ret;
++}
++
++static int ps4_ccp_selftest(void)
++{
++	u8 key[PS4_CCP_KEY_SIZE], samu_key[PS4_CCP_KEY_SIZE];
++	u8 *expected, *buf;
++	size_t window;
++	u64 va, sector = 0x1234;
++	int ret, i;
++
++	expected = kmalloc(PS4_CCP_SECTOR, GFP_KERNEL);
++	if (!expected)
++		return -ENOMEM;
++	for (i = 0; i < PS4_CCP_KEY_SIZE; i++)
++		key[i] = 0x40 + i;
++	for (i = 0; i < PS4_CCP_SECTOR; i++)
++		expected[i] = (u8)(i * 13 + 1);
++	ps4_ccp_reverse_key(samu_key, key);
++
++	ps4_samu_lock();
++	buf = ps4_samu_data(&va, &window);
++	if (!buf) {
++		ret = -ENODEV;
++		goto out;
++	}
++	memcpy(buf, expected, PS4_CCP_SECTOR);
++	ret = ps4_ccp_run(samu_key, va, sector, 1, true);
++	if (ret)
++		goto out;
++	ret = ps4_ccp_reference(key, expected, sector);
++	if (!ret && memcmp(buf, expected, PS4_CCP_SECTOR))
++		ret = -EBADMSG;
++out:
++	ps4_samu_unlock();
++	kfree(expected);
++	if (ret)
++		return ret;
++
++	ret = ps4_ccp_map_selftest(key, samu_key);
++	ps4_ccp_map_ok = !ret;
++	if (ret)
++		pr_warn("mapped xts self test failed: %d, using the copy path\n",
++			ret);
++	else
++		pr_info("mapped xts self test passed\n");
++	return 0;
++}
++
++struct ps4crypt_c {
++	struct dm_target *ti;
++	struct dm_dev *dev;
++	sector_t start;
++	u64 iv_offset;
++	u8 key[PS4_CCP_KEY_SIZE];
++	struct workqueue_struct *wq;
++	struct bio_set bs;
++};
++
++struct ps4crypt_io {
++	struct work_struct work;
++	struct ps4crypt_c *pc;
++	struct bio *bio;
++	sector_t offset;
++	blk_status_t status;
++};
++
++#define PS4CRYPT_MAX_PAGES	(SZ_1M / PAGE_SIZE + 1)
++
++static struct page *ps4crypt_pages[PS4CRYPT_MAX_PAGES];
++
++static unsigned int ps4crypt_collect(struct bio *bio, unsigned int *first)
++{
++	struct bvec_iter iter;
++	struct bio_vec bv;
++	unsigned int n = 0, end = 0;
++
++	bio_for_each_segment(bv, bio, iter) {
++		if (n == PS4CRYPT_MAX_PAGES)
++			return 0;
++		if (n ? bv.bv_offset || end != PAGE_SIZE :
++			bv.bv_offset % PS4_CCP_SECTOR)
++			return 0;
++		if (!n)
++			*first = bv.bv_offset;
++		ps4crypt_pages[n++] = bv.bv_page;
++		end = bv.bv_offset + bv.bv_len;
++	}
++	return n;
++}
++
++static int ps4crypt_decrypt_mapped(struct ps4crypt_c *pc, struct bio *bio,
++				   u64 sector)
++{
++	unsigned int count, first = 0;
++	u64 va;
++	int ret;
++
++	count = ps4crypt_collect(bio, &first);
++	if (!count)
++		return -EAGAIN;
++	ret = ps4_samu_map(ps4crypt_pages, count, &va);
++	if (ret)
++		return -EAGAIN;
++	ret = ps4_ccp_run(pc->key, va + first, sector,
++			  bio->bi_iter.bi_size / PS4_CCP_SECTOR, false);
++	ps4_samu_unmap();
++	if (!ret)
++		ps4_ccp_mapped++;
++	return ret;
++}
++
++static int ps4crypt_decrypt_copy(struct ps4crypt_c *pc, struct bio *bio,
++				 u64 sector)
++{
++	unsigned int bytes = bio->bi_iter.bi_size;
++	struct bvec_iter iter;
++	struct bio_vec bv;
++	size_t window, off;
++	u64 va;
++	u8 *buf;
++	int ret;
++
++	buf = ps4_samu_data(&va, &window);
++	if (!buf)
++		return -ENODEV;
++	if (bytes > window)
++		return -E2BIG;
++	off = 0;
++	bio_for_each_segment(bv, bio, iter) {
++		memcpy_from_bvec(buf + off, &bv);
++		off += bv.bv_len;
++	}
++	ret = ps4_ccp_run(pc->key, va, sector, bytes / PS4_CCP_SECTOR, false);
++	if (ret)
++		return ret;
++	off = 0;
++	bio_for_each_segment(bv, bio, iter) {
++		memcpy_to_bvec(&bv, buf + off);
++		off += bv.bv_len;
++	}
++	return 0;
++}
++
++static int ps4crypt_decrypt(struct ps4crypt_c *pc, struct bio *bio, u64 sector)
++{
++	int ret = -EAGAIN;
++
++	if (bio->bi_iter.bi_size % PS4_CCP_SECTOR)
++		return -EIO;
++
++	ps4_samu_lock();
++	if (ps4_ccp_map_ok)
++		ret = ps4crypt_decrypt_mapped(pc, bio, sector);
++	if (ret == -EAGAIN)
++		ret = ps4crypt_decrypt_copy(pc, bio, sector);
++	if (!ret) {
++		ps4_ccp_ops++;
++		ps4_ccp_sectors += bio->bi_iter.bi_size / PS4_CCP_SECTOR;
++	}
++	ps4_samu_unlock();
++	return ret;
++}
++
++static void ps4crypt_read_work(struct work_struct *work)
++{
++	struct ps4crypt_io *io = container_of(work, struct ps4crypt_io, work);
++	struct ps4crypt_c *pc = io->pc;
++	struct bio *bio = io->bio;
++	int ret;
++
++	if (!io->status) {
++		ret = ps4crypt_decrypt(pc, bio, pc->iv_offset + io->offset);
++		io->status = errno_to_blk_status(ret);
++	}
++	bio->bi_status = io->status;
++	bio_endio(bio);
++}
++
++static void ps4crypt_read_endio(struct bio *clone)
++{
++	struct ps4crypt_io *io = clone->bi_private;
++
++	io->status = clone->bi_status;
++	bio_put(clone);
++	queue_work(io->pc->wq, &io->work);
++}
++
++static int ps4crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
++{
++	u8 key[PS4_CCP_KEY_SIZE];
++	unsigned long long start, iv_offset;
++	struct ps4crypt_c *pc;
++	char dummy;
++	int ret;
++
++	if (argc != 4) {
++		ti->error = "need <key hex> <device> <start> <iv offset>";
++		return -EINVAL;
++	}
++	if (strlen(argv[0]) != 2 * PS4_CCP_KEY_SIZE ||
++	    hex2bin(key, argv[0], PS4_CCP_KEY_SIZE)) {
++		ti->error = "key must be 64 hex digits";
++		return -EINVAL;
++	}
++	if (sscanf(argv[2], "%llu%c", &start, &dummy) != 1 ||
++	    sscanf(argv[3], "%llu%c", &iv_offset, &dummy) != 1) {
++		ti->error = "bad start or iv offset";
++		return -EINVAL;
++	}
++	if (dm_table_get_mode(ti->table) & BLK_OPEN_WRITE) {
++		ti->error = "ps4crypt is read only for now";
++		return -EROFS;
++	}
++
++	pc = kzalloc(sizeof(*pc), GFP_KERNEL);
++	if (!pc)
++		return -ENOMEM;
++	pc->ti = ti;
++	pc->start = start;
++	pc->iv_offset = iv_offset;
++	ps4_ccp_reverse_key(pc->key, key);
++	memzero_explicit(key, sizeof(key));
++
++	ret = dm_get_device(ti, argv[1], dm_table_get_mode(ti->table), &pc->dev);
++	if (ret) {
++		ti->error = "device lookup failed";
++		goto err_free;
++	}
++	pc->wq = alloc_workqueue("ps4crypt", WQ_UNBOUND | WQ_MEM_RECLAIM, 0);
++	if (!pc->wq) {
++		ret = -ENOMEM;
++		goto err_dev;
++	}
++	ret = bioset_init(&pc->bs, BIO_POOL_SIZE, 0, 0);
++	if (ret)
++		goto err_wq;
++	ret = dm_set_target_max_io_len(ti, SZ_1M >> SECTOR_SHIFT);
++	if (ret)
++		goto err_bs;
++
++	ti->per_io_data_size = sizeof(struct ps4crypt_io);
++	ti->num_flush_bios = 1;
++	ti->private = pc;
++	return 0;
++
++err_bs:
++	bioset_exit(&pc->bs);
++err_wq:
++	destroy_workqueue(pc->wq);
++err_dev:
++	dm_put_device(ti, pc->dev);
++err_free:
++	memzero_explicit(pc, sizeof(*pc));
++	kfree(pc);
++	return ret;
++}
++
++static void ps4crypt_dtr(struct dm_target *ti)
++{
++	struct ps4crypt_c *pc = ti->private;
++
++	destroy_workqueue(pc->wq);
++	bioset_exit(&pc->bs);
++	dm_put_device(ti, pc->dev);
++	memzero_explicit(pc, sizeof(*pc));
++	kfree(pc);
++}
++
++static int ps4crypt_map(struct dm_target *ti, struct bio *bio)
++{
++	struct ps4crypt_c *pc = ti->private;
++	struct ps4crypt_io *io;
++	struct bio *clone;
++
++	if (bio_op(bio) == REQ_OP_FLUSH) {
++		bio_set_dev(bio, pc->dev->bdev);
++		return DM_MAPIO_REMAPPED;
++	}
++	if (bio_op(bio) != REQ_OP_READ)
++		return DM_MAPIO_KILL;
++
++	io = dm_per_bio_data(bio, sizeof(*io));
++	io->pc = pc;
++	io->bio = bio;
++	io->offset = dm_target_offset(ti, bio->bi_iter.bi_sector);
++	io->status = BLK_STS_OK;
++	INIT_WORK(&io->work, ps4crypt_read_work);
++
++	clone = bio_alloc_clone(pc->dev->bdev, bio, GFP_NOIO, &pc->bs);
++	if (!clone)
++		return DM_MAPIO_KILL;
++	clone->bi_iter.bi_sector = pc->start + io->offset;
++	clone->bi_private = io;
++	clone->bi_end_io = ps4crypt_read_endio;
++	submit_bio_noacct(clone);
++	return DM_MAPIO_SUBMITTED;
++}
++
++static void ps4crypt_status(struct dm_target *ti, status_type_t type,
++			    unsigned int status_flags, char *result,
++			    unsigned int maxlen)
++{
++	struct ps4crypt_c *pc = ti->private;
++	unsigned int sz = 0;
++
++	switch (type) {
++	case STATUSTYPE_INFO:
++		result[0] = '\0';
++		break;
++	case STATUSTYPE_TABLE:
++		DMEMIT("- %s %llu %llu", pc->dev->name,
++		       (unsigned long long)pc->start, pc->iv_offset);
++		break;
++	case STATUSTYPE_IMA:
++		result[0] = '\0';
++		break;
++	}
++}
++
++static int ps4crypt_iterate_devices(struct dm_target *ti,
++				    iterate_devices_callout_fn fn, void *data)
++{
++	struct ps4crypt_c *pc = ti->private;
++
++	return fn(ti, pc->dev, pc->start, ti->len, data);
++}
++
++static struct target_type ps4crypt_target = {
++	.name = "ps4crypt",
++	.version = { 1, 0, 0 },
++	.module = THIS_MODULE,
++	.ctr = ps4crypt_ctr,
++	.dtr = ps4crypt_dtr,
++	.map = ps4crypt_map,
++	.status = ps4crypt_status,
++	.iterate_devices = ps4crypt_iterate_devices,
++};
++
++static ssize_t eap_hdd_key_read(struct file *file, struct kobject *kobj,
++				const struct bin_attribute *attr, char *buf,
++				loff_t off, size_t count)
++{
++	return memory_read_from_buffer(buf, count, &off, ps4_eap_key,
++				       PS4_EAP_KEY_SIZE);
++}
++
++static const BIN_ATTR_ADMIN_RO(eap_hdd_key, PS4_EAP_KEY_SIZE);
++
++static void ps4_ccp_load_eap_key(void)
++{
++	void *data = NULL;
++	size_t size;
++	ssize_t ret;
++
++	wait_for_initramfs();
++	ret = kernel_read_file_from_path(PS4_EAP_KEY_PATH, 0, &data,
++					 PS4_EAP_KEY_SIZE, &size,
++					 READING_UNKNOWN);
++	if (ret != PS4_EAP_KEY_SIZE) {
++		pr_info("no eap hdd key from the loader (%zd)\n", ret);
++		vfree(data);
++		return;
++	}
++	memcpy(ps4_eap_key, data, PS4_EAP_KEY_SIZE);
++	memzero_explicit(data, PS4_EAP_KEY_SIZE);
++	vfree(data);
++
++	ps4_fw_kobj = kobject_create_and_add("ps4", firmware_kobj);
++	if (!ps4_fw_kobj || sysfs_create_bin_file(ps4_fw_kobj, &bin_attr_eap_hdd_key)) {
++		pr_err("could not create /sys/firmware/ps4/eap_hdd_key\n");
++		return;
++	}
++	pr_info("eap hdd key from the loader at /sys/firmware/ps4/eap_hdd_key\n");
++}
++
++static int __init ps4_ccp_init(void)
++{
++	int ret;
++
++	ps4_ccp_load_eap_key();
++
++	ret = ps4_ccp_selftest();
++	if (ret) {
++		pr_err("xts self test failed: %d\n", ret);
++		return ret;
++	}
++
++	ps4_ccp_batch_max = SZ_1M / PS4_CCP_SECTOR;
++	ps4_ccp_batch = kcalloc(ps4_ccp_batch_max, sizeof(*ps4_ccp_batch),
++				GFP_KERNEL);
++	ps4_ccp_wq = alloc_ordered_workqueue("ps4-ccp", WQ_MEM_RECLAIM);
++	if (!ps4_ccp_batch || !ps4_ccp_wq) {
++		kfree(ps4_ccp_batch);
++		if (ps4_ccp_wq)
++			destroy_workqueue(ps4_ccp_wq);
++		return -ENOMEM;
++	}
++	INIT_WORK(&ps4_ccp_work, ps4_ccp_worker);
++
++	ret = crypto_register_skcipher(&ps4_ccp_alg);
++	if (ret) {
++		pr_err("crypto_register_skcipher failed: %d\n", ret);
++		return ret;
++	}
++	pr_info("xts self test passed, registered xts-aes-ps4ccp\n");
++
++	ret = dm_register_target(&ps4crypt_target);
++	if (ret)
++		pr_err("dm target ps4crypt failed: %d\n", ret);
++	else
++		pr_info("registered dm target ps4crypt\n");
++	return 0;
++}
++late_initcall(ps4_ccp_init);
++
++MODULE_AUTHOR("Armandas Kvietkus <armandas.kvietkus@proton.me>");
++MODULE_DESCRIPTION("PS4 SAMU CCP XTS-AES driver");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/ps4/ps4-trng.c b/drivers/ps4/ps4-trng.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..91a1548198504a38110397aba9e78f0d09372543
+--- /dev/null
++++ b/drivers/ps4/ps4-trng.c
+@@ -0,0 +1,49 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#define pr_fmt(fmt) "ps4-trng: " fmt
++
++#include <linux/hw_random.h>
++#include <linux/init.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <asm/ps4.h>
++
++#define PS4_TRNG_CHUNK	16
++
++static int ps4_trng_read(struct hwrng *rng, void *data, size_t max, bool wait)
++{
++	size_t len = min_t(size_t, max, PS4_TRNG_CHUNK);
++	int ret;
++
++	ret = ps4_samu_rng(data, len);
++	return ret ? ret : len;
++}
++
++static struct hwrng ps4_trng = {
++	.name = "ps4-trng",
++	.read = ps4_trng_read,
++	.quality = 900,
++};
++
++static int __init ps4_trng_init(void)
++{
++	u8 probe[PS4_TRNG_CHUNK];
++	int ret;
++
++	ret = ps4_samu_rng(probe, sizeof(probe));
++	if (ret) {
++		pr_err("samu rng request failed: %d\n", ret);
++		return ret;
++	}
++
++	ret = hwrng_register(&ps4_trng);
++	if (ret)
++		pr_err("hwrng_register failed: %d\n", ret);
++	else
++		pr_info("registered with the hwrng core\n");
++	return ret;
++}
++late_initcall(ps4_trng_init);
++
++MODULE_AUTHOR("Armandas Kvietkus <armandas.kvietkus@proton.me>");
++MODULE_DESCRIPTION("PS4 SAMU hardware random number generator");
++MODULE_LICENSE("GPL");

@@ -1,0 +1,2655 @@
+From 83d76921e347fdd1eb6c1a52dd41f43acc5a375c Mon Sep 17 00:00:00 2001
+From: feeRnt <81442162+feeRnt@users.noreply.github.com>
+Date: Wed, 11 Mar 2026 16:30:36 +0000
+Subject: [PATCH 012/124] build: merge clang lto ci, update the config and
+ unify the dockerfile
+
+Signed-off-by: feeRnt <81442162+feeRnt@users.noreply.github.com>
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ .github/workflows/build-kernel_latest.yaml    | 108 +++-
+ .../build-kernel_latest_clang_fullLTO.yaml    | 557 +++++++++++++++++
+ .../build-kernel_latest_clang_thinLTO.yaml    | 559 ++++++++++++++++++
+ .../build-kernel_latest_ignore_errors.yaml    |  16 +-
+ Dockerfile                                    |  24 +-
+ README                                        | 168 ------
+ README.md                                     | 226 ++++++-
+ arch/x86/include/asm/ps4.h                    |   6 +-
+ config                                        | 216 +++++--
+ drivers/ps4/icc/i2c.c                         |   5 +
+ drivers/ps4/ps4-apcie-icc.c                   |  13 +-
+ drivers/ps4/ps4-apcie-pwrbutton.c             |   6 +
+ drivers/ps4/ps4-apcie-uart.c                  |   4 +
+ drivers/ps4/ps4-apcie.c                       |  22 +-
+ extra_firmware/.gitignore                     |   2 +
+ 15 files changed, 1648 insertions(+), 284 deletions(-)
+ create mode 100644 .github/workflows/build-kernel_latest_clang_fullLTO.yaml
+ create mode 100644 .github/workflows/build-kernel_latest_clang_thinLTO.yaml
+ delete mode 100644 README
+ create mode 100644 extra_firmware/.gitignore
+
+diff --git a/.github/workflows/build-kernel_latest.yaml b/.github/workflows/build-kernel_latest.yaml
+index c89048bd1a266bd2d441b42210e8de08246d9235..1ac700e41d7fe058b7627c5cabe96931ae014987 100644
+--- a/.github/workflows/build-kernel_latest.yaml
++++ b/.github/workflows/build-kernel_latest.yaml
+@@ -14,7 +14,7 @@ jobs:
+   build:
+     env: 
+        GITHUB_TOKEN: ${{ github.token }}
+-    runs-on: ubuntu-latest # Ubuntu 24.04. But Docker image I use is Ubuntu 22.04 
++    runs-on: ubuntu-latest # Ubuntu 24.04. Docker Image is the same ver. now
+     steps: 
+       - name: Set up cache env vars
+         id: cache-workspace-vars
+@@ -73,6 +73,18 @@ jobs:
+           #Which is set in the buildx build launch parameters
+ 
+           key: ${{ runner.os }}-docker-${{ hashFiles('**/Dockerfile') }}  # Cache key
++          # IMPORTANT: Preventing duplicate Docker caches.
++
++          # GH Caches are only visible between parent->child, main->any branches.
++          # This means if you make a Docker cache in a random branch, it will not be usable
++          # outside of that branch, unless the outside is an offspring.
++          # Child->parent caches are not shared, neither are sibling->sibling branch caches.
++          # https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache
++
++          # So make sure to have your Dockerfile's image run & cached through your main branch, and that it does not
++          # vary across branches. Even if you need different Docker Image versions for older build-tools, get the highest
++          # img version and download your backdated tools in Docker, and select which version to use during .yaml build.
++
+           restore-keys: |
+             ${{ runner.os }}-docker-
+       
+@@ -89,7 +101,8 @@ jobs:
+         with:
+           path: ${{ github.workspace }}/kernel-source-host
+           #key:  ${{ env.cache-workspace-restore-key }}
+-          key: ${{ env.CACHE_WORKSPACE_RESTORE_KEY }}
++          key: ${{ env.CACHE_WORKSPACE_RESTORE_KEY }}-GCC-11
++          # Use 1 key per LTO-ness. They're only about ~500-800 MB, and without this concurrent builds get confused
+       
+       - name: Check and make kernel-source-host directory
+         run: | 
+@@ -286,6 +299,26 @@ jobs:
+           # line: capture group that gives the line number, column: capture group for column number
+           # severity: capture group that states if error or warning, message: capture group that has problem msg
+ 
++      #- name: Set up Swapfile in workspace outside Docker
++      #  id: setup-workspace-swap
++      #  run: |
++      #    echo "Creating and activating swapfile."
++      #    fallocate -l 8G ${{ github.workspace }}/swapfile
++      #    chmod 600 ${{ github.workspace }}/swapfile
++      #    mkswap ${{ github.workspace }}/swapfile
++      #    swapon ${{ github.workspace }}/swapfile
++      #    echo "Current system memory after activating swap: "
++      #    free -h
++      #
++      #    This gives::: swapon: /home/runner/work/ps4-linux-12xx/ps4-linux-12xx/swapfile:
++      #    swapon failed: Operation not permitted
++
++      - name: Set up Swapfile with Marketplace Actions
++        uses: pierotofy/set-swap-space@fc79b3f67fa8a838184ce84a674ca12238d2c761
++        with:
++          swap-size-gb: 12
++          # Tried 10 G, didn't work for full LTO
++
+       - name: Compile the linux kernel with docker run
+         id: compile-kernel-step
+         run: |
+@@ -304,8 +337,11 @@ jobs:
+           set -e
+           echo "Testing if host directory mounting was successful."
+           ls -a .
+-          
+-          if [ -f persistence_test* ]; then
++
++          for _pers_files in persistence_test*; do
++            [ -f "$_pers_files" ] && _persisted=1 && break
++          done
++          if [ "$_persisted" = 1 ]; then
+             echo "Files are persisting across runs! Congratulations."
+           else
+             echo "Files are not persisting across runs, OR, this is the first uncached action run."
+@@ -317,6 +353,19 @@ jobs:
+           echo "files available after test..."
+           ls -a
+ 
++          # copy extra firmware to /lib/firmware
++
++          echo "Extra firmware copy part"
++
++          if [ -d extra_firmware ]; then
++            if [ ! -z "$( ls -A 'extra_firmware/')" ]; then
++              echo "Copying extra firmware to /lib/firmware"
++              cp -r extra_firmware/* /lib/firmware
++            fi
++          fi
++          echo "Extra firmware available:"
++          find /lib/firmware
++
+           export localversion=`cat .config | grep CONFIG_LOCALVERSION= | sed -nE 's|^.*="-||p' | tr -d '"'`
+           # Removes everything up to =, and then the '"' and '-' 
+           # Using uppercase localversion will mess with your final kernel img version.
+@@ -331,18 +380,45 @@ jobs:
+           export GCE_PKG_DIR=${PWD}/gce/${localversion}/pkg
+           export GCE_INSTALL_DIR=${PWD}/gce/${localversion}/install
+           export GCE_BUILD_DIR=${PWD}/gce/${localversion}/build
+-          export KERNEL_PKG=kernel-${localversion}.tar.gz
++          export KERNEL_PKG=kernel-${localversion}_GCC-11.tar.gz
++
++          export KCFLAGS="-march=btver2 -mtune=btver2 -O3"
++          export KAFLAGS="-march=btver2 -mtune=btver2 -O3"
++          export KCPPFLAGS="-march=btver2 -mtune=btver2 -O3"
++          # I tried to include them in MAKE_OPTS in every sane way, but it doesn't
++          # work. It's redundant to specify them in every command (seemingly)
++
++          # march and mtune optimize the the build instructions
++          # march = oldest architecture on which this code can run
++          # mtune = compiler hint for which architecture the instructions should be
++          # optimized for. The PS4 CPU architecture was based on btver2,
++          # also known as the AMD Jaguar architecture
++
++          # We don't know if -O3 will help, but really anything will help
++          # considering our target hardware was aging when it was new
++
+           export MAKE_OPTS="-j`nproc` \
+                      INSTALL_PATH=${GCE_INSTALL_DIR}/boot \
+                      INSTALL_MOD_PATH=${GCE_INSTALL_DIR} \
+                      HOSTCC=gcc-11 \
+                      CC=gcc-11"
++
+           mkdir -p ${GCE_BUILD_DIR}
+           mkdir -p ${GCE_INSTALL_DIR}/boot
+           mkdir -p ${GCE_PKG_DIR}
+           echo "Debugging gce directory."
+           find ${GCE_BUILD_DIR} ${GCE_INSTALL_DIR}/boot ${GCE_PKG_DIR}
+ 
++          echo -e "\n\n\n Current system resources inside of Docker : : :"
++          echo "CPU cores: `nproc`"
++          echo "RAM: `free -h`"
++          echo "Disk: `df -h`"
++          echo "CPU info: `lscpu | grep 'Model name'`"
++
++          # Disable LTO from the config (this is redundant with GCC)
++          scripts/config --disable CONFIG_LTO_CLANG_FULL
++          scripts/config --enable CONFIG_LTO_NONE
++
+           make ${MAKE_OPTS} olddefconfig
+           make ${MAKE_OPTS} prepare
+           echo "Making kernel. . ."
+@@ -355,8 +431,10 @@ jobs:
+           make ${MAKE_OPTS} modules_install
+           echo "Copying bzImage to $GCE_INSTALL_DIR/boot. . ."
+           cp arch/x86/boot/bzImage "$GCE_INSTALL_DIR/boot/"
++          echo "Copying used .config to $GCE_INSTALL_DIR/.config. . ."
++          cp .config "$GCE_INSTALL_DIR/.config"
+           cd ${GCE_INSTALL_DIR}
+-          tar -cvzf /container/workspace/kernel-source-container/kernel_"$localversion".tar.gz boot/bzImage lib/modules/* --owner=0 --group=0
++          tar -cvzf /container/workspace/kernel-source-container/kernel_"$localversion"_GCC-11.tar.gz boot/bzImage lib/modules/* .config --owner=0 --group=0
+           # I assume it'll never package the kernel, unless the compile succeeds, since -e is set
+ 
+           ## GCE = Google Compute Engine, adapted from 
+@@ -364,6 +442,13 @@ jobs:
+           EOF
+           
+           # Now in runner.
++
++          echo -e "\n\n\n Current system resources outside of Docker : : :"
++          echo "CPU cores: `nproc`"
++          echo "RAM: `free -h`"
++          echo "Disk: `df -h`"
++          echo "CPU info: `lscpu | grep 'Model name'`"
++
+           cd ${{ github.workspace }}/kernel-source-host 
+           echo "Available files in runner after docker compile..."
+           ls -la
+@@ -387,11 +472,12 @@ jobs:
+           echo "localversion=$localversion" >> $GITHUB_OUTPUT
+ 
+       - name: Upload kernel image to github actions artifacts
+-        uses: actions/upload-artifact@v4
++        uses: actions/upload-artifact@v7
+         with:
+-          name: kernel_${{ steps.kernel-version-env.outputs.localversion }}
+-          path: ${{ github.workspace }}/kernel-source-host/kernel_${{ steps.kernel-version-env.outputs.localversion }}.tar.gz
+-          # This path is the github actiions root
++          name: kernel_${{ steps.kernel-version-env.outputs.localversion }}_GCC-11
++          path: ${{ github.workspace }}/kernel-source-host/kernel_${{ steps.kernel-version-env.outputs.localversion }}_GCC-11.tar.gz
++          # This path is the github actions root
++          archive: false
+ 
+       # - name: Delete the kernel image artifact from workspace
+       #  run: |
+@@ -417,6 +503,8 @@ jobs:
+           echo "There was a cache hit for github workspace, and we just completed the kernel compilation. Hence deleting the old cache."
+           gh cache delete --repo ${{ github.repository }} ${{ steps.cache-restore-workspace.outputs.cache-primary-key }}
+ 
++      #- Delete swap file is not necessary, as we never include it in our cache path.
++
+       - name: Save Cache of Github Workspace
+         uses: actions/cache/save@v4
+         # Save the cache even if build steps fail.
+diff --git a/.github/workflows/build-kernel_latest_clang_fullLTO.yaml b/.github/workflows/build-kernel_latest_clang_fullLTO.yaml
+new file mode 100644
+index 0000000000000000000000000000000000000000..db7307e7ac070390a8d054f5a5dae41fc7a60780
+--- /dev/null
++++ b/.github/workflows/build-kernel_latest_clang_fullLTO.yaml
+@@ -0,0 +1,557 @@
++## This is a basic workflow to help you get started with Actions 
++## Adapted from https://moebuta.org/posts/using-github-actions-to-build-linux-kernels/
++
++name: "Compile PS4-Linux Kernel-12xx; Clang Full LTO Version: Latest"
++
++# Controls when the workflow will run
++on:
++  # Allows you to run this workflow manually from the Github Actions tab
++  workflow_dispatch:
++  push: # Prefer triggering manually for now
++    tags:
++      - 'v*' # Will build on any tag that starts with v: v5.15.15, etc.
++
++# A workflow run is made up of one or more jobs that can run sequentially or in parallel
++jobs:
++  build:
++    env: 
++       GITHUB_TOKEN: ${{ github.token }}
++    runs-on: ubuntu-latest # Ubuntu 24.04. Docker Image is the same ver. now
++    steps: 
++      - name: Set up cache env vars
++        id: cache-workspace-vars
++        run: |
++          echo "List of files in workdir, right after Github build job start:"
++          ls -a
++          echo "CACHE_WORKSPACE_KEY=${{ runner.os }}-workspace-${{ github.run_id }}" >> $GITHUB_ENV
++          #echo "CACHE_WORKSPACE_RESTORE_KEY=${{ runner.os }}-workspace-" >> $GITHUB_ENV
++          echo "github.ref_name in cache-workspace-vars = ${{ github.ref_name }}" 
++          echo "CACHE_WORKSPACE_RESTORE_KEY=${{ runner.os }}-workspace-${{ github.ref_name }}" >> $GITHUB_ENV
++          #Better handles multi-branch caching
++          #Use $CACHE_WORKSPACE_RESTORE_KEY in your other steps. 
++
++      #Based on:
++      #https://github.com/actions/toolkit/issues/946#issuecomment-1590016041
++      #https://github.com/actions/toolkit/issues/946#issuecomment-1726311681
++      - name: Set SUID to tar binary #Allows saving (and recovering)? cache of restricted files
++        run: sudo chown root /bin/tar && sudo chmod u+s /bin/tar
++        #SUID allows the bin to be ran as the user who owns the file, instead of the default: the uid of the caller
++      
++      #  Technically unnnecessary now since we do the checkout into workspace anyway. Would have to move
++      #  dockerx build after cache-workspace-restore step
++      - name: Download Dockerfile
++        run: |
++         curl -fL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/Dockerfile -o Dockerfile
++         curl -fL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/.dockerignore -o .dockerignore
++         # -verbose, -fail if server error, -Links follow,
++
++      - name: Show username and group info
++        run: |
++          echo "Actions Runner Username: $(whoami)"
++          echo "Actions Runner User ID: $(id -u)"
++          echo "Actions Runner Group Name: $(id -gn)"
++          echo "Actions Runner Group ID: $(id -g)"
++          echo "Actions Runner OS: ${{ runner.os }}"
++          #echo "Actions github_token:" #Don't print this, unsafe. (though it might be starred out in logs, but still.) 
++      
++      - name: Set up Docker Buildx
++        uses: docker/setup-buildx-action@v3
++      # this needs to be done before using docker buildx.
++      # this doesn't need to be done before the caching part, but doing it anyway.
++      # Downloading the cache can either happen before or after.
++
++
++      # TODO: Either manually restore, delete, save dockerx caches like we did with the workspace cache
++      # OR
++      # Pin a specific Docker Base OS Image Digest, so that the caches are never invalidated.
++
++      # Retrieve Cache-d Docker layers, and Save cache after job completion
++      - name: Cache Docker Layers
++        uses: actions/cache@v3
++        with:
++          path: |
++            /tmp/.buildx-cache 
++          #The location where Docker will save and read cache layers (on the host)
++          #Which is set in the buildx build launch parameters
++
++          key: ${{ runner.os }}-docker-${{ hashFiles('**/Dockerfile') }}  # Cache key
++          # IMPORTANT: Preventing duplicate Docker caches.
++
++          # GH Caches are only visible between parent->child, main->any branches.
++          # This means if you make a Docker cache in a random branch, it will not be usable
++          # outside of that branch, unless the outside is an offspring.
++          # Child->parent caches are not shared, neither are sibling->sibling branch caches.
++          # https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache
++
++          # So make sure to have your Dockerfile's image run & cached through your main branch, and that it does not
++          # vary across branches. Even if you need different Docker Image versions for older build-tools, get the highest
++          # img version and download your backdated tools in Docker, and select which version to use during .yaml build.
++
++          restore-keys: |
++            ${{ runner.os }}-docker-
++      
++      # Proper cache handling and overwriting; for build artifacts. Based on:
++      #1: https://github.com/actions/cache/issues/342#issuecomment-1363953531 (original. ulterzlw)
++      #2: https://github.com/actions/cache/issues/342#issuecomment-1711054115 (azu)
++      #3: https://github.com/actions/cache/issues/342#issuecomment-2773231159 (langston-barett, Apr '25)
++      - name: Restore Cache of Github Workspace
++        uses: actions/cache/restore@v4 #uses is actually a macro for a github repo that you will use.
++        id: cache-restore-workspace
++        #env:
++        #  cache-workspace-restore-key: $CACHE_WORKSPACE_RESTORE_KEY
++        # Doesn't work, takes $expr literally without expansion
++        with:
++          path: ${{ github.workspace }}/kernel-source-host
++          #key:  ${{ env.cache-workspace-restore-key }}
++          key: ${{ env.CACHE_WORKSPACE_RESTORE_KEY }}-fullLTO
++          # Use 1 key per LTO-ness. They're only about ~500-800 MB, and without this concurrent builds get confused
++
++      - name: Check and make kernel-source-host directory
++        run: | 
++          cd ${{ github.workspace }}
++          if [ -d kernel-source-host ]; then
++            echo "Build directory already exists! Continuing."
++          else
++            mkdir kernel-source-host
++          fi
++
++      - name: Check if repo was previously cloned
++        id: check_repo
++        run: |
++          cd ${{ github.workspace }}/kernel-source-host
++          if [ -d .git ]; then
++            echo "exists=true" >> $GITHUB_OUTPUT
++            echo ".git directory exists. Setting exists=true."
++          else
++            echo "exists=false" >> $GITHUB_OUTPUT
++            echo ".git directory doesn't exist. Setting exists=false" 
++          fi
++
++        # the default pwd in github actions is /home/runner/work/repo/repo (even before checkout of
++        # your repo). SO mind the paths
++        # It's a variable, and it is your default shell path. But it is empty unless you check
++        # it out.
++        # The .github files don't exist there either. They are loaded into memory from the repo.
++        # Unless you checkout, then they are acquired obviously.
++
++      - name: Checkout ps4-linux-12xx repo
++        if: steps.check_repo.outputs.exists == 'false'
++        uses: actions/checkout@v4
++        with:
++          fetch-depth: 1
++          #repository: feeRnt/ps4-linux-12xx
++          path: ${{ github.workspace }}/kernel-source-host
++          ref: ${{ github.ref }}
++          #repository: is optional. Default is the repo that triggered the event
++          #path is path at which we want to check it out
++          #ref = default branch, for us (caller).
++
++      - name: Move config file
++        if: steps.check_repo.outputs.exists == 'false'
++        working-directory: ${{ github.workspace }}/kernel-source-host
++        run: |
++          echo "git remote show origin = $(git remote show origin)"
++          _DEFAULT_BRANCH=$(git remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}')
++          echo "_DEFAULT_BRANCH = $_DEFAULT_BRANCH"
++          echo _DEFAULT_BRANCH="$_DEFAULT_BRANCH" >> $GITHUB_ENV
++          mv config .config
++          # config will exist if we checkout. so no need to use -f check
++
++
++      # TRUE::
++      #MANUAL TESTING
++      #- name: Manually set up cached repo/.git as a safe directory for git actions
++      #  if: steps.check_repo.outputs.exists == 'true' && steps.cache-restore-workspace.outputs.cache-hit == 'true'
++      #  run: /usr/bin/git config --global --add safe.directory /home/runner/work/ps4-linux-12xx/ps4-linux-12xx/kernel-source-host 
++      
++      #- name: Set up Github auth manually
++      #  if: steps.check_repo.outputs.exists == 'true' && steps.cache-restore-workspace.outputs.cache-hit == 'true'
++      #  working-directory: ${{ github.workspace }}/kernel-source-host
++      #  run: |
++      #    echo "Setting up auth"
++      #    # /usr/bin/git config --local --name-only --get-regexp core\.sshCommand
++      #    # Not needed
++      #    /usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
++      #    # clears all the core.sshCommand configs
++      #    
++      #    # /usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
++      #    # Not needed
++      #    
++      #    #/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
++      #    # Clears al the http.https://github.com/.extraheader configs
++      #    
++      #    #/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
++      #    # Sets up authorization using a secret. Command is obfuscated in github logs.
++      #    Maybe it's possible to figure out how the key is calucalted from 
++      #    https://github.com/actions/checkout/blob/09d2acae674a48949e3602304ab46fd20ae0c42f/dist/index.js#L5102
++      #    etc. but it's too complicated and a waste of time for now.
++      #    I'll use the checkout action with different options.
++      #    Huh according to copilot (keep getting surprised about how it seems pretty smart)
++      #
++      #    - name: Set up git authentication for cached repo
++      #      if: steps.check_repo.outputs.exists == 'true' && steps.cache-restore-workspace.outputs.cache-hit == 'true'
++      #      working-directory: ${{ github.workspace }}/kernel-source-host
++      #      run: |
++      #      git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $(echo -n x-access-token:${{ secrets.GITHUB_TOKEN }} | base64)"
++      #      I can try this next too if really needed...
++
++      - name: Update ps4-linux-12xx repo if it exists
++        if: steps.check_repo.outputs.exists == 'true'
++        #working-directory: ${{ github.workspace }}/kernel-source-host
++        #OLD VERSION WITHOUT CHECKOUT
++        #run: |
++        #  echo "git remote show origin = $(git remote show origin)"
++        #  _DEFAULT_BRANCH=$(git remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}')
++        #  echo "_DEFAULT_BRANCH = $_DEFAULT_BRANCH"
++        #  echo _DEFAULT_BRANCH="$_DEFAULT_BRANCH" >> $GITHUB_ENV
++
++        #  echo "Total commits in this repo:"
++        #  git rev-list --all --count
++        #  echo "Branches in this repo:"
++        #  git branch
++        #  echo "github.ref is = ${{ github.ref }}."
++        #  echo "git remote information:"
++        #  git remote -v
++
++        #  echo "Files in repo before fetch:"
++        #  ls -a
++        #
++        #  git fetch --depth=1 origin "$_DEFAULT_BRANCH"
++        #  git reset --hard origin/"$_DEFAULT_BRANCH"
++        #  if [ -f config ]; then
++        #    echo "Renaming config to .config"
++        #    mv config .config
++        #  else
++        #    echo ".config already exists. Continuing."
++        #  # for reruns without updating the repo
++        #  fi;
++        uses: actions/checkout@v4
++        with:
++          path: ${{ github.workspace }}/kernel-source-host
++          repository: ${{ github.repository }} #default
++          ref: ${{ github.ref }}
++          fetch-depth: 1
++          token: ${{ github.token }} #default
++          persist-credentials: false #non-default
++          #'Whether to configure the token or SSH key with the local git config'
++          #https://github.com/actions/checkout/issues/485 (might be best to keep false)
++          clean: false #non-default
++          #'Whether to execute `git clean -ffdx && git reset --hard HEAD` before fetching'
++          #This is what resets your cache. clean removes untracked files, -ffdx ensures full clean.
++
++          # Checkout should only touch tracked files
++          # List of options from
++          # https://github.com/actions/checkout/blob/main/action.yml
++
++          # Works all well except,  
++          #   Warning: you are leaving 1 commit behind, not connected to
++          # any of your branches:
++          # <hash> <commit message>
++          # If you want to keep it by creating a new branch, this may be a good time
++          #to do so with:
++          # git branch <new-branch-name> <hash>
++          # And garbage collector is disabled by checkout by default.. 
++          # 
++          #Disabling automatic garbage collection
++          #/usr/bin/git config --local gc.auto 0
++          #
++          #Can disable it manually, or can switch to git fetch with manual auth at a later date (because of
++          #headaches with action/checkout
++
++      - name: Move config file after repo update
++        if: steps.check_repo.outputs.exists == 'true'
++        working-directory: ${{ github.workspace }}/kernel-source-host
++        run: |
++          echo "git remote show origin = $(git remote show origin)"
++          _DEFAULT_BRANCH=$(git remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}')
++          echo "_DEFAULT_BRANCH = $_DEFAULT_BRANCH"
++          echo _DEFAULT_BRANCH="$_DEFAULT_BRANCH" >> $GITHUB_ENV
++          mv config .config
++          # config will exist if we checkout. so no need to use -f check 
++      
++      - name: Move .github directory to workspace
++        run: mv ${{ github.workspace }}/kernel-source-host/.github ${{ github.workspace }}/.github
++        # Needed for simplified problem-matching, future rules, etc.
++      
++      # Build Docker image  
++      - name: Build Docker image with cache
++        run: |
++          echo "Current pwd = $PWD in docker image build"
++          mkdir -p /tmp/.buildx-cache
++          docker buildx build \
++            --cache-from type=local,src=/tmp/.buildx-cache \
++            --cache-to type=local,dest=/tmp/.buildx-cache,mode=max \
++            --build-arg BUILDKIT_INLINE_CACHE=1 \
++            --tag kernel-linux-ps4:latest \
++            --load \
++            .
++      # This /tmp is not gonna be made if the directory doesn't exist already
++      # --load loads the contents the image into the workspace OS, otherwise only in cache
++      # --cache-to type=local caches straight to the host machine, meaning github workspace
++      #
++      # build-context workspace=./ results in /home/runner/work/repo/repo by default
++   
++      # Based on:
++      # https://lca-kernel.ozlabs.org/2022-Currey-Abusing-GitHub-Actions-for-building-and-testing-kernels.pdf
++      - name: Setup compile error problem-matching for kernel compilation
++        run: |
++          echo "::add-matcher::.github/problem-matchers/kernel-compile-errors.json"
++          # Fields and their meaning:
++          # regex: regex to match annotation, file: capture group that has file name
++          # line: capture group that gives the line number, column: capture group for column number
++          # severity: capture group that states if error or warning, message: capture group that has problem msg
++      
++      #- name: Set up Swapfile in workspace outside Docker
++      #  id: setup-workspace-swap
++      #  run: |
++      #    echo "Creating and activating swapfile."
++      #    fallocate -l 8G ${{ github.workspace }}/swapfile
++      #    chmod 600 ${{ github.workspace }}/swapfile
++      #    mkswap ${{ github.workspace }}/swapfile
++      #    swapon ${{ github.workspace }}/swapfile
++      #    echo "Current system memory after activating swap: "
++      #    free -h
++      #
++      #    This gives::: swapon: /home/runner/work/ps4-linux-12xx/ps4-linux-12xx/swapfile: 
++      #    swapon failed: Operation not permitted
++
++      - name: Set up Swapfile with Marketplace Actions
++        uses: pierotofy/set-swap-space@fc79b3f67fa8a838184ce84a674ca12238d2c761
++        with:
++          swap-size-gb: 12
++          # Tried 10 G, didn't work for full LTO
++
++      - name: Compile the linux kernel with docker run
++        id: compile-kernel-step
++        run: |
++          set +e
++          #temporarily disable exit on fail for the bash run (doesn't apply to the set -e inside the docker run)
++
++          docker run -i --name kernel -d -v ${{ github.workspace }}/kernel-source-host:/container/workspace/kernel-source-container \
++          -w /container/workspace/kernel-source-container kernel-linux-ps4:latest tail -f /dev/null
++          # -v is volume, # -w is workdir (WORKDIR)
++          # -d is detached. Is useful for when you are starting the initial docker image and you don't need its output.
++          # -i keeps stdin of container open, for piping commands
++
++          echo "Made it past running docker run -it. Will docker exec bash now."
++          
++          docker exec -i kernel bash <<'EOF' 
++          set -e
++          echo "Testing if host directory mounting was successful."
++          ls -a .
++          
++          for _pers_files in persistence_test*; do
++            [ -f "$_pers_files" ] && _persisted=1 && break
++          done
++          if [ "$_persisted" = 1 ]; then
++            echo "Files are persisting across runs! Congratulations."
++          else
++            echo "Files are not persisting across runs, OR, this is the first uncached action run."
++          fi;
++
++          echo "Doing persistence tests!"
++          touch "write_test"
++          echo "persisting! $(date --iso=s)" > persistence_test_"$(date --iso=s)".txt: 
++          echo "files available after test..."
++          ls -a
++
++          # copy extra firmware to /lib/firmware
++
++          echo "Extra firmware copy part"
++
++          if [ -d extra_firmware ]; then
++            if [ ! -z "$( ls -A 'extra_firmware/')" ]; then
++              echo "Copying extra firmware to /lib/firmware"
++              cp -r extra_firmware/* /lib/firmware
++            fi
++          fi
++          echo "Extra firmware available:"
++          find /lib/firmware
++
++          export localversion=`cat .config | grep CONFIG_LOCALVERSION= | sed -nE 's|^.*="-||p' | tr -d '"'`
++          # Removes everything up to =, and then the '"' and '-' 
++          # Using uppercase localversion will mess with your final kernel img version.
++          
++          # if empty...
++          #if [ -z "$localversion" ]; then
++          #  sed -iE 's|^CONFIG_LOCALVERSION=".*|CONFIG_LOCALVERSION="-'$(date +%Y_%m_%d_%H%M)'"|' .config
++          #  export localversion=`cat .config | grep CONFIG_LOCALVERSION= | sed -nE 's|^.*="-||p' | tr -d '"'`
++          #fi;
++          #Removed for now; directly fixed the case where GH wouldn't upload artifact because of missing localversion variable.
++
++          export GCE_PKG_DIR=${PWD}/gce/${localversion}/pkg
++          export GCE_INSTALL_DIR=${PWD}/gce/${localversion}/install
++          export GCE_BUILD_DIR=${PWD}/gce/${localversion}/build
++          export KERNEL_PKG=kernel-${localversion}_Clang_fullLTO.tar.gz
++
++          export KCFLAGS="-march=btver2 -mtune=btver2 -O3"
++          export KAFLAGS="-march=btver2 -mtune=btver2 -O3"
++          export KCPPFLAGS="-march=btver2 -mtune=btver2 -O3"
++          # I tried to include them in MAKE_OPTS in every sane way, but it doesn't
++          # work. It's redundant to specify them in every command (seemingly)
++
++          # march and mtune optimize the the build instructions
++          # march = oldest architecture on which this code can run
++          # mtune = compiler hint for which architecture the instructions should be
++          # optimized for. The PS4 CPU architecture was based on btver2,
++          # also known as the AMD Jaguar architecture
++
++          # We don't know if -O3 will help, but really anything will help
++          # considering our target hardware was aging when it was new
++
++          export MAKE_OPTS="-j`nproc --ignore=1` \
++                     INSTALL_PATH=${GCE_INSTALL_DIR}/boot \
++                     INSTALL_MOD_PATH=${GCE_INSTALL_DIR} \
++                     LLVM=1"
++                     # Macro for all the LLVM specific switches. 1 = whatever LLVM present
++                     # Otherwise you may specify the major version (e.g. LLVM=-14) of the LLVM installation
++                     # We ignore 1 core because full LTO runs OOM, even with 10 G swap (would be 3/4 cores)
++
++          mkdir -p ${GCE_BUILD_DIR}
++          mkdir -p ${GCE_INSTALL_DIR}/boot
++          mkdir -p ${GCE_PKG_DIR}
++          echo "Debugging gce directory."
++          find ${GCE_BUILD_DIR} ${GCE_INSTALL_DIR}/boot ${GCE_PKG_DIR}
++
++          echo -e "\n\n\n Current system resources inside of Docker : : :"
++          echo "CPU cores: `nproc`"
++          echo "RAM: `free -h`"
++          echo "Disk: `df -h`"
++          echo "CPU info: `lscpu | grep 'Model name'`"
++          #echo "System max memory: `cat /sys/fs/cgroup/memory.max`" ;; No such file or dir
++
++          # Enable Full LTO from the config (should be redundant as FullLTO is already set)
++          scripts/config --enable CONFIG_LTO_CLANG_FULL
++
++          make ${MAKE_OPTS} olddefconfig
++          make ${MAKE_OPTS} prepare
++          echo "Making kernel. . ."
++          make ${MAKE_OPTS}
++          echo "Making modules . . ."
++          make ${MAKE_OPTS} modules
++          echo "Installing kernel . . ."
++          make ${MAKE_OPTS} install
++          echo "Installing modules . . ."
++          make ${MAKE_OPTS} modules_install
++          echo "Copying bzImage to $GCE_INSTALL_DIR/boot. . ."
++          cp arch/x86/boot/bzImage "$GCE_INSTALL_DIR/boot/"
++          echo "Copying used .config to $GCE_INSTALL_DIR/.config. . ."
++          cp .config "$GCE_INSTALL_DIR/.config"
++          cd ${GCE_INSTALL_DIR}
++          tar -cvzf /container/workspace/kernel-source-container/kernel_"$localversion"_Clang_fullLTO.tar.gz boot/bzImage lib/modules/* .config --owner=0 --group=0
++          # I assume it'll never package the kernel, unless the compile succeeds, since -e is set
++
++          ## GCE = Google Compute Engine, adapted from 
++          #https://github.com/google/bbr/blob/v3/gce-install.sh
++          EOF
++          
++          # Now in runner.
++          
++          #echo "Were we killed by an out of memory DAeMON?"
++          #dmesg | grep -i -E 'killed process|out of memory' "dmesg: read kernel buffer failed: Operation not permitted"
++
++          echo -e "\n\n\n Current system resources outside of Docker : : :"
++          echo "CPU cores: `nproc`"
++          echo "RAM: `free -h`"
++          echo "Disk: `df -h`"
++          echo "CPU info: `lscpu | grep 'Model name'`"
++          #echo "System max memory: `cat /sys/fs/cgroup/memory.max`"
++
++          #echo -e "\n\n\n Here's our full dmesg: "
++          #dmesg "dmesg: read kernel buffer failed: Operation not permitted"
++        
++          cd ${{ github.workspace }}/kernel-source-host 
++          echo "Available files in runner after docker compile..."
++          ls -la
++          echo "compile-kernel-complete=true" >> $GITHUB_OUTPUT
++          #We just want to ensure that we reached the end of this stage before deleting the old cached rud run.
++          
++          set -e
++          # Reset exit on fail. Not needed but proof of concept
++
++      - name: Remove compile error problem-matching
++        run: echo "::remove-matcher owner=kernel-compile-docker::"
++
++
++
++      - name: Get kernel version name env
++        id: kernel-version-env
++        working-directory: ${{ github.workspace }}/kernel-source-host
++        run: |
++          localversion=`cat .config | grep LOCALVERSION | sed -nE 's|^.*="-||p' | tr -d '\"'`
++          echo "localversion is originally = $localversion"
++          echo "localversion=$localversion" >> $GITHUB_OUTPUT
++
++      - name: Upload kernel image to github actions artifacts
++        uses: actions/upload-artifact@v7
++        with:
++          name: kernel_${{ steps.kernel-version-env.outputs.localversion }}_Clang_fullLTO
++          path: ${{ github.workspace }}/kernel-source-host/kernel_${{ steps.kernel-version-env.outputs.localversion }}_Clang_fullLTO.tar.gz
++          # This path is the github actions root
++          archive: false
++
++      # - name: Delete the kernel image artifact from workspace
++      #  run: |
++      #   #if [ -n $(grep 10 ./build_counter) ]; ... then
++      #    # for file in ... <<< ls --sort time; do
++      #    #rm ${{ github.workspace }}/kernel_${{ steps.kernel-version-env.outputs.localversion }}.tar.gz
++      #    #done
++      #    #fi
++
++      - name: Testing Cache Hit Bools
++        run: |
++          echo "Current steps.cache-restore-workspace.outputs.cache-hit = ${{ steps.cache-restore-workspace.outputs.cache-hit }}"
++          echo "and"
++          echo "Current steps.compile-kernel-step.outputs.compile-kernel-complete = ${{ steps.compile-kernel-step.outputs.compile-kernel-complete }}"
++
++      #3: https://github.com/actions/cache/issues/342#issuecomment-2773231159 (langston-barett, Apr '25)
++      - name: Delete Cache of Github Workspace
++        env:
++          GH_TOKEN: ${{ github.token }}
++        if: steps.cache-restore-workspace.outputs.cache-hit && steps.compile-kernel-step.outputs.compile-kernel-complete
++        # Using `--repo` makes it so that this step doesn't require checking out the repo first.
++        run: |
++          echo "There was a cache hit for github workspace, and we just completed the kernel compilation. Hence deleting the old cache."
++          gh cache delete --repo ${{ github.repository }} ${{ steps.cache-restore-workspace.outputs.cache-primary-key }}
++
++      #- name: Delete swapfile
++      #  id: delete-workspace-swapfile
++      #  run: |
++      #    echo "Deleting old swap"
++      #    # swapoff /swapfile
++      #    # rm /swapfile
++      #    # Doesn't work either:: "swapoff: Not superuser."
++      #    #
++      #    # rm ${{ github.workspace }}/swapfile
++      #    # pierotofy action uses /swapfile for swap
++      #    # Deletes happen at each run of the action, but doing it manually.
++      #    # Don't want GitHub knocking at household entrance --> nevermind, 
++      #    # just don't include it in cache
++
++      - name: Save Cache of Github Workspace
++        uses: actions/cache/save@v4
++        # Save the cache even if build steps fail.
++        #if: always()
++
++        # If we at least get to the end of compile step, then attempt to save.
++        # If the cache has not been deleted in delete cache step, then this won't save anyway, saying "Cache already in use,"
++        # but still keeping this if conditional.
++        if: steps.compile-kernel-step.outputs.compile-kernel-complete
++        with:
++          path: ${{ github.workspace }}/kernel-source-host
++          #it will cache things in this dir. Not where it is storing the cache (they may be same though?).
++          key: ${{ steps.cache-restore-workspace.outputs.cache-primary-key }}
++          # Warning, this will also save the bulit artifacts themselves (the kernel.tar.gz)
++          # We can remove those tar.gzs by uncommenting the above run block, or by having a conditional delete every 10 compiles or so.
++          # Additionally by deleting the caches entirely from gh or web-interface.
++      
++
++# Some yaml facts.
++ # Even if your indentation or other errors are further down
++ # in the file, yaml will complain of missing "-" way up at the start.
++
++ # Minor indentation faults can break your yaml, so format properly.
++
++ # There is github.com/google/yamlfmt , which works decent
++ # At least it tells you what is broken and what isn't
++ # IMPORTANT: You CANNOT, put comments outside a run block, before the block is over; Unless it is aligned with the commands.
+diff --git a/.github/workflows/build-kernel_latest_clang_thinLTO.yaml b/.github/workflows/build-kernel_latest_clang_thinLTO.yaml
+new file mode 100644
+index 0000000000000000000000000000000000000000..282d91a7f37e7d69592529215a6520b1c47db05c
+--- /dev/null
++++ b/.github/workflows/build-kernel_latest_clang_thinLTO.yaml
+@@ -0,0 +1,559 @@
++## This is a basic workflow to help you get started with Actions 
++## Adapted from https://moebuta.org/posts/using-github-actions-to-build-linux-kernels/
++
++name: "Compile PS4-Linux Kernel-12xx; Clang Thin LTO Version: Latest"
++
++# Controls when the workflow will run
++on:
++  # Allows you to run this workflow manually from the Github Actions tab
++  workflow_dispatch:
++  push: # Prefer triggering manually for now
++    tags:
++      - 'v*' # Will build on any tag that starts with v: v5.15.15, etc.
++
++# A workflow run is made up of one or more jobs that can run sequentially or in parallel
++jobs:
++  build:
++    env: 
++       GITHUB_TOKEN: ${{ github.token }}
++    runs-on: ubuntu-latest # Ubuntu 24.04. Docker Image is the same ver. now
++    steps: 
++      - name: Set up cache env vars
++        id: cache-workspace-vars
++        run: |
++          echo "List of files in workdir, right after Github build job start:"
++          ls -a
++          echo "CACHE_WORKSPACE_KEY=${{ runner.os }}-workspace-${{ github.run_id }}" >> $GITHUB_ENV
++          #echo "CACHE_WORKSPACE_RESTORE_KEY=${{ runner.os }}-workspace-" >> $GITHUB_ENV
++          echo "github.ref_name in cache-workspace-vars = ${{ github.ref_name }}" 
++          echo "CACHE_WORKSPACE_RESTORE_KEY=${{ runner.os }}-workspace-${{ github.ref_name }}" >> $GITHUB_ENV
++          #Better handles multi-branch caching
++          #Use $CACHE_WORKSPACE_RESTORE_KEY in your other steps. 
++
++      #Based on:
++      #https://github.com/actions/toolkit/issues/946#issuecomment-1590016041
++      #https://github.com/actions/toolkit/issues/946#issuecomment-1726311681
++      - name: Set SUID to tar binary #Allows saving (and recovering)? cache of restricted files
++        run: sudo chown root /bin/tar && sudo chmod u+s /bin/tar
++        #SUID allows the bin to be ran as the user who owns the file, instead of the default: the uid of the caller
++      
++      #  Technically unnnecessary now since we do the checkout into workspace anyway. Would have to move
++      #  dockerx build after cache-workspace-restore step
++      - name: Download Dockerfile
++        run: |
++         curl -fL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/Dockerfile -o Dockerfile
++         curl -fL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/.dockerignore -o .dockerignore
++         # -verbose, -fail if server error, -Links follow,
++
++      - name: Show username and group info
++        run: |
++          echo "Actions Runner Username: $(whoami)"
++          echo "Actions Runner User ID: $(id -u)"
++          echo "Actions Runner Group Name: $(id -gn)"
++          echo "Actions Runner Group ID: $(id -g)"
++          echo "Actions Runner OS: ${{ runner.os }}"
++          #echo "Actions github_token:" #Don't print this, unsafe. (though it might be starred out in logs, but still.) 
++      
++      - name: Set up Docker Buildx
++        uses: docker/setup-buildx-action@v3
++      # this needs to be done before using docker buildx.
++      # this doesn't need to be done before the caching part, but doing it anyway.
++      # Downloading the cache can either happen before or after.
++
++
++      # TODO: Either manually restore, delete, save dockerx caches like we did with the workspace cache
++      # OR
++      # Pin a specific Docker Base OS Image Digest, so that the caches are never invalidated.
++
++      # Retrieve Cache-d Docker layers, and Save cache after job completion
++      - name: Cache Docker Layers
++        uses: actions/cache@v3
++        with:
++          path: |
++            /tmp/.buildx-cache 
++          #The location where Docker will save and read cache layers (on the host)
++          #Which is set in the buildx build launch parameters
++
++          key: ${{ runner.os }}-docker-${{ hashFiles('**/Dockerfile') }}  # Cache key
++          # IMPORTANT: Preventing duplicate Docker caches.
++
++          # GH Caches are only visible between parent->child, main->any branches.
++          # This means if you make a Docker cache in a random branch, it will not be usable
++          # outside of that branch, unless the outside is an offspring.
++          # Child->parent caches are not shared, neither are sibling->sibling branch caches.
++          # https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache
++
++          # So make sure to have your Dockerfile's image run & cached through your main branch, and that it does not
++          # vary across branches. Even if you need different Docker Image versions for older build-tools, get the highest
++          # img version and download your backdated tools in Docker, and select which version to use during .yaml build.
++
++          restore-keys: |
++            ${{ runner.os }}-docker-
++      
++      # Proper cache handling and overwriting; for build artifacts. Based on:
++      #1: https://github.com/actions/cache/issues/342#issuecomment-1363953531 (original. ulterzlw)
++      #2: https://github.com/actions/cache/issues/342#issuecomment-1711054115 (azu)
++      #3: https://github.com/actions/cache/issues/342#issuecomment-2773231159 (langston-barett, Apr '25)
++      - name: Restore Cache of Github Workspace
++        uses: actions/cache/restore@v4 #uses is actually a macro for a github repo that you will use.
++        id: cache-restore-workspace
++        #env:
++        #  cache-workspace-restore-key: $CACHE_WORKSPACE_RESTORE_KEY
++        # Doesn't work, takes $expr literally without expansion
++        with:
++          path: ${{ github.workspace }}/kernel-source-host
++          #key:  ${{ env.cache-workspace-restore-key }}
++          key: ${{ env.CACHE_WORKSPACE_RESTORE_KEY }}-thinLTO
++          # Use 1 key per LTO-ness. They're only about ~500-800 MB, and without this concurrent builds get confused
++
++      - name: Check and make kernel-source-host directory
++        run: | 
++          cd ${{ github.workspace }}
++          if [ -d kernel-source-host ]; then
++            echo "Build directory already exists! Continuing."
++          else
++            mkdir kernel-source-host
++          fi
++
++      - name: Check if repo was previously cloned
++        id: check_repo
++        run: |
++          cd ${{ github.workspace }}/kernel-source-host
++          if [ -d .git ]; then
++            echo "exists=true" >> $GITHUB_OUTPUT
++            echo ".git directory exists. Setting exists=true."
++          else
++            echo "exists=false" >> $GITHUB_OUTPUT
++            echo ".git directory doesn't exist. Setting exists=false" 
++          fi
++
++        # the default pwd in github actions is /home/runner/work/repo/repo (even before checkout of
++        # your repo). SO mind the paths
++        # It's a variable, and it is your default shell path. But it is empty unless you check
++        # it out.
++        # The .github files don't exist there either. They are loaded into memory from the repo.
++        # Unless you checkout, then they are acquired obviously.
++
++      - name: Checkout ps4-linux-12xx repo
++        if: steps.check_repo.outputs.exists == 'false'
++        uses: actions/checkout@v4
++        with:
++          fetch-depth: 1
++          #repository: feeRnt/ps4-linux-12xx
++          path: ${{ github.workspace }}/kernel-source-host
++          ref: ${{ github.ref }}
++          #repository: is optional. Default is the repo that triggered the event
++          #path is path at which we want to check it out
++          #ref = default branch, for us (caller).
++
++      - name: Move config file
++        if: steps.check_repo.outputs.exists == 'false'
++        working-directory: ${{ github.workspace }}/kernel-source-host
++        run: |
++          echo "git remote show origin = $(git remote show origin)"
++          _DEFAULT_BRANCH=$(git remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}')
++          echo "_DEFAULT_BRANCH = $_DEFAULT_BRANCH"
++          echo _DEFAULT_BRANCH="$_DEFAULT_BRANCH" >> $GITHUB_ENV
++          mv config .config
++          # config will exist if we checkout. so no need to use -f check
++
++
++      # TRUE::
++      #MANUAL TESTING
++      #- name: Manually set up cached repo/.git as a safe directory for git actions
++      #  if: steps.check_repo.outputs.exists == 'true' && steps.cache-restore-workspace.outputs.cache-hit == 'true'
++      #  run: /usr/bin/git config --global --add safe.directory /home/runner/work/ps4-linux-12xx/ps4-linux-12xx/kernel-source-host 
++      
++      #- name: Set up Github auth manually
++      #  if: steps.check_repo.outputs.exists == 'true' && steps.cache-restore-workspace.outputs.cache-hit == 'true'
++      #  working-directory: ${{ github.workspace }}/kernel-source-host
++      #  run: |
++      #    echo "Setting up auth"
++      #    # /usr/bin/git config --local --name-only --get-regexp core\.sshCommand
++      #    # Not needed
++      #    /usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
++      #    # clears all the core.sshCommand configs
++      #    
++      #    # /usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
++      #    # Not needed
++      #    
++      #    #/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
++      #    # Clears al the http.https://github.com/.extraheader configs
++      #    
++      #    #/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
++      #    # Sets up authorization using a secret. Command is obfuscated in github logs.
++      #    Maybe it's possible to figure out how the key is calucalted from 
++      #    https://github.com/actions/checkout/blob/09d2acae674a48949e3602304ab46fd20ae0c42f/dist/index.js#L5102
++      #    etc. but it's too complicated and a waste of time for now.
++      #    I'll use the checkout action with different options.
++      #    Huh according to copilot (keep getting surprised about how it seems pretty smart)
++      #
++      #    - name: Set up git authentication for cached repo
++      #      if: steps.check_repo.outputs.exists == 'true' && steps.cache-restore-workspace.outputs.cache-hit == 'true'
++      #      working-directory: ${{ github.workspace }}/kernel-source-host
++      #      run: |
++      #      git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $(echo -n x-access-token:${{ secrets.GITHUB_TOKEN }} | base64)"
++      #      I can try this next too if really needed...
++
++      - name: Update ps4-linux-12xx repo if it exists
++        if: steps.check_repo.outputs.exists == 'true'
++        #working-directory: ${{ github.workspace }}/kernel-source-host
++        #OLD VERSION WITHOUT CHECKOUT
++        #run: |
++        #  echo "git remote show origin = $(git remote show origin)"
++        #  _DEFAULT_BRANCH=$(git remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}')
++        #  echo "_DEFAULT_BRANCH = $_DEFAULT_BRANCH"
++        #  echo _DEFAULT_BRANCH="$_DEFAULT_BRANCH" >> $GITHUB_ENV
++
++        #  echo "Total commits in this repo:"
++        #  git rev-list --all --count
++        #  echo "Branches in this repo:"
++        #  git branch
++        #  echo "github.ref is = ${{ github.ref }}."
++        #  echo "git remote information:"
++        #  git remote -v
++
++        #  echo "Files in repo before fetch:"
++        #  ls -a
++        #
++        #  git fetch --depth=1 origin "$_DEFAULT_BRANCH"
++        #  git reset --hard origin/"$_DEFAULT_BRANCH"
++        #  if [ -f config ]; then
++        #    echo "Renaming config to .config"
++        #    mv config .config
++        #  else
++        #    echo ".config already exists. Continuing."
++        #  # for reruns without updating the repo
++        #  fi;
++        uses: actions/checkout@v4
++        with:
++          path: ${{ github.workspace }}/kernel-source-host
++          repository: ${{ github.repository }} #default
++          ref: ${{ github.ref }}
++          fetch-depth: 1
++          token: ${{ github.token }} #default
++          persist-credentials: false #non-default
++          #'Whether to configure the token or SSH key with the local git config'
++          #https://github.com/actions/checkout/issues/485 (might be best to keep false)
++          clean: false #non-default
++          #'Whether to execute `git clean -ffdx && git reset --hard HEAD` before fetching'
++          #This is what resets your cache. clean removes untracked files, -ffdx ensures full clean.
++
++          # Checkout should only touch tracked files
++          # List of options from
++          # https://github.com/actions/checkout/blob/main/action.yml
++
++          # Works all well except,  
++          #   Warning: you are leaving 1 commit behind, not connected to
++          # any of your branches:
++          # <hash> <commit message>
++          # If you want to keep it by creating a new branch, this may be a good time
++          #to do so with:
++          # git branch <new-branch-name> <hash>
++          # And garbage collector is disabled by checkout by default.. 
++          # 
++          #Disabling automatic garbage collection
++          #/usr/bin/git config --local gc.auto 0
++          #
++          #Can disable it manually, or can switch to git fetch with manual auth at a later date (because of
++          #headaches with action/checkout
++
++      - name: Move config file after repo update
++        if: steps.check_repo.outputs.exists == 'true'
++        working-directory: ${{ github.workspace }}/kernel-source-host
++        run: |
++          echo "git remote show origin = $(git remote show origin)"
++          _DEFAULT_BRANCH=$(git remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}')
++          echo "_DEFAULT_BRANCH = $_DEFAULT_BRANCH"
++          echo _DEFAULT_BRANCH="$_DEFAULT_BRANCH" >> $GITHUB_ENV
++          mv config .config
++          # config will exist if we checkout. so no need to use -f check 
++      
++      - name: Move .github directory to workspace
++        run: mv ${{ github.workspace }}/kernel-source-host/.github ${{ github.workspace }}/.github
++        # Needed for simplified problem-matching, future rules, etc.
++      
++      # Build Docker image  
++      - name: Build Docker image with cache
++        run: |
++          echo "Current pwd = $PWD in docker image build"
++          mkdir -p /tmp/.buildx-cache
++          docker buildx build \
++            --cache-from type=local,src=/tmp/.buildx-cache \
++            --cache-to type=local,dest=/tmp/.buildx-cache,mode=max \
++            --build-arg BUILDKIT_INLINE_CACHE=1 \
++            --tag kernel-linux-ps4:latest \
++            --load \
++            .
++      # This /tmp is not gonna be made if the directory doesn't exist already
++      # --load loads the contents the image into the workspace OS, otherwise only in cache
++      # --cache-to type=local caches straight to the host machine, meaning github workspace
++      #
++      # build-context workspace=./ results in /home/runner/work/repo/repo by default
++   
++      # Based on:
++      # https://lca-kernel.ozlabs.org/2022-Currey-Abusing-GitHub-Actions-for-building-and-testing-kernels.pdf
++      - name: Setup compile error problem-matching for kernel compilation
++        run: |
++          echo "::add-matcher::.github/problem-matchers/kernel-compile-errors.json"
++          # Fields and their meaning:
++          # regex: regex to match annotation, file: capture group that has file name
++          # line: capture group that gives the line number, column: capture group for column number
++          # severity: capture group that states if error or warning, message: capture group that has problem msg
++      
++      #- name: Set up Swapfile in workspace outside Docker
++      #  id: setup-workspace-swap
++      #  run: |
++      #    echo "Creating and activating swapfile."
++      #    fallocate -l 8G ${{ github.workspace }}/swapfile
++      #    chmod 600 ${{ github.workspace }}/swapfile
++      #    mkswap ${{ github.workspace }}/swapfile
++      #    swapon ${{ github.workspace }}/swapfile
++      #    echo "Current system memory after activating swap: "
++      #    free -h
++      #
++      #    This gives::: swapon: /home/runner/work/ps4-linux-12xx/ps4-linux-12xx/swapfile: 
++      #    swapon failed: Operation not permitted
++
++      - name: Set up Swapfile with Marketplace Actions
++        uses: pierotofy/set-swap-space@fc79b3f67fa8a838184ce84a674ca12238d2c761
++        with:
++          swap-size-gb: 12
++          # Tried 10 G, didn't work for full LTO
++
++      - name: Compile the linux kernel with docker run
++        id: compile-kernel-step
++        run: |
++          set +e
++          #temporarily disable exit on fail for the bash run (doesn't apply to the set -e inside the docker run)
++
++          docker run -i --name kernel -d -v ${{ github.workspace }}/kernel-source-host:/container/workspace/kernel-source-container \
++          -w /container/workspace/kernel-source-container kernel-linux-ps4:latest tail -f /dev/null
++          # -v is volume, # -w is workdir (WORKDIR)
++          # -d is detached. Is useful for when you are starting the initial docker image and you don't need its output.
++          # -i keeps stdin of container open, for piping commands
++
++          echo "Made it past running docker run -it. Will docker exec bash now."
++          
++          docker exec -i kernel bash <<'EOF' 
++          set -e
++          echo "Testing if host directory mounting was successful."
++          ls -a .
++          
++          for _pers_files in persistence_test*; do
++            [ -f "$_pers_files" ] && _persisted=1 && break
++          done
++          if [ "$_persisted" = 1 ]; then
++            echo "Files are persisting across runs! Congratulations."
++          else
++            echo "Files are not persisting across runs, OR, this is the first uncached action run."
++          fi;
++
++          echo "Doing persistence tests!"
++          touch "write_test"
++          echo "persisting! $(date --iso=s)" > persistence_test_"$(date --iso=s)".txt: 
++          echo "files available after test..."
++          ls -a
++
++          # copy extra firmware to /lib/firmware
++
++          echo "Extra firmware copy part"
++
++          if [ -d extra_firmware ]; then
++            if [ ! -z "$( ls -A 'extra_firmware/')" ]; then
++              echo "Copying extra firmware to /lib/firmware"
++              cp -r extra_firmware/* /lib/firmware
++            fi
++          fi
++          echo "Extra firmware available:"
++          find /lib/firmware
++
++          export localversion=`cat .config | grep CONFIG_LOCALVERSION= | sed -nE 's|^.*="-||p' | tr -d '"'`
++          # Removes everything up to =, and then the '"' and '-' 
++          # Using uppercase localversion will mess with your final kernel img version.
++          
++          # if empty...
++          #if [ -z "$localversion" ]; then
++          #  sed -iE 's|^CONFIG_LOCALVERSION=".*|CONFIG_LOCALVERSION="-'$(date +%Y_%m_%d_%H%M)'"|' .config
++          #  export localversion=`cat .config | grep CONFIG_LOCALVERSION= | sed -nE 's|^.*="-||p' | tr -d '"'`
++          #fi;
++          #Removed for now; directly fixed the case where GH wouldn't upload artifact because of missing localversion variable.
++
++          export GCE_PKG_DIR=${PWD}/gce/${localversion}/pkg
++          export GCE_INSTALL_DIR=${PWD}/gce/${localversion}/install
++          export GCE_BUILD_DIR=${PWD}/gce/${localversion}/build
++          export KERNEL_PKG=kernel-${localversion}_Clang_thinLTO.tar.gz
++
++          export KCFLAGS="-march=btver2 -mtune=btver2 -O3"
++          export KAFLAGS="-march=btver2 -mtune=btver2 -O3"
++          export KCPPFLAGS="-march=btver2 -mtune=btver2 -O3"
++          # I tried to include them in MAKE_OPTS in every sane way, but it doesn't
++          # work. It's redundant to specify them in every command (seemingly)
++
++          # march and mtune optimize the the build instructions
++          # march = oldest architecture on which this code can run
++          # mtune = compiler hint for which architecture the instructions should be
++          # optimized for. The PS4 CPU architecture was based on btver2,
++          # also known as the AMD Jaguar architecture
++
++          # We don't know if -O3 will help, but really anything will help
++          # considering our target hardware was aging when it was new
++
++          export MAKE_OPTS="-j`nproc --ignore=1` \
++                     INSTALL_PATH=${GCE_INSTALL_DIR}/boot \
++                     INSTALL_MOD_PATH=${GCE_INSTALL_DIR} \
++                     LLVM=1"
++                     # Macro for all the LLVM specific switches. 1 = whatever LLVM present
++                     # Otherwise you may specify the major version (e.g. LLVM=-14) of the LLVM installation
++                     # We ignore 1 core because full LTO runs OOM, even with 10 G swap (would be 3/4 cores)
++                     # Even for thin LTOs and other compilations, keeping one spare proc is a nice idea.
++
++          mkdir -p ${GCE_BUILD_DIR}
++          mkdir -p ${GCE_INSTALL_DIR}/boot
++          mkdir -p ${GCE_PKG_DIR}
++          echo "Debugging gce directory."
++          find ${GCE_BUILD_DIR} ${GCE_INSTALL_DIR}/boot ${GCE_PKG_DIR}
++
++          echo -e "\n\n\n Current system resources inside of Docker : : :"
++          echo "CPU cores: `nproc`"
++          echo "RAM: `free -h`"
++          echo "Disk: `df -h`"
++          echo "CPU info: `lscpu | grep 'Model name'`"
++          #echo "System max memory: `cat /sys/fs/cgroup/memory.max`"
++
++          # Enable Thin LTO from the config
++          scripts/config --disable CONFIG_LTO_CLANG_FULL
++          scripts/config --enable CONFIG_LTO_CLANG_THIN
++
++          make ${MAKE_OPTS} olddefconfig
++          make ${MAKE_OPTS} prepare
++          echo "Making kernel. . ."
++          make ${MAKE_OPTS}
++          echo "Making modules . . ."
++          make ${MAKE_OPTS} modules
++          echo "Installing kernel . . ."
++          make ${MAKE_OPTS} install
++          echo "Installing modules . . ."
++          make ${MAKE_OPTS} modules_install
++          echo "Copying bzImage to $GCE_INSTALL_DIR/boot. . ."
++          cp arch/x86/boot/bzImage "$GCE_INSTALL_DIR/boot/"
++          echo "Copying used .config to $GCE_INSTALL_DIR/.config. . ."
++          cp .config "$GCE_INSTALL_DIR/.config"
++          cd ${GCE_INSTALL_DIR}
++          tar -cvzf /container/workspace/kernel-source-container/kernel_"$localversion"_Clang_thinLTO.tar.gz boot/bzImage lib/modules/* .config --owner=0 --group=0
++          # I assume it'll never package the kernel, unless the compile succeeds, since -e is set
++
++          ## GCE = Google Compute Engine, adapted from 
++          #https://github.com/google/bbr/blob/v3/gce-install.sh
++          EOF
++          
++          # Now in runner.
++          
++          #echo "Were we killed by an out of memory DAeMON?"
++          #dmesg | grep -i -E 'killed process|out of memory' "dmesg: read kernel buffer failed: Operation not permitted"
++
++          echo -e "\n\n\n Current system resources outside of Docker : : :"
++          echo "CPU cores: `nproc`"
++          echo "RAM: `free -h`"
++          echo "Disk: `df -h`"
++          echo "CPU info: `lscpu | grep 'Model name'`"
++
++          #echo -e "\n\n\n Here's our full dmesg: "
++          #dmesg "dmesg: read kernel buffer failed: Operation not permitted"
++        
++          cd ${{ github.workspace }}/kernel-source-host 
++          echo "Available files in runner after docker compile..."
++          ls -la
++          echo "compile-kernel-complete=true" >> $GITHUB_OUTPUT
++          #We just want to ensure that we reached the end of this stage before deleting the old cached rud run.
++          
++          set -e
++          # Reset exit on fail. Not needed but proof of concept
++
++      - name: Remove compile error problem-matching
++        run: echo "::remove-matcher owner=kernel-compile-docker::"
++
++
++
++      - name: Get kernel version name env
++        id: kernel-version-env
++        working-directory: ${{ github.workspace }}/kernel-source-host
++        run: |
++          localversion=`cat .config | grep LOCALVERSION | sed -nE 's|^.*="-||p' | tr -d '\"'`
++          echo "localversion is originally = $localversion"
++          echo "localversion=$localversion" >> $GITHUB_OUTPUT
++
++      - name: Upload kernel image to github actions artifacts
++        uses: actions/upload-artifact@v7
++        with:
++          name: kernel_${{ steps.kernel-version-env.outputs.localversion }}_Clang_thinLTO
++          path: ${{ github.workspace }}/kernel-source-host/kernel_${{ steps.kernel-version-env.outputs.localversion }}_Clang_thinLTO.tar.gz
++          # This path is the github actions root
++          archive: false
++
++      # - name: Delete the kernel image artifact from workspace
++      #  run: |
++      #   #if [ -n $(grep 10 ./build_counter) ]; ... then
++      #    # for file in ... <<< ls --sort time; do
++      #    #rm ${{ github.workspace }}/kernel_${{ steps.kernel-version-env.outputs.localversion }}.tar.gz
++      #    #done
++      #    #fi
++
++      - name: Testing Cache Hit Bools
++        run: |
++          echo "Current steps.cache-restore-workspace.outputs.cache-hit = ${{ steps.cache-restore-workspace.outputs.cache-hit }}"
++          echo "and"
++          echo "Current steps.compile-kernel-step.outputs.compile-kernel-complete = ${{ steps.compile-kernel-step.outputs.compile-kernel-complete }}"
++
++      #3: https://github.com/actions/cache/issues/342#issuecomment-2773231159 (langston-barett, Apr '25)
++      - name: Delete Cache of Github Workspace
++        env:
++          GH_TOKEN: ${{ github.token }}
++        if: steps.cache-restore-workspace.outputs.cache-hit && steps.compile-kernel-step.outputs.compile-kernel-complete
++        # Using `--repo` makes it so that this step doesn't require checking out the repo first.
++        run: |
++          echo "There was a cache hit for github workspace, and we just completed the kernel compilation. Hence deleting the old cache."
++          gh cache delete --repo ${{ github.repository }} ${{ steps.cache-restore-workspace.outputs.cache-primary-key }}
++
++      #  Delete swap file is not necessary, as we never include it in our cache path.
++      #- name: Delete swapfile
++      #  id: delete-workspace-swapfile
++      #  run: |
++      #    echo "Deleting old swap"
++      #    # swapoff /swapfile
++      #    # rm /swapfile
++      #    # Doesn't work either:: "swapoff: Not superuser."
++      #    #
++      #    # rm ${{ github.workspace }}/swapfile
++      #    # pierotofy action uses /swapfile for swap
++      #    # Deletes happen at each run of the action, but doing it manually.
++      #    # Don't want GitHub knocking at household entrance --> nevermind, 
++      #    # just don't include it in cache
++
++      - name: Save Cache of Github Workspace
++        uses: actions/cache/save@v4
++        # Save the cache even if build steps fail.
++        #if: always()
++
++        # If we at least get to the end of compile step, then attempt to save.
++        # If the cache has not been deleted in delete cache step, then this won't save anyway, saying "Cache already in use,"
++        # but still keeping this if conditional.
++        if: steps.compile-kernel-step.outputs.compile-kernel-complete
++        with:
++          path: ${{ github.workspace }}/kernel-source-host
++          #it will cache things in this dir. Not where it is storing the cache (they may be same though?).
++          key: ${{ steps.cache-restore-workspace.outputs.cache-primary-key }}
++          # Warning, this will also save the bulit artifacts themselves (the kernel.tar.gz)
++          # We can remove those tar.gzs by uncommenting the above run block, or by having a conditional delete every 10 compiles or so.
++          # Additionally by deleting the caches entirely from gh or web-interface.
++      
++
++# Some yaml facts.
++ # Even if your indentation or other errors are further down
++ # in the file, yaml will complain of missing "-" way up at the start.
++
++ # Minor indentation faults can break your yaml, so format properly.
++
++ # There is github.com/google/yamlfmt , which works decent
++ # At least it tells you what is broken and what isn't
++ # IMPORTANT: You CANNOT, put comments outside a run block, before the block is over; Unless it is aligned with the commands.
+diff --git a/.github/workflows/build-kernel_latest_ignore_errors.yaml b/.github/workflows/build-kernel_latest_ignore_errors.yaml
+index 9c661a2cfe09bc51a7f176eb7715ed7e6692484b..c14c22569ac659b1eb2a720a61ba04cdc106d152 100644
+--- a/.github/workflows/build-kernel_latest_ignore_errors.yaml
++++ b/.github/workflows/build-kernel_latest_ignore_errors.yaml
+@@ -7,13 +7,14 @@ name: "Compile PS4-Linux Kernel-12xx; Unified Version: Latest - Ignore Errors"
+ on:
+   # Allows you to run this workflow manually from the Github Actions tab
+   workflow_dispatch:
++  #push:
+ 
+ # A workflow run is made up of one or more jobs that can run sequentially or in parallel
+ jobs:
+   build:
+     env: 
+        GITHUB_TOKEN: ${{ github.token }}
+-    runs-on: ubuntu-latest # Ubuntu 24.04. But Docker image I use is Ubuntu 22.04 
++    runs-on: ubuntu-latest # Ubuntu 24.04. Docker Image is same ver. now
+     steps: 
+       - name: Set up cache env vars
+         id: cache-workspace-vars
+@@ -316,6 +317,19 @@ jobs:
+           echo "files available after test..."
+           ls -a
+ 
++          # copy extra firmware to /lib/firmware
++
++          echo "Extra firmware copy part"
++
++          if [ -d extra_firmware ]; then
++            if [ ! -z "$( ls -A 'extra_firmware/')" ]; then
++              echo "Copying extra firmware to /lib/firmware"
++              cp -r extra_firmware/* /lib/firmware
++            fi
++          fi
++          echo "Extra firmware available:"
++          find /lib/firmware
++
+           export localversion=`cat .config | grep CONFIG_LOCALVERSION= | sed -nE 's|^.*="-||p' | tr -d '"'`
+           # Removes everything up to =, and then the '"' and '-' 
+           # Using uppercase localversion will mess with your final kernel img version.
+diff --git a/Dockerfile b/Dockerfile
+index 4c97fb7088c64c2d80e9b25c177fc541d9d91f97..2fe896db635b5c11a9eb13a06921cf9a6945aaaa 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -1,6 +1,7 @@
+ # State an OS to use with from
+ # https://hub.docker.com/search?categories=Operating+systems
+-FROM ubuntu:22.04 AS build-env
++#FROM ubuntu:22.04 AS build-env ## Ubuntu 22.04's Clang (v14) is too old for Kernel 6.15
++FROM ubuntu:24.04 AS build-env
+ 
+ # Inherit everything from this first build stage onto this second stage:
+ # We can have all the commands in one single stage/directive, but this is cleaner and useful
+@@ -38,7 +39,21 @@ ENV TZ=Etc/UTC
+ RUN <<"EOF"
+ #DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get update did not work.
+ apt-get update
+-apt-get install build-essential wget git -y
++apt-get install build-essential clang clang-14 lld lld-14 llvm llvm-14 wget git -y
++#clang-17 lld-17 llvm-17 
++
++# I think llvm meta package is not needed for Kernel build. Nevermind it is.
++# Me: Are you 100% sure llvm-ar is in clang package? AI: I am 100% sure
++# Results:
++#Me: Deathbed. AI: Oh yes. That *is* a poisonous mushroom. Would you like to know more about this poisonous mushroom?
++
++#Maybe: Add two separate Dockerfiles for gcc build and LLVM build
++#Download the right Dockerfile from the GH Actions file
++# On second thought, maybe don't. It seems downloading and installing Clang adds only a few seconds of
++# overhead, and having two different Dockerfiles would invalidate the Docker cache, slowing down builds
++# and taking up GH cache space.
++
++
+ apt-get build-dep linux -y
+ EOF
+ 
+@@ -58,6 +73,11 @@ cd /lib/firmware/mrvl
+ wget -nc https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/mrvl/sd8897_uapsta.bin
+ wget -nc https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/mrvl/pcie8897_uapsta.bin
+ wget -nc https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/mrvl/sd8797_uapsta.bin
++
++mkdir -p /lib/firmware/mediatek
++cd /lib/firmware/mediatek
++wget -nc https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/mediatek/mt7668pr2h.bin
++
+ #### Extra firmware that are / might be needed for kernel compilation. 
+ EOF
+ # Wget code snippet from https://github.com/TigerClips1
+diff --git a/README b/README
+deleted file mode 100644
+index 010c587224224ba1254657b42b091a6c62c39e92..0000000000000000000000000000000000000000
+--- a/README
++++ /dev/null
+@@ -1,168 +0,0 @@
+-Linux kernel
+-============
+-
+-The Linux kernel is the core of any Linux operating system. It manages hardware,
+-system resources, and provides the fundamental services for all other software.
+-
+-Quick Start
+------------
+-
+-* Report a bug: See Documentation/admin-guide/reporting-issues.rst
+-* Get the latest kernel: https://kernel.org
+-* Build the kernel: See Documentation/admin-guide/quickly-build-trimmed-linux.rst
+-* Join the community: https://lore.kernel.org/
+-
+-Essential Documentation
+------------------------
+-
+-All users should be familiar with:
+-
+-* Building requirements: Documentation/process/changes.rst
+-* Code of Conduct: Documentation/process/code-of-conduct.rst
+-* License: See COPYING
+-
+-Documentation can be built with make htmldocs or viewed online at:
+-https://www.kernel.org/doc/html/latest/
+-
+-
+-Who Are You?
+-============
+-
+-Find your role below:
+-
+-* New Kernel Developer: Getting started with kernel development
+-* Academic Researcher: Studying kernel internals and architecture
+-* Security Expert: Hardening and vulnerability analysis
+-* Backport/Maintenance Engineer: Maintaining stable kernels
+-* System Administrator: Configuring and troubleshooting
+-* Maintainer: Leading subsystems and reviewing patches
+-* Hardware Vendor: Writing drivers for new hardware
+-* Distribution Maintainer: Packaging kernels for distros
+-* AI Coding Assistant: LLMs and AI-powered development tools
+-
+-
+-For Specific Users
+-==================
+-
+-New Kernel Developer
+---------------------
+-
+-Welcome! Start your kernel development journey here:
+-
+-* Getting Started: Documentation/process/development-process.rst
+-* Your First Patch: Documentation/process/submitting-patches.rst
+-* Coding Style: Documentation/process/coding-style.rst
+-* Build System: Documentation/kbuild/index.rst
+-* Development Tools: Documentation/dev-tools/index.rst
+-* Kernel Hacking Guide: Documentation/kernel-hacking/hacking.rst
+-* Core APIs: Documentation/core-api/index.rst
+-
+-Academic Researcher
+--------------------
+-
+-Explore the kernel's architecture and internals:
+-
+-* Researcher Guidelines: Documentation/process/researcher-guidelines.rst
+-* Memory Management: Documentation/mm/index.rst
+-* Scheduler: Documentation/scheduler/index.rst
+-* Networking Stack: Documentation/networking/index.rst
+-* Filesystems: Documentation/filesystems/index.rst
+-* RCU (Read-Copy Update): Documentation/RCU/index.rst
+-* Locking Primitives: Documentation/locking/index.rst
+-* Power Management: Documentation/power/index.rst
+-
+-Security Expert
+----------------
+-
+-Security documentation and hardening guides:
+-
+-* Security Documentation: Documentation/security/index.rst
+-* LSM Development: Documentation/security/lsm-development.rst
+-* Self Protection: Documentation/security/self-protection.rst
+-* Reporting Vulnerabilities: Documentation/process/security-bugs.rst
+-* CVE Procedures: Documentation/process/cve.rst
+-* Embargoed Hardware Issues: Documentation/process/embargoed-hardware-issues.rst
+-* Security Features: Documentation/userspace-api/seccomp_filter.rst
+-
+-Backport/Maintenance Engineer
+------------------------------
+-
+-Maintain and stabilize kernel versions:
+-
+-* Stable Kernel Rules: Documentation/process/stable-kernel-rules.rst
+-* Backporting Guide: Documentation/process/backporting.rst
+-* Applying Patches: Documentation/process/applying-patches.rst
+-* Subsystem Profile: Documentation/maintainer/maintainer-entry-profile.rst
+-* Git for Maintainers: Documentation/maintainer/configure-git.rst
+-
+-System Administrator
+---------------------
+-
+-Configure, tune, and troubleshoot Linux systems:
+-
+-* Admin Guide: Documentation/admin-guide/index.rst
+-* Kernel Parameters: Documentation/admin-guide/kernel-parameters.rst
+-* Sysctl Tuning: Documentation/admin-guide/sysctl/index.rst
+-* Tracing/Debugging: Documentation/trace/index.rst
+-* Performance Security: Documentation/admin-guide/perf-security.rst
+-* Hardware Monitoring: Documentation/hwmon/index.rst
+-
+-Maintainer
+-----------
+-
+-Lead kernel subsystems and manage contributions:
+-
+-* Maintainer Handbook: Documentation/maintainer/index.rst
+-* Pull Requests: Documentation/maintainer/pull-requests.rst
+-* Managing Patches: Documentation/maintainer/modifying-patches.rst
+-* Rebasing and Merging: Documentation/maintainer/rebasing-and-merging.rst
+-* Development Process: Documentation/process/maintainer-handbooks.rst
+-* Maintainer Entry Profile: Documentation/maintainer/maintainer-entry-profile.rst
+-* Git Configuration: Documentation/maintainer/configure-git.rst
+-
+-Hardware Vendor
+----------------
+-
+-Write drivers and support new hardware:
+-
+-* Driver API Guide: Documentation/driver-api/index.rst
+-* Driver Model: Documentation/driver-api/driver-model/driver.rst
+-* Device Drivers: Documentation/driver-api/infrastructure.rst
+-* Bus Types: Documentation/driver-api/driver-model/bus.rst
+-* Device Tree Bindings: Documentation/devicetree/bindings/
+-* Power Management: Documentation/driver-api/pm/index.rst
+-* DMA API: Documentation/core-api/dma-api.rst
+-
+-Distribution Maintainer
+------------------------
+-
+-Package and distribute the kernel:
+-
+-* Stable Kernel Rules: Documentation/process/stable-kernel-rules.rst
+-* ABI Documentation: Documentation/ABI/README
+-* Kernel Configuration: Documentation/kbuild/kconfig.rst
+-* Module Signing: Documentation/admin-guide/module-signing.rst
+-* Kernel Parameters: Documentation/admin-guide/kernel-parameters.rst
+-* Tainted Kernels: Documentation/admin-guide/tainted-kernels.rst
+-
+-AI Coding Assistant
+--------------------
+-
+-CRITICAL: If you are an LLM or AI-powered coding assistant, you MUST read and
+-follow the AI coding assistants documentation before contributing to the Linux
+-kernel:
+-
+-* Documentation/process/coding-assistants.rst
+-
+-This documentation contains essential requirements about licensing, attribution,
+-and the Developer Certificate of Origin that all AI tools must comply with.
+-
+-
+-Communication and Support
+-=========================
+-
+-* Mailing Lists: https://lore.kernel.org/
+-* IRC: #kernelnewbies on irc.oftc.net
+-* Bugzilla: https://bugzilla.kernel.org/
+-* MAINTAINERS file: Lists subsystem maintainers and mailing lists
+-* Email Clients: Documentation/process/email-clients.rst
+diff --git a/README.md b/README.md
+index 402c9ae134ad93771664cadc06426fafcd4244d6..7f4914a4199d8e2b485ea7cc8b20e25dc1487f99 100644
+--- a/README.md
++++ b/README.md
+@@ -2,60 +2,169 @@
+ Linux Kernel - On the Sony PlayStation 4
+ ========================================
+ 
+-This is a Linux Kernel source tailored to run on exploitable PlayStation 4 systems with various subsystem patches from the [fail0verflow team](https://github.com/fail0verflow/ps4-linux), [eeply](https://github.com/eeply/ps4-linux), [Ps3itaTeam](https://github.com/Ps3itaTeam/ps4-linux), [mircoho](https://github.com/ps4gentoo/ps4-linux-5.3.7), [codedwrench](https://github.com/codedwrench/ps4-linux/), [crashniels](https://github.com/crashniels/linux/) and others.
++This is a Linux Kernel source tailored to run on exploitable PlayStation 4 systems with various subsystem patches from     
++the [fail0verflow team](https://github.com/fail0verflow/ps4-linux),    
++[eeply](https://github.com/eeply/ps4-linux),    
++[Ps3itaTeam](https://github.com/Ps3itaTeam/ps4-linux),   
++[rancido](https://github.com/rancido),    
++valeryy (no Github - contributed to PS4 Baikal southbridges),    
++[mircoho](https://github.com/ps4gentoo/ps4-linux-5.3.7),    
++[codedwrench](https://github.com/codedwrench/ps4-linux/),    
++[tihmstar](https://github.com/tihmstar/ps4-linux/tree/ps4-4.14.93-belize),    
++[crashniels](https://github.com/crashniels/linux/),     
++[saya](https://www.youtube.com/channel/UCc20KAcPCj9Ut8IQF3umSjg),    
++[whitehax0r](https://github.com/whitehax0r/ps4-linux-baikal),    
++[DFAUS](https://github.com/DFAUS-git/ps4-baikal-5.4.247-kernel) -- and others.
+ 
+-This fork aims to make the internal WiFi+Bluetooth modules on specific PlayStation models with the Marvell    
+-88w8897 combo card (internal codename Torus 2) functional, as they typically error out on the default kernels.
++For a more detailed credits section, check out [this page](https://dionkill.github.io/ps4-linux-tutorial/ending.html#kernel-developers).
++
++This fork aimed to make the internal WiFi+Bluetooth modules on specific PlayStation models with the Marvell 88w8897 combo card (internal codename Torus 2) functional, as they typically error out on the default kernels.
++
++Over time, I also managed to fix the common blackscreen at GUI login issue on newer kernels, and added support for various miscellaneous components such as the MT7668 WiFi and BT chip on certain consoles.  
++The branch names are meant to be descriptive and provide an idea, but they're far from perfect!
++
++Merging all the main fixes into a few distinct branches is a WIP.
++
++<br>
++
++-------
++## Console Models and Southbridge
++
++While the CUH-1216/1215 models are definitively known to have the Torus 2 models with probelmatic WiFi, along with some 11xx models with similar WiFi issues, here is a list of consoles reported working without any hiccups from the kernels in this repo:
++
++| Console Model | Variation | WiFi+BT Chip Present | Compatible Kernel (Patched) |
++|---|---|---| --- |
++| CUH-1216(A/B) | Phat - Belize B0 | Marvell 88w8897 (Torus 2) | *6.15.4, 5.15.15* |
++| CUH-1215(A/B) | Phat - Belize | Marvell 88w8897 (Torus 2) | *6.15.4, 5.15.15*  |
++CUH-1003  | Phat  - Aeolia | ? | *6.15.4; [probably non-built in firmware version](#builtin-fw-anchor)* |
++CUH-1004A | Phat - Aeolia | Marvell 88w8797 (Torus 1) | *6.15.4; [non-built in firmware version](#builtin-fw-anchor)* |
++CUH-1116A | Phat - Aeolia | ? | *6.15.4* |
++CUH-2215B | Slim - Baikal | ? | *5.4.247* |
++CUH-2216A | Slim - Baikal B1 | MediaTek 7668 | *5.4.247* |
++CUH-2216A | Slim - Belize | MediaTek 7668 | *5.15.15* |
++CUH-7116B | Pro - Baikal B1 | ? | *5.4.247* |
++CUH-7202B | Pro - Baikal | ? | *5.4.247* |
+ 
+-The console models that are known to have the Torus 2 module, and their testing results from this patched kernel are:
+-``` 
+-CUH-1216(A/B) { WiFi: Functional | Bluetooth: Functional }    
+-CUH-1215(A/B) { WiFi: Functional | Bluetooth: Functional }    
+-[A and B are just hard-drive specification: 500 GB vs 1000GB].   
+ ```
++[A and B are just hard-drive specification: 500 GB vs 1000GB].
++
++Aeolia, Belize and Baikal are the console Southbridges.
++B0, B1 etc. are the Southbridge subrevisions.
++```
++<a name="builtin-fw-anchor"></a>
++[ Certain older models (specifically the 1004A) needed a kernel that
++was built without embedding the latest proprietary firmware blobs (for
++WiFi+Bluetooth), and instead functioned properly with older firmware
++sourced from the initramfs. For these, each affected kernel release has a "no-built-in-fw"
++version for best functionality. See the releases page of the referring kernels for more
++information.]
++<br>
++
++- TODO: Add a list with all supported console models, their southbridges, and their compatible kernels.
+ 
+ <br>
+ 
+-The primary patches which in combination fix the module are:     
+-[150 MHz rate limit quirk on the 88w8897 card's Function 0](https://github.com/feeRnt/ps4-linux-12xx/commit/df7f7dbb1b0fff6026e159540f029988c8067b70)
++----
++## Fixing the Wireless Card on CUH-1216
+ 
+-relying on the [patch for added sdio_id for the Function 0](https://github.com/feeRnt/ps4-linux-12xx/commit/f4835fb020010acff2b70e4c5fa9430e07f0073b)
++The main patches which in combination fix the CUH-1216/1215 wireless module are:     
++[150 MHz rate limit quirk on the 88w8897 card's Function 0](https://github.com/feeRnt/ps4-linux-12xx/commit/df7f7dbb1b0fff6026e159540f029988c8067b70).
+ 
+-Then a [few SDHCI Host quirks for the PlayStation SDHCI host; a couple of which might be unnecessary \(haven't tested the redundancy yet\)](https://github.com/feeRnt/ps4-linux-12xx/commit/e6f342df7737722d5e27f0ae3974e493c5fe4ca4)
++relying on the [patch for added sdio_id for the Function 0](https://github.com/feeRnt/ps4-linux-12xx/commit/f4835fb020010acff2b70e4c5fa9430e07f0073b),
+ 
+-additionally with [extra retries for MMC CMD 52 or 53, which it would usually fail on.](https://github.com/feeRnt/ps4-linux-12xx/commit/c57162e5ec7a4aa3af3310a36dc963b5c0298dfe)
++Then a [few SDHCI Host quirks for the PlayStation SDHCI host](https://github.com/feeRnt/ps4-linux-12xx/commit/e6f342df7737722d5e27f0ae3974e493c5fe4ca4) {only the SDHCI_QUIRK2_PRESET_VALUE_BROKEN is needed now},
+ 
+-The primary culprit behind the failed SDIO initialization, seems to be that the card doesn't properly support 208 or 200 MHz clock rate on this PS4 SDHCI host, causing the card to show tuning and other command failures.    
+-Through much trial and error, I was able to reach such an arcane fix,     
++additionally with [extra retries for MMC CMD 52 or 53, which it would usually fail on](https://github.com/feeRnt/ps4-linux-12xx/commit/c57162e5ec7a4aa3af3310a36dc963b5c0298dfe) {this is optional}.
++
++The primary culprit behind the failed SDIO initialization, seems to be that the card doesn't properly support 208 or 200 MHz clock rate on this PS4 SDHCI host, causing the card to show tuning and other command failures.
++You can read more about the search for a solution [from here](https://ps4linux.com/forums/d/221-ps4-phat-wifi-fix-test-marvell-8897-torus-20/14).    
++
++Through MUCH trial and error, I was able to reach such an arcane fix,     
+ <br>
+ ![Many of the kernels I had to compile and test before finally landing
+ on the fix kernel](./IMAGES/github_pic2.png)
+ 
+-and here is an image with working internal WiFi and Bluetooth as shown in the logs, on an Arch Linux system running on my CUH-1216 console:    
++and here's a screenshot with working internal WiFi and Bluetooth as shown in the logs, on an Arch Linux system running on my CUH-1216 console:    
+ <br>
+ ![Working WiFi image](./IMAGES/github_pic1.png)
+ <br>
+ 
+ Hard work paid off!
+ 
++<br>
++
++----
++## Branches
++
+ There are different branches that you can select on the repo,    
+-`ps4-linux-5.15.y` and `ps4-linux-5.15.y-conservative2` are branches with excessive debug logs, that helped me pinpoint the issue on the whole MMC stack. Due to the logging, it is not advisable to use those kernel branches.
++`x_old__ps4-linux-5.15.y` and `x_old__ps4-linux-5.15.y-conservative2` are branches with excessive debug logs, that helped me pinpoint the issue on the whole MMC stack. Due to the logging, it is not advisable to use those kernel branches.    
++
++The other "x_experimental__" or "x_exp__" prefixed branches were made for debugging & testing a particular subsystem or problem in the kernel, and are not advised to be used.  
++They are only kept for further future experiment, archive or study only.  
++
++\- \- For example, the `x_experimental__5.15.15-fix-baikal` branch is non-functional.
++Kernel 5.15 is not reported to be working on any Baikal console, but it's kept for testing only.
++
++\
++The `5.15.15-aeolia-belize` is a branch without the PS4 patches from codedwrench's **Baikal** branch.    
++It still runs as intended on a Belize (no blackscreen fix yet), but you will get bad errors. Should be used for testing only.
++
++However, it probably runs on Aeolia models, unlike the \*-belize -only branches. (Not tested yet)
++
++----
+ 
+-The primary release branches are:    
+-`ps4-linux-5.15.y-fix-clean` : The clean WiFi fix branch for Kernel version 5.15.15    
+-`ps4-linux-5.15.189-fix-clean` : The clean WiFi fix branch for Kernel version 5.15.189 (Still broken, causes white LED on the PS4 during boot)    
+-`ps4-linux-6.15.y-crashniels`: The clean WiFi fix branch for Kernel version 6.15.4.
++The main release branches are:    
++- `5.15.15-belize` : The clean WiFi, Blackscreen & other misc. fixes' branch for Kernel version 5.15.15 on Belize southbridges.  
++This is the primary branch of the repo.   
+ 
+-To compile them, you can simply fork the repo, go to the Actions tab and run the Workflow file for `build-kernel_latest.yaml` for a particular branch.
++- `5.15.189-belize` : The clean WiFi & Blackscreen fix branch for Kernel version 5.15.189 on Belize southbridges.  
++(Not as well maintained as 5.15.15)
+ 
+-Or if you would like to build locally, just clone the repo for your desired branch and run:
++- `5.4.247-baikal-dfaus`: A branch for version 5.4.247 with fixed blackscreen and MT7668 support for Baikal southbridges.    
++Based on DFAUS' source.
++
++- `6.15.4-aeolia-belize-crashniels` : The clean WiFi, Blackscreen & other misc. fixes' branch for Kernel version 6.15.4, on Aeolia/Belize southbridges.    
++Based on crashniels' source.
++
++<br>
++
++---
++## Compile and Build
++
++To compile any of these branches, you can simply fork the repo, go to the Actions tab and run the Workflow file for `build-kernel_latest.yaml` for a particular branch.
++
++Or if you would like to build locally, just clone the repo for your desired branch and run the necessary commands:
+ ```bash
++
++git clone https://github.com/feeRnt/ps4-linux-12xx --branch <desired-branch-name> --depth=3
++#keep a low depth to save on space
++
++cd ps4-linux-12xx
++echo "Copying necessary extra firmware to /lib/firmware"
++sudo cp -ri extra_firmware/* /lib/firmware
++
++sudo mkdir /lib/firmware/mrvl
++wget -nc https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/mrvl/sd8897_uapsta.bin \
++&& sudo mv -i sd8897_uapsta.bin /lib/firmware/mrvl
++
++wget -nc https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/mrvl/sd8797_uapsta.bin \
++&& sudo mv -i sd8797_uapsta.bin /lib/firmware/mrvl
++
++
++sudo mkdir /lib/firmware/mediatek
++wget -nc https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/mediatek/mt7668pr2h.bin \
++&& sudo mv -i mt7668pr2h.bin /lib/firmware/mediatek
++
++
++## Rename .config file
++
+ mv config .config
+ 
+ export MAKE_OPTS="-j`nproc` \
+               HOSTCC=gcc-11 \
+               CC=gcc-11"
+-# gcc-11 is ideal for compiling the 5.15.y kernels, otherwise you will have many typecheck and compile errors 
++# gcc-11 is ideal for compiling the 5.4 & 5.15.y kernels, and can build 6.15.y too
++# Otherwise you will have many typecheck and compile errors compiling the older kernels
+ make ${MAKE_OPTS} olddefconfig
+ make ${MAKE_OPTS} prepare
+ echo "making kernel. . ."
+@@ -68,16 +177,79 @@ echo "installing modules . . ."
+ make ${MAKE_OPTS} modules_install
+ ```
+ 
++<br>
++
++---
++## Releases and Downloads
++
+ To get some pre-compiled kernels, go to the [releases section](https://github.com/feeRnt/ps4-linux-12xx/releases), and choose a kernel (bzImage) based on your needed version.
+ 
+-If something doesn't work, or your model still has unsupported WiFi, you can open a GitHub issue to share the concerns.
++Please read the boldened out and highlighted text, as they contain some information that might be useful for a particular release. It's very wordy, that needs to be fixed!!
++
++<br>
++
++---
++## Contributing
+ 
+-Happy 802.11-ing ! 😃️
++If something doesn't work on these kernels, has missing features, or your model still has unsupported WiFi, you can open a GitHub issue to share its details.
++
++Pull requests/code contributions are always welcome.
+ 
+ <br>
++
++---
++## Documentation, Guides and the PS4 Linux Future (As of December 2025)
++
++While many of the bugs and issues prevalent in PS4 Linux kernels, and PS4 Linux in general have been fixed over the years, many of them still exist, and are seldom worked on.  
++A few honorable mentions aimed at improving this scene go to:
++
++1. Blackscreen/No Display/Unsupported Monitor issue:
++    - https://github.com/oberdfr/kernel-ps4linux/tree/ps4-linux-v6.17.1-custom-resolution:  
++attempts at using the display EDID information from your monitor, to use in Linux. This aims to improve the various blackscreen issues for monitors that don't support 1080p, or when using a capture card.  
++(Work in Progress)
++
++    - https://github.com/ps4gentoo/initramfs &  
++    https://github.com/ps4boot/ps4-linux-payloads/  
++    Same goal as the last link, but attempts it (successfully) by acquiring the EDID from Orbis (PS4-OS) throught the PS4-Linux Loader, and copies it over to the initramfs.  
++    (Work in Progress; latest fix might not've been committed)
++
++
++2. Mainling the PS4-specific patches and packages (OS-specific):  
++    See,
++    - https://github.com/Jaguarlinux/
++    - https://github.com/centi07/arch-ps4-aur
++    - https://github.com/FalsePhilosopher/mesa-docker-ps4
++
++
++3. General discussion/help:
++    - https://ps4linux.com/
++    - https://discord.gg/QtcPmzHVVm (PS4-Linux Server Discord)
++    - https://discord.gg/jebUjgBu6T (ps4gentoo/ps4boot (mircoho's) Discord)   
++4. Random and other links regarding PS4-Linux that were, are, or could be useful:
++    - https://github.com/Hakkuraifu/PS4Linux-Documentation (Early documentation on PS4-Linux)
++    - https://github.com/Ps3itaTeam/ (Fan control, kernel, graphics drivers etc.)
++    - https://github.com/ErkkolaMaitohappo/arch-ps4-aur-smth-fork (Clean Arch Linux on PS4 (2025, Dec))
++    - https://github.com/7coil/archlinux-on-ps4 (Arch Linux on PS4,  automated to fetch latest release)
++    - https://github.com/Dr4kk3N/dkn-overlay (Gentoo overlay for PS4-Linux)
++    - https://github.com/Hakkuraifu/PS4Linux-ArchDrivers (Graphics Drivers; Arch Based)
++    - https://github.com/rinsuki/ps4linux-video-drivers (Graphics Drivers; Arch Based)
++    - https://github.com/IT-Mania/PS4linux-deb/ (Graphics drivers ; Debian based)
++    - https://github.com/DionKill/ps4-video-archlinux (Graphics drivers ; Arch based - 2025, Dec)
++    - https://github.com/noob404yt/ (Mediatek drivers, Pop!_OS drivers)
++    - https://github.com/TigerClips1/ (Developer of PS4 JaguarLinux)
++
++
++
++### For an instructional manual on installation and other topics, refer to this [all-around guide.](https://dionkill.github.io/ps4-linux-tutorial/)
++
++---
++<p align="center">Enjoy your Linux-Station!</p>
++
++---
+ <br>
+-======== Generic Linux Kernel Doucmentation: ========
+ 
++Generic Linux Kernel Documentation
++------
+ 
+ There are several guides for kernel developers and users. These guides can
+ be rendered in a number of formats, like HTML and PDF. Please read
+diff --git a/arch/x86/include/asm/ps4.h b/arch/x86/include/asm/ps4.h
+index 60ee1c4f4f18414de2304b4dd068b9bb9bb3ac93..09d6f9ec22b8f2cea3585f95b4f1df026578ad6d 100644
+--- a/arch/x86/include/asm/ps4.h
++++ b/arch/x86/include/asm/ps4.h
+@@ -6,12 +6,14 @@
+  * as published by the Free Software Foundation; version 2
+  * of the License.
+  */
++
+ #ifndef _ASM_X86_PS4_H
+ #define _ASM_X86_PS4_H
+ 
+-#ifdef CONFIG_X86_PS4
+-
+ #include <linux/irqdomain.h>
++#include <linux/pci.h>
++
++#ifdef CONFIG_X86_PS4
+ 
+ #define PS4_DEFAULT_TSC_FREQ 1594000000
+ 
+diff --git a/config b/config
+index 83918e453db8f60f1d33441b769a2886031bebcb..0aca0bdddf1adf40014ab1d03c6e79abafcd4a98 100644
+--- a/config
++++ b/config
+@@ -2,22 +2,25 @@
+ # Automatically generated file; DO NOT EDIT.
+ # Linux/x86 6.15.4 Kernel Configuration
+ #
+-CONFIG_CC_VERSION_TEXT="gcc-11 (GCC) 11.3.0"
+-CONFIG_CC_IS_GCC=y
+-CONFIG_GCC_VERSION=110300
+-CONFIG_CLANG_VERSION=0
+-CONFIG_AS_IS_GNU=y
+-CONFIG_AS_VERSION=24501
+-CONFIG_LD_IS_BFD=y
+-CONFIG_LD_VERSION=24501
+-CONFIG_LLD_VERSION=0
++CONFIG_CC_VERSION_TEXT="clang version 21.1.8"
++CONFIG_GCC_VERSION=0
++CONFIG_CC_IS_CLANG=y
++CONFIG_CLANG_VERSION=210108
++CONFIG_AS_IS_LLVM=y
++CONFIG_AS_VERSION=210108
++CONFIG_LD_VERSION=0
++CONFIG_LD_IS_LLD=y
++CONFIG_LLD_VERSION=210108
+ CONFIG_RUSTC_VERSION=0
+ CONFIG_RUSTC_LLVM_VERSION=0
+ CONFIG_CC_CAN_LINK=y
+-CONFIG_GCC_ASM_GOTO_OUTPUT_BROKEN=y
++CONFIG_CC_HAS_ASM_GOTO_OUTPUT=y
++CONFIG_CC_HAS_ASM_GOTO_TIED_OUTPUT=y
+ CONFIG_TOOLS_SUPPORT_RELR=y
+ CONFIG_CC_HAS_ASM_INLINE=y
+ CONFIG_CC_HAS_NO_PROFILE_FN_ATTR=y
++CONFIG_CC_HAS_COUNTED_BY=y
++CONFIG_CC_HAS_MULTIDIMENSIONAL_NONSTRING=y
+ CONFIG_LD_CAN_USE_KEEP_IN_OVERLAY=y
+ CONFIG_PAHOLE_VERSION=131
+ CONFIG_IRQ_WORK=y
+@@ -30,7 +33,7 @@ CONFIG_THREAD_INFO_IN_TASK=y
+ CONFIG_INIT_ENV_ARG_LIMIT=32
+ # CONFIG_COMPILE_TEST is not set
+ # CONFIG_WERROR is not set
+-CONFIG_LOCALVERSION="-crashnt-3"
++CONFIG_LOCALVERSION="-crashnt-4.7"
+ CONFIG_LOCALVERSION_AUTO=y
+ CONFIG_BUILD_SALT=""
+ CONFIG_HAVE_KERNEL_GZIP=y
+@@ -115,8 +118,12 @@ CONFIG_ARCH_WANT_DEFAULT_BPF_JIT=y
+ #
+ # BPF subsystem
+ #
+-# CONFIG_BPF_SYSCALL is not set
+-# CONFIG_BPF_JIT is not set
++CONFIG_BPF_SYSCALL=y
++CONFIG_BPF_JIT=y
++# CONFIG_BPF_JIT_ALWAYS_ON is not set
++CONFIG_BPF_JIT_DEFAULT_ON=y
++CONFIG_BPF_UNPRIV_DEFAULT_OFF=y
++# CONFIG_BPF_PRELOAD is not set
+ # end of BPF subsystem
+ 
+ CONFIG_PREEMPT_BUILD=y
+@@ -130,6 +137,7 @@ CONFIG_PREEMPT_COUNT=y
+ CONFIG_PREEMPTION=y
+ CONFIG_PREEMPT_DYNAMIC=y
+ # CONFIG_SCHED_CORE is not set
++CONFIG_SCHED_CLASS_EXT=y
+ 
+ #
+ # CPU/Task time and stats accounting
+@@ -155,6 +163,10 @@ CONFIG_TREE_RCU=y
+ CONFIG_PREEMPT_RCU=y
+ # CONFIG_RCU_EXPERT is not set
+ CONFIG_TREE_SRCU=y
++CONFIG_TASKS_RCU_GENERIC=y
++CONFIG_NEED_TASKS_RCU=y
++CONFIG_TASKS_RCU=y
++CONFIG_TASKS_TRACE_RCU=y
+ CONFIG_RCU_STALL_COMMON=y
+ CONFIG_RCU_NEED_SEGCBLIST=y
+ CONFIG_RCU_NOCB_CPU=y
+@@ -179,11 +191,9 @@ CONFIG_HAVE_UNSTABLE_SCHED_CLOCK=y
+ CONFIG_ARCH_SUPPORTS_NUMA_BALANCING=y
+ CONFIG_ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH=y
+ CONFIG_CC_HAS_INT128=y
+-CONFIG_CC_IMPLICIT_FALLTHROUGH="-Wimplicit-fallthrough=5"
++CONFIG_CC_IMPLICIT_FALLTHROUGH="-Wimplicit-fallthrough"
+ CONFIG_GCC10_NO_ARRAY_BOUNDS=y
+-CONFIG_CC_NO_ARRAY_BOUNDS=y
+ CONFIG_GCC_NO_STRINGOP_OVERFLOW=y
+-CONFIG_CC_NO_STRINGOP_OVERFLOW=y
+ CONFIG_ARCH_SUPPORTS_INT128=y
+ # CONFIG_NUMA_BALANCING is not set
+ CONFIG_SLAB_OBJ_EXT=y
+@@ -199,6 +209,7 @@ CONFIG_GROUP_SCHED_WEIGHT=y
+ CONFIG_FAIR_GROUP_SCHED=y
+ # CONFIG_CFS_BANDWIDTH is not set
+ CONFIG_RT_GROUP_SCHED=y
++CONFIG_EXT_GROUP_SCHED=y
+ CONFIG_CGROUP_PIDS=y
+ # CONFIG_CGROUP_RDMA is not set
+ # CONFIG_CGROUP_DMEM is not set
+@@ -208,6 +219,7 @@ CONFIG_CGROUP_HUGETLB=y
+ CONFIG_CGROUP_DEVICE=y
+ CONFIG_CGROUP_CPUACCT=y
+ CONFIG_CGROUP_PERF=y
++# CONFIG_CGROUP_BPF is not set
+ CONFIG_CGROUP_MISC=y
+ CONFIG_CGROUP_DEBUG=y
+ CONFIG_SOCK_CGROUP_DATA=y
+@@ -284,6 +296,7 @@ CONFIG_PERF_EVENTS=y
+ 
+ CONFIG_SYSTEM_DATA_VERIFICATION=y
+ # CONFIG_PROFILING is not set
++CONFIG_TRACEPOINTS=y
+ 
+ #
+ # Kexec and crash features
+@@ -448,6 +461,7 @@ CONFIG_PHYSICAL_START=0x1000000
+ CONFIG_RELOCATABLE=y
+ # CONFIG_RANDOMIZE_BASE is not set
+ CONFIG_PHYSICAL_ALIGN=0x200000
++# CONFIG_ADDRESS_MASKING is not set
+ CONFIG_HOTPLUG_CPU=y
+ # CONFIG_COMPAT_VDSO is not set
+ CONFIG_LEGACY_VSYSCALL_XONLY=y
+@@ -459,27 +473,14 @@ CONFIG_HAVE_LIVEPATCH=y
+ CONFIG_X86_BUS_LOCK_DETECT=y
+ # end of Processor type and features
+ 
+-CONFIG_CC_HAS_NAMED_AS=y
+ CONFIG_CC_HAS_NAMED_AS_FIXED_SANITIZERS=y
+-CONFIG_USE_X86_SEG_SUPPORT=y
+ CONFIG_CC_HAS_SLS=y
+ CONFIG_CC_HAS_RETURN_THUNK=y
+ CONFIG_CC_HAS_ENTRY_PADDING=y
++CONFIG_CC_HAS_KCFI_ARITY=y
+ CONFIG_FUNCTION_PADDING_CFI=11
+ CONFIG_FUNCTION_PADDING_BYTES=16
+-CONFIG_HAVE_CALL_THUNKS=y
+-CONFIG_CPU_MITIGATIONS=y
+-CONFIG_MITIGATION_PAGE_TABLE_ISOLATION=y
+-CONFIG_MITIGATION_RETPOLINE=y
+-CONFIG_MITIGATION_RETHUNK=y
+-CONFIG_MITIGATION_UNRET_ENTRY=y
+-CONFIG_MITIGATION_IBPB_ENTRY=y
+-CONFIG_MITIGATION_SRSO=y
+-# CONFIG_MITIGATION_SLS is not set
+-CONFIG_MITIGATION_RETBLEED=y
+-CONFIG_MITIGATION_SPECTRE_V1=y
+-CONFIG_MITIGATION_SPECTRE_V2=y
+-CONFIG_MITIGATION_SSB=y
++# CONFIG_CPU_MITIGATIONS is not set
+ CONFIG_ARCH_HAS_ADD_PAGES=y
+ 
+ #
+@@ -604,7 +605,6 @@ CONFIG_AMD_NODE=y
+ #
+ CONFIG_IA32_EMULATION=y
+ # CONFIG_IA32_EMULATION_DEFAULT_DISABLED is not set
+-# CONFIG_X86_X32_ABI is not set
+ CONFIG_COMPAT_32=y
+ CONFIG_COMPAT=y
+ CONFIG_COMPAT_FOR_U64_ALIGNMENT=y
+@@ -663,6 +663,11 @@ CONFIG_X86_DISABLED_FEATURE_K6_MTRR=y
+ CONFIG_X86_DISABLED_FEATURE_CYRIX_ARR=y
+ CONFIG_X86_DISABLED_FEATURE_CENTAUR_MCR=y
+ CONFIG_X86_DISABLED_FEATURE_LA57=y
++CONFIG_X86_DISABLED_FEATURE_PTI=y
++CONFIG_X86_DISABLED_FEATURE_RETPOLINE=y
++CONFIG_X86_DISABLED_FEATURE_RETPOLINE_LFENCE=y
++CONFIG_X86_DISABLED_FEATURE_RETHUNK=y
++CONFIG_X86_DISABLED_FEATURE_UNRET=y
+ CONFIG_X86_DISABLED_FEATURE_CALL_DEPTH=y
+ CONFIG_X86_DISABLED_FEATURE_LAM=y
+ CONFIG_X86_DISABLED_FEATURE_ENQCMD=y
+@@ -698,6 +703,7 @@ CONFIG_GENERIC_ENTRY=y
+ CONFIG_JUMP_LABEL=y
+ # CONFIG_STATIC_KEYS_SELFTEST is not set
+ # CONFIG_STATIC_CALL_SELFTEST is not set
++CONFIG_UPROBES=y
+ CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS=y
+ CONFIG_ARCH_USE_BUILTIN_BSWAP=y
+ CONFIG_USER_RETURN_NOTIFIER=y
+@@ -756,12 +762,21 @@ CONFIG_SECCOMP_FILTER=y
+ CONFIG_HAVE_ARCH_STACKLEAK=y
+ CONFIG_HAVE_STACKPROTECTOR=y
+ # CONFIG_STACKPROTECTOR is not set
++CONFIG_LTO=y
++CONFIG_LTO_CLANG=y
+ CONFIG_ARCH_SUPPORTS_LTO_CLANG=y
+ CONFIG_ARCH_SUPPORTS_LTO_CLANG_THIN=y
+-CONFIG_LTO_NONE=y
++CONFIG_HAS_LTO_CLANG=y
++# CONFIG_LTO_NONE is not set
++CONFIG_LTO_CLANG_FULL=y
++# CONFIG_LTO_CLANG_THIN
+ CONFIG_ARCH_SUPPORTS_AUTOFDO_CLANG=y
++# CONFIG_AUTOFDO_CLANG is not set
+ CONFIG_ARCH_SUPPORTS_PROPELLER_CLANG=y
++# CONFIG_PROPELLER_CLANG is not set
+ CONFIG_ARCH_SUPPORTS_CFI_CLANG=y
++# CONFIG_CFI_CLANG is not set
++CONFIG_HAVE_CFI_ICALL_NORMALIZE_INTEGERS_CLANG=y
+ CONFIG_HAVE_ARCH_WITHIN_STACK_FRAMES=y
+ CONFIG_HAVE_CONTEXT_TRACKING_USER=y
+ CONFIG_HAVE_CONTEXT_TRACKING_USER_OFFSTACK=y
+@@ -839,11 +854,10 @@ CONFIG_ARCH_HAS_GCOV_PROFILE_ALL=y
+ # end of GCOV-based kernel profiling
+ 
+ CONFIG_HAVE_GCC_PLUGINS=y
+-CONFIG_GCC_PLUGINS=y
+-# CONFIG_GCC_PLUGIN_LATENT_ENTROPY is not set
+ CONFIG_FUNCTION_ALIGNMENT_4B=y
+ CONFIG_FUNCTION_ALIGNMENT_16B=y
+ CONFIG_FUNCTION_ALIGNMENT=16
++CONFIG_CC_HAS_SANE_FUNCTION_ALIGNMENT=y
+ # end of General architecture-dependent options
+ 
+ CONFIG_RT_MUTEXES=y
+@@ -1105,6 +1119,7 @@ CONFIG_XFRM_MIGRATE=y
+ CONFIG_XFRM_STATISTICS=y
+ # CONFIG_NET_KEY is not set
+ # CONFIG_XFRM_IPTFS is not set
++# CONFIG_XDP_SOCKETS is not set
+ CONFIG_NET_HANDSHAKE=y
+ CONFIG_INET=y
+ CONFIG_IP_MULTICAST=y
+@@ -1207,6 +1222,7 @@ CONFIG_NETFILTER_SKIP_EGRESS=y
+ CONFIG_NETFILTER_NETLINK=y
+ CONFIG_NETFILTER_FAMILY_BRIDGE=y
+ CONFIG_NETFILTER_FAMILY_ARP=y
++CONFIG_NETFILTER_BPF_LINK=y
+ # CONFIG_NETFILTER_NETLINK_HOOK is not set
+ CONFIG_NETFILTER_NETLINK_ACCT=y
+ CONFIG_NETFILTER_NETLINK_QUEUE=y
+@@ -1659,6 +1675,7 @@ CONFIG_BATMAN_ADV_DAT=y
+ # CONFIG_BATMAN_ADV_NC is not set
+ CONFIG_BATMAN_ADV_MCAST=y
+ # CONFIG_BATMAN_ADV_DEBUG is not set
++# CONFIG_BATMAN_ADV_TRACING is not set
+ # CONFIG_OPENVSWITCH is not set
+ CONFIG_VSOCKETS=y
+ CONFIG_VSOCKETS_DIAG=y
+@@ -1691,6 +1708,7 @@ CONFIG_NET_FLOW_LIMIT=y
+ # Network testing
+ #
+ # CONFIG_NET_PKTGEN is not set
++# CONFIG_NET_DROP_MONITOR is not set
+ # end of Network testing
+ # end of Networking options
+ 
+@@ -1731,6 +1749,7 @@ CONFIG_BT_MRVL_SDIO=y
+ CONFIG_BT_MTKSDIO=y
+ # CONFIG_BT_VIRTIO is not set
+ # CONFIG_BT_INTEL_PCIE is not set
++CONFIG_BT_VIRTIO=y
+ # end of Bluetooth device drivers
+ 
+ # CONFIG_AF_RXRPC is not set
+@@ -1757,6 +1776,7 @@ CONFIG_MAC80211_RC_DEFAULT_MINSTREL=y
+ CONFIG_MAC80211_RC_DEFAULT="minstrel_ht"
+ # CONFIG_MAC80211_MESH is not set
+ # CONFIG_MAC80211_LEDS is not set
++# CONFIG_MAC80211_MESSAGE_TRACING is not set
+ # CONFIG_MAC80211_DEBUG_MENU is not set
+ CONFIG_MAC80211_STA_HASH_MAX_SIZE=0
+ CONFIG_RFKILL=y
+@@ -1773,6 +1793,7 @@ CONFIG_LWTUNNEL_BPF=y
+ CONFIG_DST_CACHE=y
+ CONFIG_GRO_CELLS=y
+ CONFIG_NET_SELFTESTS=y
++CONFIG_NET_SOCK_MSG=y
+ CONFIG_PAGE_POOL=y
+ # CONFIG_PAGE_POOL_STATS is not set
+ # CONFIG_FAILOVER is not set
+@@ -1879,7 +1900,7 @@ CONFIG_PREVENT_FIRMWARE_BUILD=y
+ CONFIG_FW_LOADER=y
+ CONFIG_FW_LOADER_PAGED_BUF=y
+ CONFIG_FW_LOADER_SYSFS=y
+-CONFIG_EXTRA_FIRMWARE="mrvl/sd8897_uapsta.bin mrvl/sd8797_uapsta.bin"
++CONFIG_EXTRA_FIRMWARE="mrvl/sd8897_uapsta.bin mrvl/sd8797_uapsta.bin mediatek/mt7668pr2h.bin EEPROM_MT7668.bin EEPROM_MT7668_e1.bin mt7668_patch_e1_hdr.bin mt7668_patch_e2_hdr.bin TxPwrLimit_MT76x8.dat wifi.cfg WIFI_RAM_CODE2_SDIO_MT7668.bin WIFI_RAM_CODE2_USB_MT7668.bin WIFI_RAM_CODE_MT7668.bin"
+ CONFIG_EXTRA_FIRMWARE_DIR="/lib/firmware"
+ CONFIG_FW_LOADER_USER_HELPER=y
+ # CONFIG_FW_LOADER_USER_HELPER_FALLBACK is not set
+@@ -2030,7 +2051,7 @@ CONFIG_VIRTIO_BLK=y
+ # CONFIG_DW_XDATA_PCIE is not set
+ # CONFIG_PCI_ENDPOINT_TEST is not set
+ # CONFIG_XILINX_SDFEC is not set
+-# CONFIG_NTSYNC is not set
++CONFIG_NTSYNC=y
+ # CONFIG_NSM is not set
+ # CONFIG_C2PORT is not set
+ 
+@@ -2241,6 +2262,7 @@ CONFIG_TUN=y
+ CONFIG_VETH=y
+ # CONFIG_VIRTIO_NET is not set
+ # CONFIG_NLMON is not set
++# CONFIG_NETKIT is not set
+ # CONFIG_ARCNET is not set
+ CONFIG_ETHERNET=y
+ # CONFIG_NET_VENDOR_3COM is not set
+@@ -2432,9 +2454,33 @@ CONFIG_WLAN_VENDOR_MARVELL=y
+ CONFIG_MWIFIEX=y
+ CONFIG_MWIFIEX_SDIO=y
+ # CONFIG_MWIFIEX_PCIE is not set
+-# CONFIG_MWIFIEX_USB is not set
+-# CONFIG_MWL8K is not set
+-# CONFIG_WLAN_VENDOR_MEDIATEK is not set
++CONFIG_MWIFIEX_USB=y
++CONFIG_MWL8K=y
++CONFIG_WLAN_VENDOR_MEDIATEK=y
++CONFIG_MT7601U=y
++CONFIG_MT76_CORE=y
++CONFIG_MT76_LEDS=y
++CONFIG_MT76_USB=y
++CONFIG_MT76_SDIO=y
++CONFIG_MT76x02_LIB=y
++CONFIG_MT76x02_USB=y
++CONFIG_MT76_CONNAC_LIB=y
++CONFIG_MT76x0_COMMON=y
++CONFIG_MT76x0U=y
++CONFIG_MT76x0E=y
++CONFIG_MT76x2_COMMON=y
++CONFIG_MT76x2E=y
++CONFIG_MT76x2U=y
++CONFIG_MT7603E=y
++CONFIG_MT7615_COMMON=y
++CONFIG_MT7615E=y
++CONFIG_MT7663_USB_SDIO_COMMON=y
++CONFIG_MT7663U=y
++CONFIG_MT7663S=y
++CONFIG_MT7915E=y
++CONFIG_MT7921E=y
++CONFIG_MT76X8=y
++CONFIG_MT6632=y
+ CONFIG_WLAN_VENDOR_MICROCHIP=y
+ # CONFIG_WILC1000_SDIO is not set
+ CONFIG_WLAN_VENDOR_PURELIFI=y
+@@ -4330,7 +4376,10 @@ CONFIG_IRQ_REMAP=y
+ # end of IRQ chip support
+ 
+ # CONFIG_IPACK_BUS is not set
+-# CONFIG_RESET_CONTROLLER is not set
++CONFIG_RESET_CONTROLLER=y
++# CONFIG_RESET_SIMPLE is not set
++# CONFIG_RESET_TI_SYSCON is not set
++# CONFIG_RESET_TI_TPS380X is not set
+ 
+ #
+ # PHY Subsystem
+@@ -4647,11 +4696,12 @@ CONFIG_LSM="yama,loadpin,safesetid,integrity"
+ #
+ # Memory initialization
+ #
++CONFIG_CC_HAS_AUTO_VAR_INIT_PATTERN=y
++CONFIG_CC_HAS_AUTO_VAR_INIT_ZERO_BARE=y
++CONFIG_CC_HAS_AUTO_VAR_INIT_ZERO=y
+ CONFIG_INIT_STACK_NONE=y
+-# CONFIG_GCC_PLUGIN_STRUCTLEAK_USER is not set
+-# CONFIG_GCC_PLUGIN_STRUCTLEAK_BYREF is not set
+-# CONFIG_GCC_PLUGIN_STRUCTLEAK_BYREF_ALL is not set
+-# CONFIG_GCC_PLUGIN_STACKLEAK is not set
++# CONFIG_INIT_STACK_ALL_PATTERN is not set
++# CONFIG_INIT_STACK_ALL_ZERO is not set
+ # CONFIG_INIT_ON_ALLOC_DEFAULT_ON is not set
+ # CONFIG_INIT_ON_FREE_DEFAULT_ON is not set
+ CONFIG_CC_HAS_ZERO_CALL_USED_REGS=y
+@@ -4672,9 +4722,9 @@ CONFIG_CC_HAS_ZERO_CALL_USED_REGS=y
+ # CONFIG_BUG_ON_DATA_CORRUPTION is not set
+ # end of Hardening of kernel data structures
+ 
++CONFIG_CC_HAS_RANDSTRUCT=y
+ CONFIG_RANDSTRUCT_NONE=y
+ # CONFIG_RANDSTRUCT_FULL is not set
+-# CONFIG_RANDSTRUCT_PERFORMANCE is not set
+ # end of Kernel hardening options
+ # end of Security options
+ 
+@@ -4925,6 +4975,7 @@ CONFIG_SYSTEM_TRUSTED_KEYS=""
+ # end of Certificates for signature checking
+ 
+ # CONFIG_CRYPTO_KRB5 is not set
++CONFIG_BINARY_PRINTF=y
+ 
+ #
+ # Library routines
+@@ -4996,9 +5047,9 @@ CONFIG_XZ_DEC_X86=y
+ # CONFIG_XZ_DEC_POWERPC is not set
+ # CONFIG_XZ_DEC_ARM is not set
+ # CONFIG_XZ_DEC_ARMTHUMB is not set
+-CONFIG_XZ_DEC_ARM64=y
++# CONFIG_XZ_DEC_ARM64 is not set
+ # CONFIG_XZ_DEC_SPARC is not set
+-CONFIG_XZ_DEC_RISCV=y
++# CONFIG_XZ_DEC_RISCV is not set
+ # CONFIG_XZ_DEC_MICROLZMA is not set
+ CONFIG_XZ_DEC_BCJ=y
+ # CONFIG_XZ_DEC_TEST is not set
+@@ -5069,8 +5120,6 @@ CONFIG_ARCH_HAS_CPU_CACHE_INVALIDATE_MEMREGION=y
+ CONFIG_ARCH_HAS_UACCESS_FLUSHCACHE=y
+ CONFIG_ARCH_HAS_COPY_MC=y
+ CONFIG_ARCH_STACKWALK=y
+-CONFIG_STACKDEPOT=y
+-CONFIG_STACKDEPOT_MAX_FRAMES=64
+ CONFIG_SBITMAP=y
+ # CONFIG_LWQ_TEST is not set
+ # end of Library routines
+@@ -5106,21 +5155,24 @@ CONFIG_DEBUG_KERNEL=y
+ CONFIG_DEBUG_INFO=y
+ CONFIG_AS_HAS_NON_CONST_ULEB128=y
+ # CONFIG_DEBUG_INFO_NONE is not set
+-CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y
+-# CONFIG_DEBUG_INFO_DWARF4 is not set
++# CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT is not set
++CONFIG_DEBUG_INFO_DWARF4=y
+ # CONFIG_DEBUG_INFO_DWARF5 is not set
+ # CONFIG_DEBUG_INFO_REDUCED is not set
+ CONFIG_DEBUG_INFO_COMPRESSED_NONE=y
+ # CONFIG_DEBUG_INFO_COMPRESSED_ZLIB is not set
++# CONFIG_DEBUG_INFO_COMPRESSED_ZSTD is not set
+ # CONFIG_DEBUG_INFO_SPLIT is not set
++CONFIG_DEBUG_INFO_BTF=y
+ CONFIG_PAHOLE_HAS_SPLIT_BTF=y
++CONFIG_PAHOLE_HAS_BTF_TAG=y
+ CONFIG_PAHOLE_HAS_LANG_EXCLUDE=y
++CONFIG_DEBUG_INFO_BTF_MODULES=y
++# CONFIG_MODULE_ALLOW_BTF_MISMATCH is not set
+ # CONFIG_GDB_SCRIPTS is not set
+ CONFIG_FRAME_WARN=2048
+ # CONFIG_STRIP_ASM_SYMS is not set
+-# CONFIG_READABLE_ASM is not set
+ # CONFIG_HEADERS_INSTALL is not set
+-# CONFIG_DEBUG_SECTION_MISMATCH is not set
+ # CONFIG_SECTION_MISMATCH_WARN_ONLY is not set
+ # CONFIG_DEBUG_FORCE_FUNCTION_ALIGN_64B is not set
+ CONFIG_ARCH_WANT_FRAME_POINTERS=y
+@@ -5137,9 +5189,9 @@ CONFIG_STACK_VALIDATION=y
+ #
+ # CONFIG_MAGIC_SYSRQ is not set
+ CONFIG_DEBUG_FS=y
+-# CONFIG_DEBUG_FS_ALLOW_ALL is not set
++CONFIG_DEBUG_FS_ALLOW_ALL=y
+ # CONFIG_DEBUG_FS_DISALLOW_MOUNT is not set
+-CONFIG_DEBUG_FS_ALLOW_NONE=y
++# CONFIG_DEBUG_FS_ALLOW_NONE is not set
+ CONFIG_HAVE_ARCH_KGDB=y
+ # CONFIG_KGDB is not set
+ CONFIG_ARCH_HAS_UBSAN=y
+@@ -5163,11 +5215,11 @@ CONFIG_HAVE_KCSAN_COMPILER=y
+ #
+ # CONFIG_PAGE_EXTENSION is not set
+ # CONFIG_DEBUG_PAGEALLOC is not set
+-CONFIG_SLUB_DEBUG=y
+-# CONFIG_SLUB_DEBUG_ON is not set
++# CONFIG_SLUB_DEBUG is not set
+ # CONFIG_PAGE_OWNER is not set
+ # CONFIG_PAGE_POISONING is not set
+-CONFIG_DEBUG_RODATA_TEST=y
++# CONFIG_DEBUG_PAGE_REF is not set
++# CONFIG_DEBUG_RODATA_TEST is not set
+ CONFIG_ARCH_HAS_DEBUG_WX=y
+ # CONFIG_DEBUG_WX is not set
+ CONFIG_ARCH_HAS_PTDUMP=y
+@@ -5193,11 +5245,14 @@ CONFIG_ARCH_SUPPORTS_KMAP_LOCAL_FORCE_MAP=y
+ CONFIG_HAVE_ARCH_KASAN=y
+ CONFIG_HAVE_ARCH_KASAN_VMALLOC=y
+ CONFIG_CC_HAS_KASAN_GENERIC=y
++CONFIG_CC_HAS_KASAN_SW_TAGS=y
+ CONFIG_CC_HAS_WORKING_NOSANITIZE_ADDRESS=y
+ # CONFIG_KASAN is not set
+ CONFIG_HAVE_ARCH_KFENCE=y
+ # CONFIG_KFENCE is not set
+ CONFIG_HAVE_ARCH_KMSAN=y
++CONFIG_HAVE_KMSAN_COMPILER=y
++# CONFIG_KMSAN is not set
+ # end of Memory Debugging
+ 
+ # CONFIG_DEBUG_SHIRQ is not set
+@@ -5225,7 +5280,7 @@ CONFIG_SCHED_INFO=y
+ # CONFIG_SCHEDSTATS is not set
+ # end of Scheduler Debugging
+ 
+-CONFIG_DEBUG_PREEMPT=y
++# CONFIG_DEBUG_PREEMPT is not set
+ 
+ #
+ # Lock Debugging (spinlocks, mutexes, etc...)
+@@ -5280,6 +5335,7 @@ CONFIG_RCU_EXP_CPU_STALL_TIMEOUT=0
+ # CONFIG_CPU_HOTPLUG_STATE_CONTROL is not set
+ # CONFIG_LATENCYTOP is not set
+ CONFIG_USER_STACKTRACE_SUPPORT=y
++CONFIG_NOP_TRACER=y
+ CONFIG_HAVE_RETHOOK=y
+ CONFIG_HAVE_FUNCTION_TRACER=y
+ CONFIG_HAVE_DYNAMIC_FTRACE=y
+@@ -5295,8 +5351,45 @@ CONFIG_HAVE_OBJTOOL_MCOUNT=y
+ CONFIG_HAVE_OBJTOOL_NOP_MCOUNT=y
+ CONFIG_HAVE_C_RECORDMCOUNT=y
+ CONFIG_HAVE_BUILDTIME_MCOUNT_SORT=y
++CONFIG_TRACE_CLOCK=y
++CONFIG_RING_BUFFER=y
++CONFIG_EVENT_TRACING=y
++CONFIG_CONTEXT_SWITCH_TRACER=y
++CONFIG_TRACING=y
+ CONFIG_TRACING_SUPPORT=y
+-# CONFIG_FTRACE is not set
++CONFIG_FTRACE=y
++# CONFIG_BOOTTIME_TRACING is not set
++# CONFIG_FUNCTION_TRACER is not set
++# CONFIG_STACK_TRACER is not set
++# CONFIG_IRQSOFF_TRACER is not set
++# CONFIG_PREEMPT_TRACER is not set
++# CONFIG_SCHED_TRACER is not set
++# CONFIG_HWLAT_TRACER is not set
++# CONFIG_OSNOISE_TRACER is not set
++# CONFIG_TIMERLAT_TRACER is not set
++# CONFIG_MMIOTRACE is not set
++# CONFIG_ENABLE_DEFAULT_TRACERS is not set
++# CONFIG_FTRACE_SYSCALLS is not set
++# CONFIG_TRACER_SNAPSHOT is not set
++CONFIG_BRANCH_PROFILE_NONE=y
++# CONFIG_PROFILE_ANNOTATED_BRANCHES is not set
++# CONFIG_PROFILE_ALL_BRANCHES is not set
++# CONFIG_BLK_DEV_IO_TRACE is not set
++CONFIG_UPROBE_EVENTS=y
++CONFIG_BPF_EVENTS=y
++CONFIG_DYNAMIC_EVENTS=y
++CONFIG_PROBE_EVENTS=y
++# CONFIG_SYNTH_EVENTS is not set
++# CONFIG_USER_EVENTS is not set
++# CONFIG_HIST_TRIGGERS is not set
++# CONFIG_TRACE_EVENT_INJECT is not set
++# CONFIG_TRACEPOINT_BENCHMARK is not set
++# CONFIG_RING_BUFFER_BENCHMARK is not set
++# CONFIG_TRACE_EVAL_MAP_FILE is not set
++# CONFIG_RING_BUFFER_STARTUP_TEST is not set
++# CONFIG_RING_BUFFER_VALIDATE_TIME_DELTAS is not set
++# CONFIG_PREEMPTIRQ_DELAY_TEST is not set
++# CONFIG_RV is not set
+ # CONFIG_PROVIDE_OHCI1394_DMA_INIT is not set
+ # CONFIG_SAMPLES is not set
+ CONFIG_HAVE_SAMPLE_FTRACE_DIRECT=y
+@@ -5327,6 +5420,7 @@ CONFIG_DEBUG_BOOT_PARAMS=y
+ # CONFIG_PUNIT_ATOM_DEBUG is not set
+ # CONFIG_UNWINDER_ORC is not set
+ CONFIG_UNWINDER_FRAME_POINTER=y
++# CONFIG_UNWINDER_GUESS is not set
+ # end of x86 Debugging
+ 
+ #
+diff --git a/drivers/ps4/icc/i2c.c b/drivers/ps4/icc/i2c.c
+index 68df8ef5603453a81220da3e3e4b03112a050a7b..ac8dca8ab1fdf1f0caff3934aebb03145df76a27 100644
+--- a/drivers/ps4/icc/i2c.c
++++ b/drivers/ps4/icc/i2c.c
+@@ -7,6 +7,11 @@
+ #define ICC_MAX_READ_DATA 0xff
+ #define ICC_MAX_WRITE_DATA 0xf8
+ 
++u32 icc_i2c_functionality(struct i2c_adapter *adap);
++int icc_i2c_init(struct apcie_dev *sc);
++void icc_i2c_remove(struct apcie_dev *sc);
++
++
+ /* This is actually multiple nested variable length structures, but since we
+  * currently only support one op per transaction, we hardcode it. */
+ struct icc_i2c_msg {
+diff --git a/drivers/ps4/ps4-apcie-icc.c b/drivers/ps4/ps4-apcie-icc.c
+index 2ee9885d7a1cb04d543406a7827329202b503e9e..d4b584503e3feaf47e65d6ce3ce96563bfeb6507 100644
+--- a/drivers/ps4/ps4-apcie-icc.c
++++ b/drivers/ps4/ps4-apcie-icc.c
+@@ -36,6 +36,14 @@ int icc_pwrbutton_init(struct apcie_dev *sc);
+ void icc_pwrbutton_remove(struct apcie_dev *sc);
+ void icc_pwrbutton_trigger(struct apcie_dev *sc, int state);
+ 
++void resetUsbPort(void); /* resetUsb used only in this file; maybe that should change */
++void resetBtWlan(void);
++
++void do_icc_init(void);
++void icc_reboot(void);
++int apcie_icc_init(struct apcie_dev *sc);
++void apcie_icc_remove(struct apcie_dev *sc);
++
+ #define ICC_MAJOR	'I'
+ 
+  struct icc_cmd {
+@@ -297,7 +305,7 @@ int apcie_icc_cmd(u8 major, u16 minor, const void *data, u16 length,
+ }
+ EXPORT_SYMBOL_GPL(apcie_icc_cmd);
+ 
+-void resetUsbPort(void)
++__maybe_unused void resetUsbPort(void)
+ {
+ 	u8 off = 0, on = 1;
+ 	u8 resp[20];
+@@ -324,7 +332,8 @@ void resetUsbPort(void)
+ 
+ void resetBtWlan(void)
+ {
+-	u8 off = 2, on = 3;
++	/* u8 off = 2; uncomment for disabling Bt/Wlan */
++	u8 on = 3;
+ 	u8 resp[20];
+ 	int ret;
+ 	
+diff --git a/drivers/ps4/ps4-apcie-pwrbutton.c b/drivers/ps4/ps4-apcie-pwrbutton.c
+index d695221703b5a26e0bfd835d4650e543eeddde17..0fef75c4aae67edbda4c9d2d2f9741c6357765c3 100644
+--- a/drivers/ps4/ps4-apcie-pwrbutton.c
++++ b/drivers/ps4/ps4-apcie-pwrbutton.c
+@@ -1,6 +1,12 @@
+ #include <linux/input.h>
+ #include "aeolia.h"
+ 
++/* Prototype declarations */
++void icc_pwrbutton_trigger(struct apcie_dev *sc, int state);
++int icc_pwrbutton_init(struct apcie_dev *sc);
++void icc_pwrbutton_remove(struct apcie_dev *sc);
++/* ---------------------- */ //this file just felt very empty at the top hence the comments
++
+ void icc_pwrbutton_trigger(struct apcie_dev *sc, int state)
+ {
+ 	if (sc->icc.pwrbutton_dev) {
+diff --git a/drivers/ps4/ps4-apcie-uart.c b/drivers/ps4/ps4-apcie-uart.c
+index 6dd6dc195735a52adb3864422e5199b5c5ab99ba..cd7244c0fcebc360685c6c0bf4ba5b28660cb987 100644
+--- a/drivers/ps4/ps4-apcie-uart.c
++++ b/drivers/ps4/ps4-apcie-uart.c
+@@ -4,6 +4,7 @@
+ 
+ #include "aeolia.h"
+ 
++int apcie_uart_init(struct apcie_dev *sc); /* Don't know why the compiler complains about prototypes despite the definition*/
+ void apcie_uart_remove(struct apcie_dev *sc);
+ 
+ int apcie_uart_init(struct apcie_dev *sc)
+@@ -49,6 +50,9 @@ void apcie_uart_remove(struct apcie_dev *sc)
+ }
+ 
+ #ifdef CONFIG_PM
++void apcie_uart_suspend(struct apcie_dev *sc, pm_message_t state);
++void apcie_uart_resume(struct apcie_dev *sc);
++
+ void apcie_uart_suspend(struct apcie_dev *sc, pm_message_t state)
+ {
+ 	int i;
+diff --git a/drivers/ps4/ps4-apcie.c b/drivers/ps4/ps4-apcie.c
+index db7eafd0211f6d1db6184412ceddbd6f19466e92..285f25ff8aff7939d8772236562aed5393d8a4c5 100644
+--- a/drivers/ps4/ps4-apcie.c
++++ b/drivers/ps4/ps4-apcie.c
+@@ -68,20 +68,20 @@ static void apcie_config_msi(struct apcie_dev *sc, u32 func, u32 subfunc,
+ 
+ 	glue_clear_mask(sc, APCIE_REG_MSI_CONTROL, APCIE_REG_MSI_CONTROL_ENABLE);
+ 	/* Unknown */
+-	sc_dbg("glue_write32 to offset, value (%08x, %08x, %08x)\n", sc->bar4, APCIE_REG_MSI(0x8), 0xffffffff);
++	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4, APCIE_REG_MSI(0x8), 0xffffffff);
+ 	glue_write32(sc, APCIE_REG_MSI(0x8), 0xffffffff);
+ 	/* Unknown */
+-	sc_dbg("glue_write32 to offset, value (%08x, %08x, %08x)\n", sc->bar4, APCIE_REG_MSI(0xc + (func << 2)), 0xB7FFFF00 + func * 16);
++	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4, APCIE_REG_MSI(0xc + (func << 2)), 0xB7FFFF00 + func * 16);
+ 	glue_write32(sc, APCIE_REG_MSI(0xc + (func << 2)), 0xB7FFFF00 + func * 16);
+ 
+-	sc_dbg("glue_write32 to offset, value (%08x, %08x, %08x)\n", sc->bar4, APCIE_REG_MSI_ADDR(func), addr);
++	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4, APCIE_REG_MSI_ADDR(func), addr);
+ 	glue_write32(sc, APCIE_REG_MSI_ADDR(func), addr);
+ 	/* Unknown */
+ 
+-	sc_dbg("glue_write32 to offset, value (%08x, %08x, %08x)\n", sc->bar4, APCIE_REG_MSI(0xcc + (func << 2)), 0);
++	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4, APCIE_REG_MSI(0xcc + (func << 2)), 0);
+ 	glue_write32(sc, APCIE_REG_MSI(0xcc + (func << 2)), 0);
+ 
+-	sc_dbg("glue_write32 to offset, value (%08x, %08x, %08x)\n", sc->bar4, APCIE_REG_MSI_DATA_HI(func),  data & 0xffe0);
++	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4, APCIE_REG_MSI_DATA_HI(func),  data & 0xffe0);
+ 	glue_write32(sc, APCIE_REG_MSI_DATA_HI(func), data & 0xffe0);
+ 
+ 	if (func < 4) {
+@@ -98,7 +98,7 @@ static void apcie_config_msi(struct apcie_dev *sc, u32 func, u32 subfunc,
+ 		offset = 0xa0 + ((func - 5) << 4) + (subfunc << 2);
+ 	}
+ 
+-	sc_dbg("glue_write32 to offset, value (%08x, %08x, %08x)\n", sc->bar4,  APCIE_REG_MSI_DATA_LO(offset), data & 0x1f);
++	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4,  APCIE_REG_MSI_DATA_LO(offset), data & 0x1f);
+ 	glue_write32(sc, APCIE_REG_MSI_DATA_LO(offset), data & 0x1f);
+ 
+ 	if (func == AEOLIA_FUNC_ID_PCIE)
+@@ -164,7 +164,7 @@ static void apcie_msi_calc_mask(struct irq_data *data) {
+ static void apcie_irq_msi_compose_msg(struct irq_data *data,
+ 				       struct msi_msg *msg)
+ {
+-	struct irq_cfg *cfg = irqd_cfg(data);
++	struct irq_cfg *cfg __maybe_unused = irqd_cfg(data);
+ 
+ 	memset(msg, 0, sizeof(*msg));
+ 	msg->address_hi = X86_MSI_BASE_ADDRESS_HIGH;
+@@ -351,7 +351,7 @@ int apcie_assign_irqs(struct pci_dev *dev, int nvec)
+ 	//info.msi_dev = sc->pdev;
+ 	info.devid = pci_dev_id(sc->pdev);
+ 
+-	int i, base = 0;
++	/*int i, base = 0; -- unused */
+ 	struct msi_desc *desc;
+ 	struct device* bare_dev = &sc->pdev->dev;
+ 
+@@ -372,7 +372,7 @@ int apcie_assign_irqs(struct pci_dev *dev, int nvec)
+ 	info.desc = desc;
+ 	info.data = sc;
+ 
+-	dev_info(&dev->dev, "apcie_assign_irqs(%d) (%d)\n", nvec, info.hwirq);
++	dev_info(&dev->dev, "apcie_assign_irqs(%d) (%ld)\n", nvec, info.hwirq);
+ 
+ 	ret = irq_domain_alloc_irqs(sc->irqdomain, nvec, NUMA_NO_NODE, &info);
+ 	if (ret >= 0) {
+@@ -561,8 +561,8 @@ static int apcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+ 	apcie_initialized = true;
+ 	return 0;
+ 
+-remove_uart:
+-	apcie_uart_remove(sc);
++/* remove_uart:
++	apcie_uart_remove(sc); -- Should work, but dead label*/
+ remove_glue:
+ 	apcie_glue_remove(sc);
+ free_bars:
+diff --git a/extra_firmware/.gitignore b/extra_firmware/.gitignore
+new file mode 100644
+index 0000000000000000000000000000000000000000..8cd3e873bca26f54cabfa7d66b8381e5da0a0b91
+--- /dev/null
++++ b/extra_firmware/.gitignore
+@@ -0,0 +1,2 @@
++# Include *.bin firmware files
++!*.bin

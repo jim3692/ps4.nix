@@ -1,0 +1,26 @@
+From 23442e8cd21a6d5131a919d89d273b8b20579404 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Mon, 9 Nov 2026 00:31:58 +0100
+Subject: [PATCH 102/124] amdgpu: ps4 bridge: take the edid from the emc event
+ on belize too
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/ps4_bridge.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+index b51e9e9cb9974fc0bf8ac70e372461addfa8f42b..9be8a4eb49aa24c509798a838e2ee2cf39f6fcb0 100644
+--- a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
++++ b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+@@ -1121,7 +1121,9 @@ static void ps4_bridge_events_stop(void *data)
+ static void ps4_bridge_events_start(struct device *dev,
+ 				    struct ps4_bridge *mn_bridge)
+ {
+-	if (!ps4_is_baikal() || ps4sb_status() <= 0)
++	struct pci_dev *pdev = to_pci_dev(dev);
++
++	if (ps4sb_status() <= 0 || pdev->device == PCI_DEVICE_ID_CUH_11XX)
+ 		return;
+ 	if (ps4sb_icc_register_event_handler(PS4_BRIDGE_ICC_SERVICE,
+ 					     ps4_bridge_hdmi_event, mn_bridge))

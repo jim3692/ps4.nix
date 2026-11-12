@@ -1,0 +1,23 @@
+From 86760b6bf8107d37de5095a75ea2f3fce5b05f32 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Tue, 10 Nov 2026 21:21:41 +0100
+Subject: [PATCH 117/124] init: say why the kernel is called strawberry
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ init/version-timestamp.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/init/version-timestamp.c b/init/version-timestamp.c
+index e3f2acb009b5bb51726934feb695aadaeb6b062c..6302be8ed3bd17b62ae4b022717bd524d441fd3d 100644
+--- a/init/version-timestamp.c
++++ b/init/version-timestamp.c
+@@ -40,7 +40,7 @@ const char linux_banner[] =
+ 	"\n"
+ 	"  strawberry was here\n"
+ 	"  also strawberry kernel team was here - rmux\n"
+-	"  this kernel is dedicated to my girlfriend, it is named after her\n"
++	"  this kernel is dedicated to my girlfriend, strawberry is what i call her\n"
+ 	"\n"
+ 	"  Devs      : ArabPixel, feeRnt, bjhabibie\n"
+ 	"  Coord     : dreams-of-formaldehyde, TheVorkMan, vanillitefroyo\n"

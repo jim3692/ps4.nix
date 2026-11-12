@@ -1,0 +1,382 @@
+From 60e1ee63f5578c875c927b8cd47379a0f2a20d54 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sat, 7 Nov 2026 11:17:23 +0100
+Subject: [PATCH 081/124] ps4: port to linux 7.3
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/ps4_bridge.c        |  4 ++++
+ .../gpu/drm/amd/amdgpu/vce_liverpool_compat.c  |  2 +-
+ .../drv_wlan/MT6632/wlan/common/wlan_lib.c     |  4 ++--
+ .../MT6632/wlan/os/linux/gl_cfg80211.c         | 15 ++++++---------
+ .../MT6632/wlan/os/linux/gl_p2p_cfg80211.c     | 18 ++++++++----------
+ .../drv_wlan/MT6632/wlan/os/linux/gl_wext.c    | 10 +++++-----
+ .../MT6632/wlan/os/linux/include/gl_cfg80211.h |  4 ++--
+ .../MT6632/wlan/os/linux/include/gl_kal.h      | 13 ++++++++++++-
+ .../wlan/os/linux/include/gl_p2p_ioctl.h       |  4 ++--
+ drivers/ps4/sb-icc-i2c.c                       |  2 +-
+ drivers/usb/host/xhci-aeolia.c                 |  2 +-
+ include/drm/drm_bridge.h                       |  5 +++++
+ 12 files changed, 49 insertions(+), 34 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+index d11a9f73070b1e63ece51079c81e9db1af35b7ed..474ef11cfc8ad706d29cc893c912b21c801f3014 100644
+--- a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
++++ b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+@@ -34,6 +34,7 @@
+ #include <drm/drm_probe_helper.h>
+ #include <drm/drm_crtc_helper.h>
+ #include <drm/drm_atomic_helper.h>
++#include <drm/drm_atomic_state_helper.h>
+ #include <drm/drm_edid.h>
+ 
+ #include <drm/drm_bridge.h>
+@@ -1347,6 +1348,9 @@ static struct drm_bridge_funcs ps4_bridge_funcs = {
+ 	.post_disable = ps4_bridge_post_disable,
+ 	.attach = ps4_bridge_attach,
+ 	.mode_set = ps4_bridge_mode_set,
++	.atomic_create_state = drm_atomic_helper_bridge_create_state,
++	.atomic_duplicate_state = drm_atomic_helper_bridge_duplicate_state,
++	.atomic_destroy_state = drm_atomic_helper_bridge_destroy_state,
+ };
+ 
+ int ps4_bridge_register(struct drm_connector *connector,
+diff --git a/drivers/gpu/drm/amd/amdgpu/vce_liverpool_compat.c b/drivers/gpu/drm/amd/amdgpu/vce_liverpool_compat.c
+index 294d952327ea3c02cb729a925c2bf8e2d2647018..1ff383f96b43146c899c77afdaa023dea1b83f10 100644
+--- a/drivers/gpu/drm/amd/amdgpu/vce_liverpool_compat.c
++++ b/drivers/gpu/drm/amd/amdgpu/vce_liverpool_compat.c
+@@ -811,7 +811,7 @@ int vce_liverpool_test_ib(struct amdgpu_ring *ring, long timeout)
+ 		return r;
+ 	memset_io(cpu, 0, 3 * PAGE_SIZE);
+ 	r = amdgpu_job_alloc_with_ib(adev, &adev->vce.entity, AMDGPU_FENCE_OWNER_UNDEFINED,
+-		4096, AMDGPU_IB_POOL_DIRECT, &job, AMDGPU_KERNEL_JOB_ID_VCN_RING_TEST);
++		4096, AMDGPU_IB_POOL_DIRECT, AMDGPU_KERNEL_JOB_ID_VCN_RING_TEST, &job);
+ 	if (r)
+ 		goto free_bo;
+ 	words = job->ibs[0].ptr;
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/common/wlan_lib.c b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/common/wlan_lib.c
+index d3190bcdf76d2193552d032f141190b0185f1638..4b64e35cf8a2f30ea4b4f721bd065f15f80f1555 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/common/wlan_lib.c
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/common/wlan_lib.c
+@@ -7795,7 +7795,7 @@ static WLAN_STATUS wlanCfgParseToFW(PCHAR *args, PCHAR args_size, UCHAR nargs, P
+ 	}
+ 
+ 	cmd_v1.itemStringLength = args_size[ED_STRING_SITE];
+-	strncpy(cmd_v1.itemString, args[ED_STRING_SITE],  cmd_v1.itemStringLength);
++	kalStrnCpy(cmd_v1.itemString, args[ED_STRING_SITE],  cmd_v1.itemStringLength);
+ 	DBGLOG(INIT, INFO, "itemString:");
+ 	for (i = 0; i <  cmd_v1.itemStringLength; i++)
+ 		DBGLOG(INIT, INFO, "%c", cmd_v1.itemString[i]);
+@@ -7845,7 +7845,7 @@ static WLAN_STATUS wlanCfgParseToFW(PCHAR *args, PCHAR args_size, UCHAR nargs, P
+ 		cmd_v1.itemValueLength = bufferindex;
+ 	} else if (cmd_v1.itemType == ITEM_TYPE_STR) {
+ 		cmd_v1.itemValueLength = args_size[ED_VALUE_SITE];
+-		strncpy(cmd_v1.itemValue, args[ED_VALUE_SITE], cmd_v1.itemValueLength);
++		kalStrnCpy(cmd_v1.itemValue, args[ED_VALUE_SITE], cmd_v1.itemValueLength);
+ 	}
+ 
+ 	DBGLOG(INIT, INFO, "Length = %d itemValue:", cmd_v1.itemValueLength);
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_cfg80211.c b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_cfg80211.c
+index 75fceb9dc3d91a1e01f0c32ab8fe83b318daa36a..6dbcbcf69d66af98c0eef7237c006af33486b0f1 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_cfg80211.c
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_cfg80211.c
+@@ -1876,7 +1876,7 @@ void mtk_cfg80211_mgmt_frame_register(IN struct wiphy *wiphy,
+ /*----------------------------------------------------------------------------*/
+ int mtk_cfg80211_remain_on_channel(struct wiphy *wiphy,
+ 				   struct wireless_dev *wdev,
+-				   struct ieee80211_channel *chan, unsigned int duration, u64 *cookie)
++				   struct ieee80211_channel *chan, unsigned int duration, u64 cookie, const u8 *rx_addr)
+ {
+ 	P_GLUE_INFO_T prGlueInfo = NULL;
+ 	INT_32 i4Rslt = -EINVAL;
+@@ -1885,8 +1885,7 @@ int mtk_cfg80211_remain_on_channel(struct wiphy *wiphy,
+ 	do {
+ 		if ((wiphy == NULL)
+ 		    || (wdev == NULL)
+-		    || (chan == NULL)
+-		    || (cookie == NULL)) {
++		    || (chan == NULL)) {
+ 			break;
+ 		}
+ 
+@@ -1897,7 +1896,6 @@ int mtk_cfg80211_remain_on_channel(struct wiphy *wiphy,
+ 		DBGLOG(INIT, INFO, "--> %s()\n", __func__);
+ #endif
+ 
+-		*cookie = prGlueInfo->u8Cookie++;
+ 
+ 		prMsgChnlReq = cnmMemAlloc(prGlueInfo->prAdapter, RAM_TYPE_MSG, sizeof(MSG_REMAIN_ON_CHANNEL_T));
+ 
+@@ -1908,7 +1906,7 @@ int mtk_cfg80211_remain_on_channel(struct wiphy *wiphy,
+ 		}
+ 
+ 		prMsgChnlReq->rMsgHdr.eMsgId = MID_MNY_AIS_REMAIN_ON_CHANNEL;
+-		prMsgChnlReq->u8Cookie = *cookie;
++		prMsgChnlReq->u8Cookie = cookie;
+ 		prMsgChnlReq->u4DurationMs = duration;
+ 
+ 		prMsgChnlReq->ucChannelNum = nicFreq2ChannelNum(chan->center_freq * 1000);
+@@ -1996,7 +1994,7 @@ int mtk_cfg80211_cancel_remain_on_channel(struct wiphy *wiphy, struct wireless_d
+ int mtk_cfg80211_mgmt_tx(struct wiphy *wiphy,
+ 			struct wireless_dev *wdev,
+ 			struct cfg80211_mgmt_tx_params *params,
+-			u64 *cookie)
++			u64 cookie)
+ {
+ 	P_GLUE_INFO_T prGlueInfo = NULL;
+ 	INT_32 i4Rslt = -EINVAL;
+@@ -2005,13 +2003,12 @@ int mtk_cfg80211_mgmt_tx(struct wiphy *wiphy,
+ 	PUINT_8 pucFrameBuf = (PUINT_8) NULL;
+ 
+ 	do {
+-		if ((wiphy == NULL) || (wdev == NULL) || (params == 0) || (cookie == NULL))
++		if ((wiphy == NULL) || (wdev == NULL) || (params == 0))
+ 			break;
+ 
+ 		prGlueInfo = (P_GLUE_INFO_T) wiphy_priv(wiphy);
+ 		ASSERT(prGlueInfo);
+ 
+-		*cookie = prGlueInfo->u8Cookie++;
+ 
+ 		/* Channel & Channel Type & Wait time are ignored. */
+ 		prMsgTxReq = cnmMemAlloc(prGlueInfo->prAdapter, RAM_TYPE_MSG, sizeof(MSG_MGMT_TX_REQUEST_T));
+@@ -2033,7 +2030,7 @@ int mtk_cfg80211_mgmt_tx(struct wiphy *wiphy,
+ 			break;
+ 		}
+ 
+-		prMsgTxReq->u8Cookie = *cookie;
++		prMsgTxReq->u8Cookie = cookie;
+ 		prMsgTxReq->rMsgHdr.eMsgId = MID_MNY_AIS_MGMT_TX;
+ 
+ 		pucFrameBuf = (PUINT_8) ((ULONG) prMgmtFrame->prPacket + MAC_TX_RESERVED_FIELD);
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p_cfg80211.c b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p_cfg80211.c
+index b73c8824fb3a500b04d0869f07d928b6aca158d0..eee4282f4653dc013992dd919b880737cdf87b21 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p_cfg80211.c
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_p2p_cfg80211.c
+@@ -2102,7 +2102,7 @@ int mtk_p2p_cfg80211_disassoc(struct wiphy *wiphy, struct net_device *dev, struc
+ 
+ int mtk_p2p_cfg80211_remain_on_channel(struct wiphy *wiphy,
+ 				       struct wireless_dev *wdev,
+-				       struct ieee80211_channel *chan, unsigned int duration, u64 *cookie)
++				       struct ieee80211_channel *chan, unsigned int duration, u64 cookie, const u8 *rx_addr)
+ {
+ 	INT_32 i4Rslt = -EINVAL;
+ 	P_GLUE_INFO_T prGlueInfo = (P_GLUE_INFO_T) NULL;
+@@ -2114,14 +2114,13 @@ int mtk_p2p_cfg80211_remain_on_channel(struct wiphy *wiphy,
+ 	do {
+ 		if ((wiphy == NULL) ||
+ 		    /* (dev == NULL) || */
+-		    (chan == NULL) || (cookie == NULL)) {
++		    (chan == NULL)) {
+ 			break;
+ 		}
+ 
+ 		prGlueInfo = *((P_GLUE_INFO_T *) wiphy_priv(wiphy));
+ 		prGlueP2pDevInfo = prGlueInfo->prP2PDevInfo;
+ 
+-		*cookie = prGlueP2pDevInfo->u8Cookie++;
+ 
+ 		prMsgChnlReq = cnmMemAlloc(prGlueInfo->prAdapter, RAM_TYPE_MSG, sizeof(MSG_P2P_CHNL_REQUEST_T));
+ 
+@@ -2131,10 +2130,10 @@ int mtk_p2p_cfg80211_remain_on_channel(struct wiphy *wiphy,
+ 			break;
+ 		}
+ 
+-		DBGLOG(P2P, TRACE, "mtk_p2p_cfg80211_remain_on_channel:%d\n", (INT_32) *cookie);
++		DBGLOG(P2P, TRACE, "mtk_p2p_cfg80211_remain_on_channel:%d\n", (INT_32) cookie);
+ 
+ 		prMsgChnlReq->rMsgHdr.eMsgId = MID_MNY_P2P_CHNL_REQ;
+-		prMsgChnlReq->u8Cookie = *cookie;
++		prMsgChnlReq->u8Cookie = cookie;
+ 		prMsgChnlReq->u4Duration = duration;
+ 		prMsgChnlReq->eChnlReqType = CH_REQ_TYPE_P2P_LISTEN;
+ 
+@@ -2190,7 +2189,7 @@ int mtk_p2p_cfg80211_cancel_remain_on_channel(struct wiphy *wiphy, struct wirele
+ int mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy,
+ 				struct wireless_dev *wdev,
+ 				struct cfg80211_mgmt_tx_params *params,
+-				u64 *cookie)
++				u64 cookie)
+ {
+ 	P_GLUE_INFO_T prGlueInfo = (P_GLUE_INFO_T) NULL;
+ 	P_GL_P2P_INFO_T prGlueP2pInfo = (P_GL_P2P_INFO_T) NULL;
+@@ -2203,7 +2202,7 @@ int mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy,
+ 	struct net_device *dev = NULL;
+ 
+ 	do {
+-		if ((wiphy == NULL) || (wdev == NULL) || (params == 0) || (cookie == NULL))
++		if ((wiphy == NULL) || (wdev == NULL) || (params == 0))
+ 			break;
+ 
+ 		prGlueInfo = *((P_GLUE_INFO_T *) wiphy_priv(wiphy));
+@@ -2226,7 +2225,6 @@ int mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy,
+ 			}
+ 		}
+ 		/* The owner of this function please check following line*/
+-		*cookie = prGlueInfo->u8Cookie++;
+ 
+ 		/* Channel & Channel Type & Wait time are ignored. */
+ 		prMsgTxReq = cnmMemAlloc(prGlueInfo->prAdapter, RAM_TYPE_MSG, sizeof(MSG_P2P_MGMT_TX_REQUEST_T));
+@@ -2267,7 +2265,7 @@ int mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy,
+ 			break;
+ 		}
+ 
+-		prMsgTxReq->u8Cookie = *cookie;
++		prMsgTxReq->u8Cookie = cookie;
+ 		prMsgTxReq->rMsgHdr.eMsgId = MID_MNY_P2P_MGMT_TX;
+ 		prMsgTxReq->ucBssIdx = ucBssIdx;
+ 
+@@ -2277,7 +2275,7 @@ int mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy,
+ 
+ 		kalMemCopy(pucFrameBuf, params->buf, params->len);
+ 
+-		*pu8GlCookie = *cookie;
++		*pu8GlCookie = cookie;
+ 
+ 		prMgmtFrame->u2FrameLength = params->len;
+ 
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_wext.c b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_wext.c
+index 6955b170f89823a44d610cc283731a35b097afa6..7349b1b6e3d27a83d46e14d8fcbdbad0027191c4 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_wext.c
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/gl_wext.c
+@@ -887,22 +887,22 @@ wext_get_name(IN struct net_device *prNetDev, IN struct iw_request_info *prIwrIn
+ 
+ 		switch (eNetWorkType) {
+ 		case PARAM_NETWORK_TYPE_DS:
+-			strncpy(pcName, "IEEE 802.11b", sizeof(((struct iwreq *)0)->u.name));
++			kalStrnCpy(pcName, "IEEE 802.11b", sizeof(((struct iwreq *)0)->u.name));
+ 			break;
+ 		case PARAM_NETWORK_TYPE_OFDM24:
+-			strncpy(pcName, "IEEE 802.11bgn", sizeof(((struct iwreq *)0)->u.name));
++			kalStrnCpy(pcName, "IEEE 802.11bgn", sizeof(((struct iwreq *)0)->u.name));
+ 			break;
+ 		case PARAM_NETWORK_TYPE_AUTOMODE:
+ 		case PARAM_NETWORK_TYPE_OFDM5:
+-			strncpy(pcName, "IEEE 802.11abgn", sizeof(((struct iwreq *)0)->u.name));
++			kalStrnCpy(pcName, "IEEE 802.11abgn", sizeof(((struct iwreq *)0)->u.name));
+ 			break;
+ 		case PARAM_NETWORK_TYPE_FH:
+ 		default:
+-			strncpy(pcName, "IEEE 802.11", sizeof(((struct iwreq *)0)->u.name));
++			kalStrnCpy(pcName, "IEEE 802.11", sizeof(((struct iwreq *)0)->u.name));
+ 			break;
+ 		}
+ 	} else {
+-		strncpy(pcName, "Disconnected", sizeof(((struct iwreq *)0)->u.name));
++		kalStrnCpy(pcName, "Disconnected", sizeof(((struct iwreq *)0)->u.name));
+ 	}
+ 
+ 	return 0;
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_cfg80211.h b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_cfg80211.h
+index 59c46c5b89e0dcbef338c73659ce41fbbe55dc91..19ceba36a9cbc31d71529a6b7e2c1f5971330bc8 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_cfg80211.h
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_cfg80211.h
+@@ -240,14 +240,14 @@ int mtk_cfg80211_set_rekey_data(struct wiphy *wiphy, struct net_device *dev, str
+ 
+ int mtk_cfg80211_remain_on_channel(struct wiphy *wiphy,
+ 				   struct wireless_dev *wdev,
+-				   struct ieee80211_channel *chan, unsigned int duration, u64 *cookie);
++				   struct ieee80211_channel *chan, unsigned int duration, u64 cookie, const u8 *rx_addr);
+ 
+ int mtk_cfg80211_cancel_remain_on_channel(struct wiphy *wiphy, struct wireless_dev *wdev, u64 cookie);
+ #if KERNEL_VERSION(3, 14, 0) <= CFG80211_VERSION_CODE
+ int mtk_cfg80211_mgmt_tx(struct wiphy *wiphy,
+ 			struct wireless_dev *wdev,
+ 			struct cfg80211_mgmt_tx_params *params,
+-			u64 *cookie);
++			u64 cookie);
+ #else
+ int mtk_cfg80211_mgmt_tx(struct wiphy *wiphy,
+ 			 struct wireless_dev *wdev,
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_kal.h b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_kal.h
+index 2117410a2ab9735dec5f071582c42dd50b389333..2f6fc42cd913367908d51bd5f5c28e5703777ca5 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_kal.h
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_kal.h
+@@ -689,7 +689,18 @@ static inline void kalCfg80211ScanDone(struct cfg80211_scan_request *request,
+ 
+ /* string operation */
+ #define kalStrCpy(dest, src)                        strcpy(dest, src)
+-#define kalStrnCpy(dest, src, n)                    strncpy(dest, src, n)
++static inline char *kalStrncpyCompat(char *dest, const char *src, size_t n)
++{
++	size_t i;
++
++	for (i = 0; i < n && src[i]; i++)
++		dest[i] = src[i];
++	for (; i < n; i++)
++		dest[i] = '\0';
++	return dest;
++}
++
++#define kalStrnCpy(dest, src, n)                    kalStrncpyCompat(dest, src, n)
+ #define kalStrCmp(ct, cs)                           strcmp(ct, cs)
+ #define kalStrnCmp(ct, cs, n)                       strncmp(ct, cs, n)
+ #define kalStrChr(s, c)                             strchr(s, c)
+diff --git a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_p2p_ioctl.h b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_p2p_ioctl.h
+index b135436629c7d8145663b02b47655b3e54ee5da6..034caa6fd08c1167b4e53758f4eadd55c94a58aa 100755
+--- a/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_p2p_ioctl.h
++++ b/drivers/net/wireless/mediatek/mt76x8/drv_wlan/MT6632/wlan/os/linux/include/gl_p2p_ioctl.h
+@@ -506,7 +506,7 @@ int mtk_p2p_cfg80211_get_txpower(struct wiphy *wiphy, struct wireless_dev *wdev,
+ 
+ int mtk_p2p_cfg80211_remain_on_channel(struct wiphy *wiphy,
+ 				       struct wireless_dev *wdev,
+-				       struct ieee80211_channel *chan, unsigned int duration, u64 *cookie);
++				       struct ieee80211_channel *chan, unsigned int duration, u64 cookie, const u8 *rx_addr);
+ 
+ int mtk_p2p_cfg80211_cancel_remain_on_channel(struct wiphy *wiphy, struct wireless_dev *wdev, u64 cookie);
+ 
+@@ -559,7 +559,7 @@ int mtk_p2p_cfg80211_change_beacon(struct wiphy *wiphy, struct net_device *dev,
+ int mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy,
+ 			     struct wireless_dev *wdev,
+ 			     struct cfg80211_mgmt_tx_params *params,
+-			     u64 *cookie);
++			     u64 cookie);
+ #else
+ int mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy,
+ 			     struct wireless_dev *wdev,
+diff --git a/drivers/ps4/sb-icc-i2c.c b/drivers/ps4/sb-icc-i2c.c
+index 1463945cc14f2af1f0818d84e455cbab815308e9..46f0b39bb69b246502209f4eaf1cda744c2bff45 100644
+--- a/drivers/ps4/sb-icc-i2c.c
++++ b/drivers/ps4/sb-icc-i2c.c
+@@ -150,7 +150,7 @@ int icc_i2c_init(struct ps4sb_dev *sc)
+ 	i2c->algo = &icc_i2c_algo;
+ 	i2c->algo_data = NULL;
+ 	i2c->dev.parent = &sc->pdev->dev;
+-	strncpy(i2c->name, "icc", sizeof(i2c->name));
++	strscpy(i2c->name, "icc", sizeof(i2c->name));
+ 	i2c_set_adapdata(i2c, sc);
+ 	ret = i2c_add_adapter(i2c);
+ 	if (ret < 0) {
+diff --git a/drivers/usb/host/xhci-aeolia.c b/drivers/usb/host/xhci-aeolia.c
+index 6ea3de2fa06de6b2976d1fa403bf356b9708528a..d3a5834c600a2c10e12210b4225334cfcd4ce572 100644
+--- a/drivers/usb/host/xhci-aeolia.c
++++ b/drivers/usb/host/xhci-aeolia.c
+@@ -140,7 +140,7 @@ static int xhci_aeolia_probe_one(struct pci_dev *dev, int index)
+ 	if (!xhci_aeolia_is_baikal(dev)) {
+ 		struct usb_hcd *usb3_hcd = xhci_get_usb3_hcd(xhci);
+ 
+-		if (usb3_hcd && HCC_MAX_PSA(xhci->hcc_params) >= 4 &&
++		if (usb3_hcd && GET_MAX_PSA_SIZE(xhci->hcc_params) >= 4 &&
+ 		    !(xhci->quirks & XHCI_BROKEN_STREAMS))
+ 			usb3_hcd->can_do_streams = 1;
+ 	}
+diff --git a/include/drm/drm_bridge.h b/include/drm/drm_bridge.h
+index 178b3625d6f847901b27005b2e076e7158b42f68..c2480bcdef1061b2e2d0811f1d5384b48ea656eb 100644
+--- a/include/drm/drm_bridge.h
++++ b/include/drm/drm_bridge.h
+@@ -200,10 +200,15 @@ struct drm_bridge_funcs {
+ 	 * New drivers shall set their mode in the
+ 	 * &drm_bridge_funcs.atomic_enable operation.
+ 	 */
++	void (*disable)(struct drm_bridge *bridge);
++	void (*post_disable)(struct drm_bridge *bridge);
+ 	void (*mode_set)(struct drm_bridge *bridge,
+ 			 const struct drm_display_mode *mode,
+ 			 const struct drm_display_mode *adjusted_mode);
+ 
++	void (*pre_enable)(struct drm_bridge *bridge);
++	void (*enable)(struct drm_bridge *bridge);
++
+ 	/**
+ 	 * @atomic_pre_enable:
+ 	 *

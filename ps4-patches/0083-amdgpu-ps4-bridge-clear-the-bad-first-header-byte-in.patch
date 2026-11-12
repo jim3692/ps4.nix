@@ -1,0 +1,26 @@
+From 54ae2fce005d150860ad76233e0fcc4ff8cd01e1 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sat, 7 Nov 2026 15:31:33 +0100
+Subject: [PATCH 083/124] amdgpu: ps4 bridge: clear the bad first header byte
+ in the hotplug edid
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/ps4_bridge.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+index 474ef11cfc8ad706d29cc893c912b21c801f3014..a856d3b2efe1209c9ae732d4ffa640234c3bee47 100644
+--- a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
++++ b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+@@ -1077,6 +1077,10 @@ static void ps4_bridge_hdmi_event(void *ctx, u16 minor, const u8 *data,
+ 		copy = kmemdup(edid, edid_size, GFP_KERNEL);
+ 		if (!copy)
+ 			return;
++		if (copy[0] && !memchr_inv(copy + 1, 0xff, 6) && !copy[7]) {
++			copy[EDID_LENGTH - 1] += copy[0];
++			copy[0] = 0;
++		}
+ 		mutex_lock(&mn_bridge->mutex);
+ 		kfree(mn_bridge->hdmi_edid);
+ 		mn_bridge->hdmi_edid = copy;

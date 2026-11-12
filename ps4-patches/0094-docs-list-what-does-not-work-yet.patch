@@ -1,0 +1,36 @@
+From 689a51ea20f8605634775efe38ad1ba2ae08f229 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sun, 8 Nov 2026 11:23:55 +0100
+Subject: [PATCH 094/124] docs: list what does not work yet
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ README.md | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/README.md b/README.md
+index a67d64afe63e62669ca0585a722931961cfc0320..acae1cac482f57ca64c0c66593a6c5e8c57cf71d 100644
+--- a/README.md
++++ b/README.md
+@@ -8,7 +8,7 @@ before this every southbridge had its own kernel and baikal was never really fix
+ 
+ - hdmi output, the edid from your tv, hotplug
+ - vulkan (radv) and opengl (radeonsi), gpu compute. not on pro yet, see known issues
+-- hardware video decode and encode (uvd and vce), so hardware transcoding works
++- hardware video decode and encode (uvd and vce), so hardware transcoding works. not on pro yet
+ - usb, sata hdd and ssd, blu-ray drive
+ - ethernet. baikal with the new mts driver at full gigabit, aeolia and belize with sky2
+ - wifi and bluetooth, ds4 reconnects with one press
+@@ -20,7 +20,11 @@ tested on baikal slim, baikal pro, belize slim and belize pro. aeolia runs the s
+ 
+ ## Known issues
+ 
+-- no vulkan on pro (gladius) yet, its registers still need fixing
++- vulkan on pro (gladius) hangs the gpu (ring gfx timeout in vkmark), the desktop and opengl work. cause not found yet
++- no hardware video on pro yet, uvd and vce are off for gladius
++- 4k only up to 30 hz. no 4k60, hdr or deep color yet
++- no suspend or hibernate
++- the gpu clock stays at its top speed, it does not clock down when idle
+ - aeolia ethernet can keep one cpu core busy, fix is in progress
+ - samu ccp and trng are off for now, they break boot on belize slim and aeolia
+ - belize rtc read fails at boot, the loader sets the time instead

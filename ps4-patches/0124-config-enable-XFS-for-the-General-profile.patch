@@ -1,0 +1,23 @@
+From 8e84be3ed88ee55e4bd4bd1b8b303c1e8ec90ce9 Mon Sep 17 00:00:00 2001
+From: dreams-of-formaldehyde
+ <42043508-dreams-of-formaldehyde@users.noreply.gitlab.com>
+Date: Wed, 11 Nov 2026 01:43:02 -0600
+Subject: [PATCH 124/124] =config: enable XFS for the General profile
+
+---
+ configs/tuning-general.cfg | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/configs/tuning-general.cfg b/configs/tuning-general.cfg
+index 7f38d269b94255031635abd42790ba4c6325e263..0389d18ea59a6e79198d4c0cd90e75d93ad876b4 100644
+--- a/configs/tuning-general.cfg
++++ b/configs/tuning-general.cfg
+@@ -20,6 +20,8 @@ enable CONFIG_NO_HZ_FULL
+ enable CONFIG_RCU_NOCB_CPU
+ enable CONFIG_RCU_NOCB_CPU_DEFAULT_ALL
+ 
++enable CONFIG_XFS_FS
++
+ enable CONFIG_PREEMPT
+ disable CONFIG_PREEMPT_VOLUNTARY
+ disable CONFIG_PREEMPT_NONE

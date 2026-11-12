@@ -1,0 +1,174 @@
+From e4b1dc4c53fab2dfbca0a4edf91cc205695748f2 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Tue, 10 Nov 2026 21:02:23 +0100
+Subject: [PATCH 111/124] amdgpu: ps4 bridge: drive 4k30 and 4k60 on pro like
+ gameos
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/ps4_bridge.c | 88 +++++++++++++++++++++++--
+ 1 file changed, 81 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+index 9be8a4eb49aa24c509798a838e2ee2cf39f6fcb0..4d95ac4866fd2f2fd2adcd7cfe7a126613e525f6 100644
+--- a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
++++ b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+@@ -126,6 +126,8 @@
+ #define EDIDFIFO1 0x7c80
+ #define EDID_REPLY_SKIP 3
+ #define PS4_BRIDGE_MAX_CLOCK 297000
++#define PS4_BRIDGE_4K_MAX_CLOCK 594000
++#define PS4_BRIDGE_SCDC_CLOCK 340000
+ #define PS4_BRIDGE_ICC_SERVICE 0x10
+ #define PS4_BRIDGE_EVENT_HEADER_SIZE 4
+ #define PS4_BRIDGE_EVENT_UNPLUG 1
+@@ -288,6 +290,34 @@ static int ps4_bridge_read_edid_block_smbus(void *data, u8 *buf,
+ 	return 0;
+ }
+ 
++static const u8 ps4_bridge_4k_7203[10] = {
++	0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x60, 0x60, 0x60, 0x60
++};
++
++static int ps4_bridge_4k_index(u8 vic)
++{
++	switch (vic) {
++	case 95:
++		return 0;
++	case 94:
++		return 1;
++	case 93:
++		return 2;
++	case 98:
++		return 3;
++	case 97:
++		return 6;
++	case 96:
++		return 7;
++	case 102:
++		return 8;
++	case 101:
++		return 9;
++	default:
++		return -1;
++	}
++}
++
+ static void cq_cmd(struct i2c_cmdqueue *q, u8 major, u8 minor)
+ {
+ 	if (!q->cmd || q->cmd->major != major || q->cmd->minor != minor) {
+@@ -371,7 +401,6 @@ static void cq_mask(struct i2c_cmdqueue *q, u16 addr, u8 value, u8 mask)
+ 	*q->p++ = mask;
+ }
+ 
+-#if 0
+ static void cq_delay(struct i2c_cmdqueue *q, u16 time)
+ {
+ 	cq_cmd(q, CMD_DELAY);
+@@ -380,7 +409,6 @@ static void cq_delay(struct i2c_cmdqueue *q, u16 time)
+ 	*q->p++ = time>>8;
+ 	*q->p++ = 0;
+ }
+-#endif
+ 
+ static void cq_wait_set(struct i2c_cmdqueue *q, u16 addr, u8 mask)
+ {
+@@ -537,6 +565,9 @@ static void ps4_bridge_pre_enable(struct drm_bridge *bridge)
+ static int ps4_bridge_enable_mn864729_video(struct ps4_bridge *mn_bridge,
+ 					    struct pci_dev *pdev)
+ {
++	int idx = ps4_bridge_4k_index(mn_bridge->mode);
++	u8 avi_vic = idx >= 0 ? 0 : mn_bridge->mode;
++	bool scramble = idx >= 6;
+ 	int ret;
+ 
+ 	mutex_lock(&mn_bridge->mutex);
+@@ -565,10 +596,10 @@ static int ps4_bridge_enable_mn864729_video(struct ps4_bridge *mn_bridge,
+ 	cq_writereg(&mn_bridge->cq, 0x7009, 0x00);
+ 	cq_writereg(&mn_bridge->cq, 0x7040, 0x42);
+ 	cq_writereg(&mn_bridge->cq, 0x7225, 0x28);
+-	cq_writereg(&mn_bridge->cq, 0x7227, mn_bridge->mode);
++	cq_writereg(&mn_bridge->cq, 0x7227, avi_vic);
+ 	cq_writereg(&mn_bridge->cq, 0x7228, 0x00);
+-	cq_writereg(&mn_bridge->cq, 0x7070, mn_bridge->mode);
+-	cq_writereg(&mn_bridge->cq, 0x7071, mn_bridge->mode | 0x80);
++	cq_writereg(&mn_bridge->cq, 0x7070, avi_vic);
++	cq_writereg(&mn_bridge->cq, 0x7071, avi_vic | 0x80);
+ 	cq_writereg(&mn_bridge->cq, 0x7072, 0x00);
+ 	cq_writereg(&mn_bridge->cq, 0x7073, 0x00);
+ 	cq_writereg(&mn_bridge->cq, 0x7074, 0x00);
+@@ -588,19 +619,45 @@ static int ps4_bridge_enable_mn864729_video(struct ps4_bridge *mn_bridge,
+ 
+ 	cq_writereg(&mn_bridge->cq, 0x10f6, 0xff);
+ 	cq_writereg(&mn_bridge->cq, 0x7202, 0x20);
+-	cq_writereg(&mn_bridge->cq, 0x7203, 0x70);
+-	cq_writereg(&mn_bridge->cq, 0x7011, 0xd5);
++	if (idx >= 0) {
++		cq_writereg(&mn_bridge->cq, 0x7072, 0x01);
++		cq_writereg(&mn_bridge->cq, 0x7074, idx + 1);
++		cq_writereg(&mn_bridge->cq, 0x7206, 0x80);
++		cq_writereg(&mn_bridge->cq, 0x7203, ps4_bridge_4k_7203[idx]);
++		if (idx >= 6) {
++			cq_writereg(&mn_bridge->cq, 0x7070, 0x00);
++			cq_writereg(&mn_bridge->cq, 0x7071, 0x00);
++		}
++		cq_writereg(&mn_bridge->cq, 0x7011, 0xff);
++	} else {
++		cq_writereg(&mn_bridge->cq, 0x7203, 0x70);
++		cq_writereg(&mn_bridge->cq, 0x7011, 0xd5);
++	}
+ 
+ 	cq_wait_set(&mn_bridge->cq, 0x10f6, 0x80);
++	if (idx >= 6)
++		cq_mask(&mn_bridge->cq, 0x7227, mn_bridge->mode, 0xff);
+ 	cq_mask(&mn_bridge->cq, 0x7226, 0x00, 0x80);
+ 	cq_mask(&mn_bridge->cq, 0x7228, 0x00, 0xFF);
+ 	cq_writereg(&mn_bridge->cq, 0x7204, 0x40);
+ 	cq_wait_clear(&mn_bridge->cq, 0x7204, 0x40);
++	if (scramble)
++		cq_writereg(&mn_bridge->cq, 0x10c7, 0x31);
+ 	cq_writereg(&mn_bridge->cq, 0x7a8b, 0x05);
++	if (scramble) {
++		cq_writereg(&mn_bridge->cq, EDIDFIFO0, 0x03);
++		cq_writereg(&mn_bridge->cq, EDIDCTRL0, 0xa8);
++		cq_writereg(&mn_bridge->cq, EDIDCTRL1, 0x20);
++		cq_writereg(&mn_bridge->cq, EDIDCTRL2, 0x00);
++		cq_writereg(&mn_bridge->cq, EDIDCTRL3, 0x80);
++		cq_wait_clear(&mn_bridge->cq, AKESTA, AKESTA_BUSY);
++	}
+ 	cq_mask(&mn_bridge->cq, 0x1e02, 0x70, 0x70);
+ 	cq_mask(&mn_bridge->cq, 0x1034, 0x02, 0x02);
+ 	cq_mask(&mn_bridge->cq, 0x1e00, 0x01, 0x01);
+ 	cq_writereg(&mn_bridge->cq, VMUTECNT, VMUTECNT_LINEWIDTH_90);
++	if (scramble)
++		cq_delay(&mn_bridge->cq, 700);
+ 	cq_writereg(&mn_bridge->cq, HDCPEN, 0x00);
+ 	ret = cq_exec(&mn_bridge->cq);
+ 	if (ret < 0)
+@@ -1347,9 +1404,26 @@ enum drm_mode_status ps4_bridge_mode_valid(struct drm_connector *connector,
+ 				  const struct drm_display_mode *mode)
+ {
+ 	u8 vic = drm_match_cea_mode(mode);
++	struct pci_dev *pdev = to_pci_dev(connector->dev->dev);
++	struct drm_display_info *info = &connector->display_info;
+ 
+ 	if (mode->flags & DRM_MODE_FLAG_INTERLACE)
+ 		return MODE_NO_INTERLACE;
++	if (ps4_bridge_4k_index(vic) >= 0) {
++		if (pdev->device != PCI_DEVICE_ID_CUH_7XXX)
++			return MODE_BAD;
++		if (mode->clock > PS4_BRIDGE_4K_MAX_CLOCK)
++			return MODE_CLOCK_HIGH;
++		if (info->max_tmds_clock && mode->clock > info->max_tmds_clock)
++			return MODE_CLOCK_HIGH;
++		if (mode->clock > PS4_BRIDGE_SCDC_CLOCK &&
++		    (!info->hdmi.scdc.supported ||
++		     !info->hdmi.scdc.scrambling.supported))
++			return MODE_CLOCK_HIGH;
++		if (mode->clock > PS4_BRIDGE_MAX_CLOCK)
++			return amdgpu_atombios_dp_mode_valid_helper(connector, mode);
++		return MODE_OK;
++	}
+ 	if (mode->clock > PS4_BRIDGE_MAX_CLOCK)
+ 		return MODE_CLOCK_HIGH;
+ 	if (!ps4_bridge_vic_supported(vic))

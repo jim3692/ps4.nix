@@ -1,0 +1,40 @@
+From 2bb832f843fc67c75ddc08e2007748c8a11ecd3c Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Wed, 6 May 2026 17:41:30 +0200
+Subject: [PATCH 033/124] radeon: cik: keep going when the liverpool sdma ring
+ test fails
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/radeon/cik.c      | 1 -
+ drivers/gpu/drm/radeon/cik_sdma.c | 3 ++-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/radeon/cik.c b/drivers/gpu/drm/radeon/cik.c
+index 2a4935915b771aa49548cf15850738d3f5e76d71..a3225159f3c12bc434268a84153bfa132bdfd4f3 100644
+--- a/drivers/gpu/drm/radeon/cik.c
++++ b/drivers/gpu/drm/radeon/cik.c
+@@ -8613,7 +8613,6 @@ restart_ih:
+ 			break;
+ 		case 176: /* GFX RB CP_INT */
+ 		case 177: /* GFX IB CP_INT */
+-			DRM_ERROR("radeon_fence_process 176 177\n"); // eeply
+ 			radeon_fence_process(rdev, RADEON_RING_TYPE_GFX_INDEX);
+ 			break;
+ 		case 181: /* CP EOP event */
+diff --git a/drivers/gpu/drm/radeon/cik_sdma.c b/drivers/gpu/drm/radeon/cik_sdma.c
+index 0840f96d081365453070cdb74fe66e67909ab893..5fd4c7c577e29d114db54898d893db8f19f87180 100644
+--- a/drivers/gpu/drm/radeon/cik_sdma.c
++++ b/drivers/gpu/drm/radeon/cik_sdma.c
+@@ -710,9 +710,10 @@ int cik_sdma_ring_test(struct radeon_device *rdev,
+ 		DRM_ERROR("radeon: ring %d test failed (0x%08X)\n",
+ 			  ring->idx, tmp);
+ 
+-		// TODO (ps4patches): rip errors i guess
+ 		if (rdev->family != CHIP_LIVERPOOL) {
+ 			r = -EINVAL;
++		} else {
++			DRM_WARN("Liverpool SDMA ring test failed (0x%08X), continuing\n", tmp);
+ 		}
+ 	}
+ 	return r;

@@ -1,0 +1,186 @@
+From db0b92a8b102167435911bdd5131b8061b4ff371 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sun, 8 Nov 2026 16:21:49 +0100
+Subject: [PATCH 098/124] docs: add the gladius firmware generator
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ docs/gen_gladius_fw.py | 169 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 169 insertions(+)
+ create mode 100644 docs/gen_gladius_fw.py
+
+diff --git a/docs/gen_gladius_fw.py b/docs/gen_gladius_fw.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..cbce09c6c742ca5d5e954aff12488091df7a32a6
+--- /dev/null
++++ b/docs/gen_gladius_fw.py
+@@ -0,0 +1,169 @@
++import os
++import struct
++import sys
++import zlib
++
++TABLE_A = 0x12a7ec0
++TABLE_B = 0x12bc5b0
++
++ENGINES = ['rlc', 'sdma', 'sdma1', 'ce', 'pfp', 'me', 'mec', 'mec2']
++TABLED = ['ce', 'pfp', 'me', 'mec', 'mec2']
++SHARED = ['rlc', 'sdma', 'sdma1']
++WITH_NOP_HANDLER = ['pfp', 'ce', 'mec', 'mec2']
++
++ENGINE_SIZE = {
++    'rlc': 8192,
++    'sdma': 4200,
++    'sdma1': 4200,
++    'ce': 8576,
++    'pfp': 16768,
++    'me': 16768,
++    'mec': 16768,
++    'mec2': 16768,
++}
++
++HEADER_SIZE = 0x100
++HEADER_IP_VERSION = slice(0x0c, 0x10)
++HEADER_UCODE_VERSION = slice(0x10, 0x14)
++HEADER_CRC32 = 0x1c
++HEADER_FEATURE_VERSION = slice(0x20, 0x24)
++HEADER_CRC_START = 0x20
++
++NOP_HANDLER_WORDS = 14
++
++PACKET_NOP = 0x10
++PACKET_SET_PREDICATION = 0x20
++
++
++def read(path):
++    with open(path, 'rb') as f:
++        return f.read()
++
++
++def write(path, data):
++    with open(path, 'wb') as f:
++        f.write(data)
++
++
++def load_segments(elf):
++    table_offset = struct.unpack_from('<Q', elf, 0x20)[0]
++    count = struct.unpack_from('<H', elf, 0x38)[0]
++    segments = []
++    for i in range(count):
++        kind, _, offset, address, _, size, _, _ = struct.unpack_from(
++            '<IIQQQQQQ', elf, table_offset + i * 56)
++        if kind == 1:
++            segments.append((offset, address, size))
++    return segments
++
++
++def file_offset(segments, address):
++    for offset, start, size in segments:
++        if start <= address < start + size:
++            return offset + address - start
++    sys.exit(f'address {address:#x} is not in the kernel image')
++
++
++def kernel_microcode(elf, segments, table, engine):
++    descriptor = struct.unpack_from('<Q', elf, table + ENGINES.index(engine) * 8)[0]
++    words, _, _, blob, _ = struct.unpack_from('<QQQQQ', elf, file_offset(segments, descriptor))
++    if words * 4 != ENGINE_SIZE[engine]:
++        sys.exit(f'{engine} is {words * 4} bytes, this is not the 12.02 kernel')
++    start = file_offset(segments, blob)
++    return elf[start:start + words * 4]
++
++
++def code_words(size):
++    return (size & ~0xfff) // 4
++
++
++def copy_nop_handler(microcode, loader_blob):
++    nop = code_words(len(microcode)) - 0x10
++    start = HEADER_SIZE + nop * 4
++    microcode[nop * 4:(nop + NOP_HANDLER_WORDS) * 4] = loader_blob[start:start + NOP_HANDLER_WORDS * 4]
++    return nop
++
++
++def point_packets_at(microcode, handler, packets):
++    for i in range(code_words(len(microcode)), len(microcode) // 4):
++        entry = struct.unpack_from('<I', microcode, i * 4)[0]
++        packet = entry >> 16
++        if packet in packets:
++            struct.pack_into('<I', microcode, i * 4, (packet << 16) | handler)
++
++
++def make_header(loader_blob, liverpool_blob, microcode):
++    header = bytearray(loader_blob[:HEADER_SIZE])
++    if liverpool_blob:
++        header[HEADER_IP_VERSION] = liverpool_blob[HEADER_IP_VERSION]
++        header[HEADER_UCODE_VERSION] = liverpool_blob[HEADER_UCODE_VERSION]
++        header[HEADER_FEATURE_VERSION] = liverpool_blob[HEADER_FEATURE_VERSION]
++    crc = zlib.crc32(bytes(header[HEADER_CRC_START:]) + microcode)
++    struct.pack_into('<I', header, HEADER_CRC32, crc)
++    return header
++
++
++def build(microcode, engine, loader_blob, liverpool_blob, skip_predication):
++    header = make_header(loader_blob, liverpool_blob, microcode)
++    body = bytearray(microcode)
++    if engine in WITH_NOP_HANDLER:
++        handler = copy_nop_handler(body, loader_blob)
++        packets = [PACKET_NOP]
++        if skip_predication and engine == 'pfp':
++            packets.append(PACKET_SET_PREDICATION)
++        point_packets_at(body, handler, packets)
++    return bytes(header) + bytes(body)
++
++
++def step(text):
++    print(f'[*] {text}')
++
++
++def main():
++    print('rmuxnet presents')
++    if len(sys.argv) != 5:
++        sys.exit('usage: gen_gladius_fw.py <12.02 kernel elf> <loader gladius dir> '
++                 '<liverpool dir> <out dir>')
++    step(f'reading {sys.argv[1]}')
++    elf = read(sys.argv[1])
++    loader_dir, liverpool_dir, out_dir = sys.argv[2:]
++    segments = load_segments(elf)
++
++    def microcode(table, engine):
++        return kernel_microcode(elf, segments, table, engine)
++
++    def loader(engine):
++        return read(f'{loader_dir}/gladius_{engine}.bin')
++
++    def liverpool(engine):
++        if engine == 'rlc':
++            return None
++        return read(f'{liverpool_dir}/liverpool_{engine}.bin')
++
++    step('rebuilding the loader files from table A')
++    for engine in ENGINES:
++        rebuilt = build(microcode(TABLE_A, engine), engine, loader(engine), None, False)
++        if rebuilt != loader(engine):
++            sys.exit(f'{engine}: table A does not rebuild the loader file, wrong input')
++
++    step('checking rlc and sdma are the same in both tables')
++    for engine in SHARED:
++        if microcode(TABLE_A, engine) != microcode(TABLE_B, engine):
++            sys.exit(f'{engine}: table A and table B differ')
++
++    os.makedirs(out_dir, exist_ok=True)
++    outputs = []
++    for engine in TABLED:
++        for name, table in (('a', TABLE_A), ('b', TABLE_B)):
++            outputs.append((f'gladius_{name}_{engine}.bin', table, engine))
++    for engine in SHARED:
++        outputs.append((f'gladius_{engine}.bin', TABLE_A, engine))
++
++    for filename, table, engine in outputs:
++        data = build(microcode(table, engine), engine, loader(engine), liverpool(engine), True)
++        write(f'{out_dir}/{filename}', data)
++        step(f'wrote {out_dir}/{filename}')
++    step('done')
++
++
++main()

@@ -1,0 +1,101 @@
+From eaa983c7dd75bc9d619971f4f174c033314374bf Mon Sep 17 00:00:00 2001
+From: feeRnt <81442162+feeRnt@users.noreply.github.com>
+Date: Sat, 30 Aug 2025 16:15:02 +0000
+Subject: [PATCH 009/124] drm: amdgpu: ps4_bridge: drop 1080p120 and use the
+ preferred mode type
+
+Signed-off-by: feeRnt <81442162+feeRnt@users.noreply.github.com>
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/ps4_bridge.c | 38 +++++++++++++++++++++----
+ 1 file changed, 33 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+index bd50c960280f5cf0c5033a50477edb10ebf6598a..925986f2bdb876d4a3bff2922306d2750c31f681 100644
+--- a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
++++ b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+@@ -170,6 +170,23 @@ static struct ps4_bridge g_bridge = {
+ 	.mutex = __MUTEX_INITIALIZER(g_bridge.mutex)
+ };
+ 
++/* Function prototype declarations, to fix compilation warnings */
++void ps4_bridge_mode_set(struct drm_bridge *bridge,
++			 const struct drm_display_mode *mode,
++			 const struct drm_display_mode *adjusted_mode);
++
++int ps4_bridge_get_modes(struct drm_connector *connector);
++
++enum drm_connector_status ps4_bridge_detect(struct drm_connector *connector,
++		bool force);
++
++enum drm_mode_status ps4_bridge_mode_valid(struct drm_connector *connector,
++				  const struct drm_display_mode *mode);
++
++int ps4_bridge_register(struct drm_connector *connector,
++			     struct drm_encoder *encoder);
++
++
+ static void cq_init(struct i2c_cmdqueue *q, u8 code)
+ {
+ 	q->req.code = code;
+@@ -673,14 +690,14 @@ static void ps4_bridge_post_disable(struct drm_bridge *bridge)
+ // Check if this actually works.
+ 
+ /* 1 - 640x480@60Hz */
+-static const struct drm_display_mode mode_480p = {
++static const struct drm_display_mode mode_480p __maybe_unused = {
+ 	DRM_MODE("640x480", DRM_MODE_TYPE_DRIVER, 25175, 640, 656,
+ 		 752, 800, 0, 480, 490, 492, 525, 0,
+ 		 DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC),
+ 	.picture_aspect_ratio = HDMI_PICTURE_ASPECT_4_3
+ };
+ /* 4 - 1280x720@60Hz */
+-static const struct drm_display_mode mode_720p = {
++static const struct drm_display_mode mode_720p __maybe_unused = {
+ 	DRM_MODE("1280x720", DRM_MODE_TYPE_DRIVER, 74250, 1280, 1390,
+ 		 1430, 1650, 0, 720, 725, 730, 750, 0,
+ 		 DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC),
+@@ -688,11 +705,18 @@ static const struct drm_display_mode mode_720p = {
+ };
+ /* 16 - 1920x1080@60Hz */
+ static const struct drm_display_mode mode_1080p = {
+-	DRM_MODE("1920x1080", DRM_MODE_TYPE_DRIVER, 148500, 1920, 2008,
++	DRM_MODE("1920x1080", DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED, 148500, 1920, 2008,
+ 		 2052, 2200, 0, 1080, 1084, 1089, 1125, 0,
+ 		 DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC),
+ 	.picture_aspect_ratio = HDMI_PICTURE_ASPECT_16_9
+ };
++/* Having a 120Hz modeline causes incorrect mode selection
++ * by GUI / Display Manager, causing a 60Hz monitor to try
++ * with a 120Hz mode - leading to a blackscreen.
++ * Only fix seems to be having a xorg.conf in /usr/share/X11/xorg.conf.d/
++ *
++ * Try setting a TYPE_PREFFERED mode
++ */
+ /* 63 - 1920x1080@120Hz */
+ static const struct drm_display_mode mode_1080p120 = {
+ 	DRM_MODE("1920x1080", DRM_MODE_TYPE_DRIVER, 297000, 1920, 2008,
+@@ -705,7 +729,7 @@ int ps4_bridge_get_modes(struct drm_connector *connector)
+ {
+ 	struct drm_device *dev = connector->dev;
+ 	struct drm_display_mode *newmode;
+-	pr_info("ps4_bridge_get_modes\n");
++	pr_debug("ps4_bridge_get_modes\n");
+ 
+ 	newmode = drm_mode_duplicate(dev, &mode_1080p);
+ 	drm_mode_probed_add(connector, newmode);
+@@ -761,9 +785,13 @@ enum drm_mode_status ps4_bridge_mode_valid(struct drm_connector *connector,
+ 
+ 	/* Allow anything that we can match up to a VIC (CEA modes) */
+ 	if (!vic || (vic != 16 && vic != 4 && vic != 63)) {
++	// Might need to disable 63 (1920x1080-120Hz)
++
++	/*
++	if (!vic || (vic != 16 && vic != 4)) {
++	*/
+ 		return MODE_BAD;
+ 	}
+-
+ 	return MODE_OK;
+ }
+ 

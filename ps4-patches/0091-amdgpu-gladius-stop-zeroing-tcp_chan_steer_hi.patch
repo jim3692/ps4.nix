@@ -1,0 +1,22 @@
+From 59ab160958a2de394812627b85291219ef49a2a7 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sat, 7 Nov 2026 23:28:50 +0100
+Subject: [PATCH 091/124] amdgpu: gladius: stop zeroing tcp_chan_steer_hi
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c b/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c
+index db3c4e5d9775066f04039e4742c2a423ce641cae..3e648661a4f1863d7334a9e84ea99d34ddd036f6 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c
+@@ -91,7 +91,6 @@ static const u32 gladius_golden_common_registers[] =
+ 	mmTA_CNTL_AUX, 0x000f000f, 0x00010000, //mod
+ 	mmTCC_CTRL, 0x00100000, 0x001ff07c, //mod
+ 	mmTCP_ADDR_CONFIG, 0x000003ff, 0x000000f7,
+-	mmTCP_CHAN_STEER_HI, 0xffffffff, 0x00000000,
+ 	0xf9e, 0x00000001, 0x00000003, /* SEM_CHICKEN_BITS */	//DONE //2 on FAT
+ 	0x31da, 0x00000008, 0x00000008, /* SPI_RESET_DEBUG */ //DONE
+ 	0x2300, 0x000000ff, 0x00000000, /* SQ_CONFIG */ //DONE 1 on FAT

@@ -1,0 +1,56 @@
+From 98546a179dc2e0364c9b838987c6e5c2d225d2ad Mon Sep 17 00:00:00 2001
+From: Regie Vorkman <97987863+TheVorkMan@users.noreply.github.com>
+Date: Tue, 21 Apr 2026 13:22:47 +0200
+Subject: [PATCH 022/124] ps4: update the dmi strings
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/firmware/ps4-dmi.c | 35 ++++++++++++++++++++++++-----------
+ 1 file changed, 24 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/firmware/ps4-dmi.c b/drivers/firmware/ps4-dmi.c
+index 6080f50e47a39eacde54c5b8a7ecccfbcacc3766..3ced6eec2c6a4710dc3264b667a536475aaabe29 100644
+--- a/drivers/firmware/ps4-dmi.c
++++ b/drivers/firmware/ps4-dmi.c
+@@ -27,17 +27,30 @@ bool __init ps4_dmi_is_ps4(void)
+ }
+ 
+ static const char * const ps4_strings[DMI_STRING_MAX] = {
+-	[DMI_SYS_VENDOR]      = "Sony Interactive Entertainment",
+-	[DMI_PRODUCT_NAME]    = "PlayStation 4",
+-	[DMI_PRODUCT_VERSION] = "PS4",
+-	[DMI_PRODUCT_FAMILY]  = "PlayStation",
+-	[DMI_BOARD_VENDOR]    = "SIE",
+-	[DMI_BOARD_NAME]      = "PlayStation 4",
+-	[DMI_BIOS_VENDOR]     = "SIE",
+-	[DMI_BIOS_VERSION]    = "ORBIS",
+-	[DMI_BIOS_DATE]       = "09/01/2021",
+-	[DMI_CHASSIS_VENDOR]  = "Sony",
+-	[DMI_CHASSIS_TYPE]    = "3",
++	[DMI_SYS_VENDOR]         = "Sony Interactive Entertainment",
++	
++	[DMI_PRODUCT_NAME]       = "NeverGonna 4",
++	[DMI_PRODUCT_VERSION]    = "CUH-GIVEYOUUP",
++	[DMI_PRODUCT_SERIAL]     = "MARCANANDDUDES",
++	[DMI_PRODUCT_SKU]        = "sku1489666",
++	[DMI_PRODUCT_FAMILY]     = "PlayStation",
++
++	[DMI_BOARD_ASSET_TAG]    = "",
++	[DMI_BOARD_VENDOR]       = "SCEI",
++	[DMI_BOARD_NAME]         = "Belize",
++	[DMI_BOARD_VERSION]      = "rev1",
++	[DMI_BOARD_SERIAL]       = "PS4HAXSONYCRY0",
++
++	[DMI_BIOS_VENDOR]        = "SIE",
++	[DMI_BIOS_VERSION]       = "PS4Homebrew",
++	[DMI_BIOS_DATE]          = "21/04/2026",
++	[DMI_BIOS_RELEASE]       = "69.0",
++
++	[DMI_CHASSIS_VENDOR]     = "Sony",
++	[DMI_CHASSIS_TYPE]       = "3",
++	[DMI_CHASSIS_ASSET_TAG]  = "",
++	[DMI_CHASSIS_SERIAL]     = "",
++	[DMI_CHASSIS_VERSION]    = ""
+ };
+ 
+ void __init ps4_dmi_populate(const char *ident[DMI_STRING_MAX])

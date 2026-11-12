@@ -1,0 +1,13 @@
+PS4 URL: https://gitlab.com/rmuxnet/linux.git
+PS4 ref: refs/ps4-export/source
+PS4 commit: 8e84be3ed88ee55e4bd4bd1b8b303c1e8ec90ce9
+Upstream URL: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+Release tag: v7.3.3
+Base commit: d50d994bffa3c7c6db2d8bc4c5f0c55e3f46b0cd
+Patch count: 124
+
+Base description: d50d994bffa3c7c6db2d8bc4c5f0c55e3f46b0cd Linux 7.3.3
+
+Patches preserve commit authors and messages, including credit trailers.
+This exports all downstream changes, including configuration and documentation.
+Applying to a newer kernel may require manual porting and PS4 hardware testing.

@@ -1,0 +1,58 @@
+From af1c4266978ada226b6580325844329cf46a0533 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sat, 7 Nov 2026 00:05:35 +0100
+Subject: [PATCH 078/124] ps4: use identity mapping off baikal and fix the
+ belize ahci error path
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/iommu/amd/iommu.c      | 4 ++++
+ drivers/usb/host/xhci-aeolia.c | 8 +++-----
+ 2 files changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/iommu/amd/iommu.c b/drivers/iommu/amd/iommu.c
+index fd8ff14e7db39a3be37b216ceb5f75bd36e731da..95b04513038c419b0a2c78abebc56eef986b2a82 100644
+--- a/drivers/iommu/amd/iommu.c
++++ b/drivers/iommu/amd/iommu.c
+@@ -31,6 +31,7 @@
+ #include <linux/irqdomain.h>
+ #include <linux/percpu.h>
+ #include <linux/cc_platform.h>
++#include <asm/ps4.h>
+ #include <asm/irq_remapping.h>
+ #include <asm/io_apic.h>
+ #include <asm/apic.h>
+@@ -3190,6 +3191,9 @@ static int amd_iommu_def_domain_type(struct device *dev)
+ 		return IOMMU_DOMAIN_DMA;
+ 
+ #ifdef CONFIG_X86_PS4
++	if (ps4sb_status() >= 0 && !ps4_is_baikal())
++		return IOMMU_DOMAIN_IDENTITY;
++
+ 	if (amd_iommu_ps4_baikal_force_identity(dev) &&
+ 	    !cc_platform_has(CC_ATTR_MEM_ENCRYPT) &&
+ 	    !amd_iommu_snp_en)
+diff --git a/drivers/usb/host/xhci-aeolia.c b/drivers/usb/host/xhci-aeolia.c
+index 07b87e4691803da309b7d1d144353fd9ef8cc214..6ea3de2fa06de6b2976d1fa403bf356b9708528a 100644
+--- a/drivers/usb/host/xhci-aeolia.c
++++ b/drivers/usb/host/xhci-aeolia.c
+@@ -379,16 +379,14 @@ static int ahci_init_one(struct pci_dev *pdev)
+ 
+ 	rc = ahci_host_activate(host, &ahci_sht);
+ 	dev_dbg(&pdev->dev, "ahci_host_activate returned %d\n", rc);
+-	if (rc) {
+-		goto host_deactivate;
+-	}
++	if (rc)
++		goto release_host;
+ 
+ 	pm_runtime_put_noidle(&pdev->dev);
+ 	return 0;
+ 
+-	host_deactivate:
+-		ata_host_detach(host);
+ 	release_host:
++		axhci->host = NULL;
+ 	unmap_registers:
+ 		iounmap(hpriv->mmio);
+ 	release_mem_region:

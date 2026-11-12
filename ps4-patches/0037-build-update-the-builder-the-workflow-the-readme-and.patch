@@ -1,0 +1,3077 @@
+From 5260fb6bc732ebb59271522483bf376a1ea88410 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sun, 26 Apr 2026 21:54:45 +0200
+Subject: [PATCH 037/124] build: update the builder, the workflow, the readme
+ and the config and add the issue templates
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ .github/ISSUE_TEMPLATE/bug_report.md          | 114 ++++
+ .github/ISSUE_TEMPLATE/build_failure.md       |  93 ++++
+ .../ISSUE_TEMPLATE/compatibility_report.md    |  98 ++++
+ .github/ISSUE_TEMPLATE/feature_request.md     |  51 ++
+ .github/ISSUE_TEMPLATE/regression_report.md   | 131 +++++
+ .github/workflows/build-kernel_latest.yaml    |  54 +-
+ README.md                                     | 392 +++++++++-----
+ build.sh                                      | 201 ++++++-
+ config                                        | 491 ++++++++----------
+ 9 files changed, 1168 insertions(+), 457 deletions(-)
+ create mode 100644 .github/ISSUE_TEMPLATE/bug_report.md
+ create mode 100644 .github/ISSUE_TEMPLATE/build_failure.md
+ create mode 100644 .github/ISSUE_TEMPLATE/compatibility_report.md
+ create mode 100644 .github/ISSUE_TEMPLATE/feature_request.md
+ create mode 100644 .github/ISSUE_TEMPLATE/regression_report.md
+
+diff --git a/.github/ISSUE_TEMPLATE/bug_report.md b/.github/ISSUE_TEMPLATE/bug_report.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..ac1b6970c5d8bd4bc9df945522eb586dcc173754
+--- /dev/null
++++ b/.github/ISSUE_TEMPLATE/bug_report.md
+@@ -0,0 +1,114 @@
++---
++name: Bug Report
++about: Report a problem with ps4-linux-12xx
++title: "[BUG] "
++labels: bug
++assignees: rmuxnet
++---
++
++## Console Information
++
++| Field | Your answer |
++|---|---|
++| Model | e.g. CUH-1216A |
++| Southbridge | Aeolia / Belize / Baikal / unknown |
++| WiFi/BT chip | e.g. Marvell 88w8897, MediaTek 7668, unknown |
++| UART available | yes / no |
++
++---
++
++## Kernel Information
++
++| Field | Your answer |
++|---|---|
++| Branch | e.g. 7.0-Stable |
++| Commit | paste `git rev-parse HEAD` or the hash from the release page |
++| Build profile | Server / General |
++| LTO | ThinLTO / FullLTO |
++| Pre-built or self-compiled | pre-built release / self-compiled |
++
++---
++
++## Distro / Userspace
++
++| Field | Your answer |
++|---|---|
++| Distro | e.g. Arch Linux, Gentoo, Debian |
++| Mesa version | |
++| Init system | e.g. systemd, OpenRC |
++
++---
++
++## What is broken
++
++<!-- Describe the problem clearly. What did you expect to happen, and what actually happened? -->
++
++---
++
++## Hardware status
++
++| Component | Status |
++|---|---|
++| HDMI display | ✔ working / ✘ broken / - untested |
++| WiFi | ✔ working / ✘ broken / - untested |
++| Bluetooth | ✔ working / ✘ broken / - untested |
++| Ethernet | ✔ working / ✘ broken / - untested |
++| Fan control | ✔ working / ✘ broken / - untested |
++| LEDs | ✔ working / ✘ broken / - untested |
++| Power button | ✔ working / ✘ broken / - untested |
++| Internal storage | ✔ working / ✘ broken / - untested |
++
++---
++
++## Steps to reproduce
++
++1. 
++2. 
++3. 
++
++---
++
++## Logs
++
++> The more information you provide here, the faster this can be diagnosed. Please include as much as you can.
++
++You can provide logs in any of the following ways:
++
++- **Paste directly** into the code block below
++- **Attach a file** — drag and drop a `.txt` or `.log` file directly into this text box, or click the attachment button at the bottom of the editor
++- **Pastebin** — if the output is very long, paste it at https://paste.rs or https://gist.github.com and drop the link here
++- **Screenshot or photo** — if you have a UART setup or a camera pointed at the screen, attach the image directly to this issue. GitHub accepts `.png`, `.jpg`, `.gif`, and `.webp`
++
++<details>
++<summary>dmesg</summary>
++
++```
++paste here
++```
++
++</details>
++
++<details>
++<summary>Additional logs (optional)</summary>
++
++```
++paste here
++```
++
++</details>
++
++<!-- To attach a file or image: drag it into this text area, or click the paperclip icon at the bottom of the editor when writing your issue. -->
++
++---
++
++## Additional context
++
++<!-- Anything else that might help — previous kernels that worked, things you've already tried, links to related issues or discussions, etc. -->
++
++---
++
++> **Before submitting**, please check:
++> - [ ] I have read the [README](https://github.com/rmuxnet/ps4-linux-12xx/blob/7.0-Stable/README.md), especially the compatibility table and release notes
++> - [ ] I have searched existing [Issues](https://github.com/rmuxnet/ps4-linux-12xx/issues) and [Discussions](https://github.com/rmuxnet/ps4-linux-12xx/discussions) for this problem
++> - [ ] I am running a supported branch (`7.0-Stable` recommended)
++> - [ ] I have included logs or attachments
+diff --git a/.github/ISSUE_TEMPLATE/build_failure.md b/.github/ISSUE_TEMPLATE/build_failure.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..2680e164201f84c0c6e1e5c63fa6018c4ff7708b
+--- /dev/null
++++ b/.github/ISSUE_TEMPLATE/build_failure.md
+@@ -0,0 +1,93 @@
++---
++name: Build Failure
++about: Report a failure when compiling ps4-linux-12xx
++title: "[BUILD] "
++labels: build
++assignees: rmuxnet
++---
++
++## Build Environment
++
++| Field | Your answer |
++|---|---|
++| Host OS / distro | e.g. Arch Linux, Ubuntu 24.04 |
++| Host architecture | e.g. x86_64 |
++| Clang/LLVM version | paste `clang --version` |
++| GNU Make version | paste `make --version` |
++| Python version | paste `python3 --version` |
++| Available RAM | e.g. 16 GB |
++| Available disk space | e.g. 50 GB |
++
++---
++
++## Kernel / Build Information
++
++| Field | Your answer |
++|---|---|
++| Branch | e.g. 7.0-Stable |
++| Commit | paste `git rev-parse HEAD` |
++| Build profile | Server / General |
++| LTO | ThinLTO / FullLTO |
++| Build method | build.sh / manual / GitHub Actions |
++
++---
++
++## Build command used
++
++<!-- Paste the exact command you ran. -->
++
++```
++paste here
++```
++
++---
++
++## Where did it fail
++
++- [ ] `build.sh` pre-checks (missing firmware, config issues)
++- [ ] `olddefconfig`
++- [ ] `prepare`
++- [ ] `bzImage`
++- [ ] `modules`
++- [ ] GitHub Actions workflow
++- [ ] Other
++
++---
++
++## Error output
++
++> Paste the full error output. If it is very long, attach a `.txt` file or use https://paste.rs or https://gist.github.com and link it here.
++
++You can also attach screenshots or photos of the terminal output directly to this issue. GitHub accepts `.png`, `.jpg`, `.gif`, and `.webp`.
++
++<details>
++<summary>Build error output</summary>
++
++```
++paste here
++```
++
++</details>
++
++<details>
++<summary>Full build log (optional)</summary>
++
++```
++paste here
++```
++
++</details>
++
++---
++
++## Additional context
++
++<!-- Anything else that might help — things you already tried, whether it built on a previous commit, etc. -->
++
++---
++
++> **Before submitting**, please check:
++> - [ ] I have read the build instructions in the [README](https://github.com/rmuxnet/ps4-linux-12xx/blob/7.0-Stable/README.md)
++> - [ ] I have placed the SD8797 firmware at `extra_firmware/mrvl/sd8797_uapsta.bin` if required by my config
++> - [ ] I have searched existing [Issues](https://github.com/rmuxnet/ps4-linux-12xx/issues) for this error
++> - [ ] I am on a supported branch (`7.0-Stable` recommended)
+diff --git a/.github/ISSUE_TEMPLATE/compatibility_report.md b/.github/ISSUE_TEMPLATE/compatibility_report.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..2af52fe108ca9d1bfc526a954d9d9fab2bcdebcd
+--- /dev/null
++++ b/.github/ISSUE_TEMPLATE/compatibility_report.md
+@@ -0,0 +1,98 @@
++---
++name: Compatibility Report
++about: Report what works and what does not on your specific console model
++title: "[COMPAT] "
++labels: compatibility
++assignees: rmuxnet
++---
++
++> This is not a bug report. Use this to document your console's compatibility with ps4-linux-12xx so it can be added to the compatibility table in the README.
++
++---
++
++## Console Information
++
++| Field | Your answer |
++|---|---|
++| Model | e.g. CUH-1216A |
++| Southbridge | Aeolia / Belize / Baikal / unknown |
++| Southbridge revision | e.g. B0, B1, unknown |
++| WiFi/BT chip | e.g. Marvell 88w8897, MediaTek 7668, unknown |
++| Hard drive size | 500 GB / 1000 GB |
++| UART available | yes / no |
++
++---
++
++## Kernel Information
++
++| Field | Your answer |
++|---|---|
++| Branch | e.g. 7.0-Stable |
++| Commit | paste `git rev-parse HEAD` or the hash from the release page |
++| Build profile | Server / General |
++| LTO | ThinLTO / FullLTO |
++| Pre-built or self-compiled | pre-built release / self-compiled |
++
++---
++
++## Distro / Userspace
++
++| Field | Your answer |
++|---|---|
++| Distro | e.g. Arch Linux, Gentoo, Debian |
++| Mesa version | |
++| Init system | e.g. systemd, OpenRC |
++
++---
++
++## Hardware status
++
++| Component | Status | Notes |
++|---|---|---|
++| HDMI display | ✔ working / ✘ broken / - untested | |
++| WiFi | ✔ working / ✘ broken / - untested | |
++| Bluetooth | ✔ working / ✘ broken / - untested | |
++| Ethernet | ✔ working / ✘ broken / - untested | |
++| Fan control | ✔ working / ✘ broken / - untested | |
++| LEDs | ✔ working / ✘ broken / - untested | |
++| Power button | ✔ working / ✘ broken / - untested | |
++| Internal storage | ✔ working / ✘ broken / - untested | |
++| Audio | ✔ working / ✘ broken / - untested | |
++
++---
++
++## Overall status
++
++- [ ] Fully working — daily driver
++- [ ] Mostly working — minor issues
++- [ ] Partially working — significant issues
++- [ ] Barely working — boots but not usable
++- [ ] Does not boot
++
++---
++
++## Notes
++
++<!-- Any extra detail about your setup, quirks, workarounds you needed, or things that surprised you. -->
++
++---
++
++## Logs (optional but appreciated)
++
++> Attach a `dmesg` log if you can. It helps even if everything works — it gives us a baseline for your model.
++
++You can provide logs in any of the following ways:
++
++- **Paste directly** into the code block below
++- **Attach a file** — drag and drop a `.txt` or `.log` file directly into this text box
++- **Pastebin** — paste at https://paste.rs or https://gist.github.com and link it here
++- **Screenshot or photo** — attach images directly, GitHub accepts `.png`, `.jpg`, `.gif`, and `.webp`
++
++<details>
++<summary>dmesg (optional)</summary>
++
++```
++paste here
++```
++
++</details>
+diff --git a/.github/ISSUE_TEMPLATE/feature_request.md b/.github/ISSUE_TEMPLATE/feature_request.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..879e5a18efae10031ee16069744ca98cd99c932e
+--- /dev/null
++++ b/.github/ISSUE_TEMPLATE/feature_request.md
+@@ -0,0 +1,51 @@
++---
++name: Feature Request
++about: Request support for a new model, driver, config option, or kernel feature
++title: "[FEATURE] "
++labels: enhancement
++assignees: rmuxnet
++---
++
++## What are you requesting
++
++<!-- Describe the feature, driver, or support you want added. Be as specific as possible. -->
++
++---
++
++## Type of request
++
++- [ ] New console model support
++- [ ] New WiFi/BT chip support
++- [ ] Kernel config option
++- [ ] Driver addition or improvement
++- [ ] Build system change
++- [ ] Other
++
++---
++
++## Console / Hardware involved (if applicable)
++
++| Field | Your answer |
++|---|---|
++| Model | e.g. CUH-2216A |
++| Southbridge | Aeolia / Belize / Baikal / unknown |
++| WiFi/BT chip | e.g. MediaTek 7668, unknown |
++| UART available | yes / no |
++
++---
++
++## Why is this needed
++
++<!-- What problem does this solve? What is currently broken or missing without it? -->
++
++---
++
++## Any relevant references
++
++<!-- Links to patches, upstream commits, other kernel trees, forum posts, or prior art that might help implement this. -->
++
++---
++
++## Additional context
++
++<!-- Anything else that might be useful. -->
+diff --git a/.github/ISSUE_TEMPLATE/regression_report.md b/.github/ISSUE_TEMPLATE/regression_report.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..40e89b8f37bdf6618395d025cd17a4a47d65681a
+--- /dev/null
++++ b/.github/ISSUE_TEMPLATE/regression_report.md
+@@ -0,0 +1,131 @@
++---
++name: Regression Report
++about: Report something that worked on a previous branch or commit and is now broken
++title: "[REGRESSION] "
++labels: regression
++assignees: rmuxnet
++---
++
++> A regression is when something that previously worked has stopped working. Please be as specific as possible about what changed — this is critical for bisecting.
++
++---
++
++## Console Information
++
++| Field | Your answer |
++|---|---|
++| Model | e.g. CUH-1216A |
++| Southbridge | Aeolia / Belize / Baikal / unknown |
++| WiFi/BT chip | e.g. Marvell 88w8897, MediaTek 7668, unknown |
++| UART available | yes / no |
++
++---
++
++## What broke
++
++<!-- Describe clearly what is no longer working. -->
++
++---
++
++## Last known good
++
++| Field | Your answer |
++|---|---|
++| Branch | e.g. 7.0-Stable, 6.18.21-Strawberry |
++| Commit | paste the commit hash where it last worked |
++| Build profile | Server / General |
++| LTO | ThinLTO / FullLTO |
++
++---
++
++## First known bad
++
++| Field | Your answer |
++|---|---|
++| Branch | e.g. 7.0-Stable |
++| Commit | paste the commit hash where it first broke |
++| Build profile | Server / General |
++| LTO | ThinLTO / FullLTO |
++
++---
++
++## Have you bisected
++
++- [ ] Yes — I have identified the commit that introduced this
++- [ ] Partially — I have narrowed it down to a range
++- [ ] No — I only know the branch where it broke
++
++If you have bisected or narrowed it down, paste the relevant commit(s) here:
++
++<!-- paste commit hash(es) or range -->
++
++---
++
++## Distro / Userspace
++
++| Field | Your answer |
++|---|---|
++| Distro | e.g. Arch Linux, Gentoo, Debian |
++| Mesa version | |
++| Init system | e.g. systemd, OpenRC |
++
++---
++
++## Hardware status before and after
++
++| Component | Last good | Current (broken) |
++|---|---|---|
++| HDMI display | ✔ / ✘ / - | ✔ / ✘ / - |
++| WiFi | ✔ / ✘ / - | ✔ / ✘ / - |
++| Bluetooth | ✔ / ✘ / - | ✔ / ✘ / - |
++| Ethernet | ✔ / ✘ / - | ✔ / ✘ / - |
++| Fan control | ✔ / ✘ / - | ✔ / ✘ / - |
++| LEDs | ✔ / ✘ / - | ✔ / ✘ / - |
++| Power button | ✔ / ✘ / - | ✔ / ✘ / - |
++| Internal storage | ✔ / ✘ / - | ✔ / ✘ / - |
++
++---
++
++## Logs
++
++> Please provide `dmesg` from both the last good and current broken kernel if possible. This makes bisecting much easier.
++
++You can provide logs in any of the following ways:
++
++- **Paste directly** into the code blocks below
++- **Attach a file** — drag and drop a `.txt` or `.log` file directly into this text box
++- **Pastebin** — paste at https://paste.rs or https://gist.github.com and link it here
++- **Screenshot or photo** — attach images directly, GitHub accepts `.png`, `.jpg`, `.gif`, and `.webp`
++
++<details>
++<summary>dmesg — last known good</summary>
++
++```
++paste here
++```
++
++</details>
++
++<details>
++<summary>dmesg — current broken</summary>
++
++```
++paste here
++```
++
++</details>
++
++<details>
++<summary>Additional logs (optional)</summary>
++
++```
++paste here
++```
++
++</details>
++
++---
++
++## Additional context
++
++<!-- Anything else that might help — config changes, userspace updates, hardware changes, things you already tried, etc. -->
+diff --git a/.github/workflows/build-kernel_latest.yaml b/.github/workflows/build-kernel_latest.yaml
+index f42c76826c2671ccfc015341ea12ea81eeb69cb1..2a332760f9e6633d7e59591bcb01da982a9a0e73 100644
+--- a/.github/workflows/build-kernel_latest.yaml
++++ b/.github/workflows/build-kernel_latest.yaml
+@@ -1,5 +1,5 @@
+ name: "Strawberry-LTS"
+-run-name: "${{ github.event_name == 'workflow_dispatch' && format('Strawberry-{0}-{1}', inputs.profile, inputs.lto) || format('Strawberry-tag-{0}', github.ref_name) }}"
++run-name: "${{ github.event_name == 'workflow_dispatch' && format('Strawberry-{0}-{1}-{2}', inputs.profile, inputs.lto, inputs.southbridge) || format('Strawberry-tag-{0}', github.ref_name) }}"
+ 
+ on:
+   workflow_dispatch:
+@@ -20,6 +20,14 @@ on:
+         options:
+           - ThinLTO
+           - FullLTO
++      southbridge:
++        description: "PS4 Southbridge Target"
++        required: true
++        default: "AeoliaBelize"
++        type: choice
++        options:
++          - AeoliaBelize
++          - Baikal
+   push:
+     tags:
+       - "v*"
+@@ -43,9 +51,11 @@ jobs:
+         run: |
+           PROFILE_INPUT="${{ github.event_name == 'workflow_dispatch' && inputs.profile || 'Server' }}"
+           LTO_INPUT="${{ github.event_name == 'workflow_dispatch' && inputs.lto || 'ThinLTO' }}"
++          SOUTHBRIDGE_INPUT="${{ github.event_name == 'workflow_dispatch' && inputs.southbridge || 'AeoliaBelize' }}"
+ 
+           PROFILE_INPUT="$(echo "$PROFILE_INPUT" | tr '[:upper:]' '[:lower:]')"
+           LTO_INPUT="$(echo "$LTO_INPUT" | tr '[:upper:]' '[:lower:]')"
++          SOUTHBRIDGE_INPUT="$(echo "$SOUTHBRIDGE_INPUT" | tr '[:upper:]' '[:lower:]')"
+ 
+           case "$PROFILE_INPUT" in
+             general)
+@@ -65,6 +75,15 @@ jobs:
+               ;;
+           esac
+ 
++          case "$SOUTHBRIDGE_INPUT" in
++            baikal)
++              TARGET_SOUTHBRIDGE="Baikal"
++              ;;
++            *)
++              TARGET_SOUTHBRIDGE="AeoliaBelize"
++              ;;
++          esac
++
+           case "${TARGET_LTO}:${TARGET_PROFILE}" in
+             ThinLTO:Server)
+               SWAP_GB="16"
+@@ -82,7 +101,8 @@ jobs:
+ 
+           echo "target_profile=${TARGET_PROFILE}" >> "$GITHUB_OUTPUT"
+           echo "target_lto=${TARGET_LTO}" >> "$GITHUB_OUTPUT"
+-          echo "cache_suffix=${TARGET_PROFILE}-${TARGET_LTO}" >> "$GITHUB_OUTPUT"
++          echo "target_southbridge=${TARGET_SOUTHBRIDGE}" >> "$GITHUB_OUTPUT"
++          echo "cache_suffix=${TARGET_PROFILE}-${TARGET_LTO}-${TARGET_SOUTHBRIDGE}" >> "$GITHUB_OUTPUT"
+           echo "swap_gb=${SWAP_GB}" >> "$GITHUB_OUTPUT"
+ 
+       - name: Restore Cache of Github Workspace
+@@ -100,6 +120,26 @@ jobs:
+           fetch-depth: 1
+           clean: false
+ 
++      - name: Fetch private and custom firmware
++        run: |
++          # Fetch Marvel firmware (private repo)
++          git clone --depth=1 \
++            https://x-access-token:${{ secrets.FW_REPO_PAT }}@github.com/sony-jaguar-devs/firmware.git \
++            /tmp/jaguar-fw
++
++          mkdir -p kernel-source-host/extra_firmware/mrvl
++          cp /tmp/jaguar-fw/sd8797_uapsta.bin kernel-source-host/extra_firmware/mrvl/sd8797_uapsta.bin
++          test -s kernel-source-host/extra_firmware/mrvl/sd8797_uapsta.bin
++
++          # Fetch GPU firmware (private repo)
++          git clone --depth=1 \
++            https://x-access-token:${{ secrets.FW_REPO_PAT }}@github.com/sony-jaguar-devs/orbis_gpu_blobs_ps4.git \
++            /tmp/gpu-fw
++          mkdir -p kernel-source-host/extra_firmware/amdgpu
++          cp /tmp/gpu-fw/lib/firmware/amdgpu/*.bin kernel-source-host/extra_firmware/amdgpu/
++          
++          rm -rf /tmp/jaguar-fw /tmp/gpu-fw
++
+       - name: Copy Dockerfile and .dockerignore to workspace root
+         run: |
+           cp kernel-source-host/Dockerfile ./Dockerfile
+@@ -156,18 +196,24 @@ jobs:
+ 
+           TARGET_PROFILE="${{ steps.build-vars.outputs.target_profile }}"
+           TARGET_LTO="${{ steps.build-vars.outputs.target_lto }}"
++          TARGET_SOUTHBRIDGE="${{ steps.build-vars.outputs.target_southbridge }}"
+ 
+           echo "Executing build.sh with profile: \$TARGET_PROFILE"
+           echo "Executing build.sh with LTO: \$TARGET_LTO"
++          echo "Executing build.sh with southbridge: \$TARGET_SOUTHBRIDGE"
+ 
+           chmod +x build.sh
+-          ./build.sh --option 3 use="\$TARGET_PROFILE" lto="\$TARGET_LTO"
++          ./build.sh --option 3 use="\$TARGET_PROFILE" lto="\$TARGET_LTO" southbridge="\$TARGET_SOUTHBRIDGE"
+ 
+           echo "Packaging build artifacts..."
+ 
+           ARTIFACT_BASENAME="\$(cat out/artifact_name.txt 2>/dev/null || true)"
+           if [[ -z "\$ARTIFACT_BASENAME" ]]; then
+-            ARTIFACT_BASENAME="Strawberry-\${TARGET_LTO}-\${TARGET_PROFILE}-LTS"
++            ARTIFACT_SOUTHBRIDGE_SUFFIX=""
++            if [[ "\$TARGET_SOUTHBRIDGE" == "Baikal" ]]; then
++              ARTIFACT_SOUTHBRIDGE_SUFFIX="-Baikal"
++            fi
++            ARTIFACT_BASENAME="Strawberry-\${TARGET_LTO}-\${TARGET_PROFILE}\${ARTIFACT_SOUTHBRIDGE_SUFFIX}-LTS"
+           fi
+           ARTIFACT_FILE="\${ARTIFACT_BASENAME}.tar.gz"
+ 
+diff --git a/README.md b/README.md
+index d9da8184fe4d7733b138688b7a46a1044dbcabd0..a52aefa0a0a201cd740c115417448ae8d769c254 100644
+--- a/README.md
++++ b/README.md
+@@ -1,155 +1,221 @@
+-
+ Linux Kernel - On the Sony PlayStation 4
+ ========================================
+ 
+-This is a Linux Kernel source tailored to run on exploitable PlayStation 4 systems with various subsystem patches from     
+-the [fail0verflow team](https://github.com/fail0verflow/ps4-linux),    
+-[eeply](https://github.com/eeply/ps4-linux),    
+-[Ps3itaTeam](https://github.com/Ps3itaTeam/ps4-linux),   
+-[rancido](https://github.com/rancido),    
+-valeryy (no Github - contributed to PS4 Baikal southbridges),    
+-[mircoho](https://github.com/ps4gentoo/ps4-linux-5.3.7),    
+-[codedwrench](https://github.com/codedwrench/ps4-linux/),    
+-[tihmstar](https://github.com/tihmstar/ps4-linux/tree/ps4-4.14.93-belize),    
+-[crashniels](https://github.com/crashniels/linux/),     
+-[saya](https://www.youtube.com/channel/UCc20KAcPCj9Ut8IQF3umSjg),    
+-[whitehax0r](https://github.com/whitehax0r/ps4-linux-baikal),    
+-[DFAUS](https://github.com/DFAUS-git/ps4-baikal-5.4.247-kernel) -- and others.
++This is a Linux kernel source tree tailored to run on exploitable PlayStation 4 systems with various subsystem patches from
++[fail0verflow](https://github.com/fail0verflow/ps4-linux),
++[eeply](https://github.com/eeply/ps4-linux),
++[Ps3itaTeam](https://github.com/Ps3itaTeam/ps4-linux),
++[rancido](https://github.com/rancido),
++valeryy (no GitHub - contributed to PS4 Baikal southbridges),
++[mircoho](https://github.com/ps4gentoo/ps4-linux-5.3.7),
++[codedwrench](https://github.com/codedwrench/ps4-linux/),
++[tihmstar](https://github.com/tihmstar/ps4-linux/tree/ps4-4.14.93-belize),
++[crashniels](https://github.com/crashniels/linux/),
++[saya](https://www.youtube.com/channel/UCc20KAcPCj9Ut8IQF3umSjg),
++[whitehax0r](https://github.com/whitehax0r/ps4-linux-baikal),
++[DFAUS](https://github.com/DFAUS-git/ps4-baikal-5.4.247-kernel), and others.
+ 
+ For a more detailed credits section, check out [this page](https://dionkill.github.io/ps4-linux-tutorial/ending.html#kernel-developers).
+ 
+-This fork originally aimed to make the internal WiFi+Bluetooth modules on specific PlayStation 4 models with the Marvell 88w8897 combo card (internal codename Torus 2) functional, as they typically error out on default kernels.
++This fork originally aimed to make the internal WiFi+Bluetooth modules on specific PlayStation 4 models with the Marvell 88w8897 combo card, internally known as Torus 2, functional. These cards usually fail on default kernels because of PS4 SDHCI and firmware/runtime quirks.
++
++Over time it grew into a broader PS4-focused kernel tree covering graphics hotplug and bridge handling, HDMI audio, GPU clocking, thermal and LED control, fan control, firmware quirks, internal WiFi support, runtime stability, and newer desktop/container-oriented configuration paths.
+ 
+-Over time it grew into a broader PS4-focused kernel tree covering graphics hotplug and bridge handling, HDMI audio, GPU clocking, thermal and LED control, firmware quirks, and newer desktop/container-oriented config paths.
+-The active branch in this repo is now `7.0-Clean`; older `5.4`, `5.15`, and `6.15` branches are still kept around as known-good reference points for some consoles.
++The current stable integration branch in this repository is `7.0-Stable`. `7.0-Clean` is still present as a clean 7.0 baseline/staging branch, while the `rmux/*` branches are topic branches for focused display, networking, firmware, ICC, UART, runtime, LED/fan, and stability work. Older `6.18.x-Strawberry` branches are retained as previous Strawberry development and fallback lines.
+ 
+ <br>
+ 
+ -------
+-## Current Status (`7.0-Clean`)
+-
+-- `7.0-Clean` is the rolling PS4-focused Linux 7.0 branch in this repository.
+-- Graphics and display work now includes custom PS4 bridge and encoder patches, HDMI hotplug detection fixes via AUX/DPCD polling, a DPCD-readiness gate to avoid premature link training, 1080p120 mode re-added for testing, PS4 PCIe ASPM and clock-state tuning, a Liverpool/Gladius SCLK force driver, and deeper GFX/SDMA low-power states disabled for steadier sustained performance on PS4.
+-- HDMI audio on Liverpool-based systems is fixed by enabling IEC958 on the relevant R6xx converters during init.
+-- PS4 platform support now includes an Aeolia/Belize front-panel LED driver with optional thermal mode, an Aeolia/Belize fan threshold and RPM `hwmon` driver, a lower minimum fan threshold, a PS4 DMI spoof fallback helper, `/dev/ps4-mesa-lock` for Mesa/kernel compatibility checks, and the missing extra firmware blobs in-tree.
+-- Networking and runtime work now includes the Aeolia `sky2` interrupt-storm fix, which also fixes the associated reported runaway memory-leak symptom seen on affected systems, plus BORE scheduler support with PS4/Jaguar tuning, dmem/TTM VRAM protection tiers, and cgroup plus namespace support for modern userspace.
+-- Build and forward-port maintenance now includes the Strawberry builder with `Server` and `General` profiles, ThinLTO or FullLTO selection, `mt76x8` build fixes for newer kernels, the `ps4_bridge` attach callback fix for newer DRM APIs, and General-profile `DMI` / `fw_cfg` sysfs support for desktop userspace compatibility.
++## Current Status (`7.0-Stable`)
++
++- `7.0-Stable` is the current stable PS4-focused Linux 7.0 integration branch in this repository.
++- Hardware Bringup and Stability:
++  - Added measurement deadline to x86 PS4 calibration loop to prevent hangs on certain hardware.
++  - Hardened ICC IRQ and ioctl handling to improve system stability.
++  - Tightened APCIE MSI bookkeeping and hardened MSI paths for Liverpool/Gladius GPUs.
++  - Corrected fan threshold milli-Celsius handling and corrected fan threshold logic.
++  - Implemented firmware-based EDID loading for PS4 bridges.
++  - Fixed Belize bridge enable retry loops and DP retraining logic.
++  - Bounded EMC timer stabilization reads to prevent long boot delays.
++- Graphics and Audio:
++  - Added warnings for Liverpool SDMA ring test failures.
++  - Removed high-frequency debug logging from Radeon CIK interrupts.
++  - Fixed HDMI audio on Liverpool systems via IEC958 initialization.
++- Subsystem Fixes:
++  - xHCI Aeolia: Replaced printk-based timing hacks with proper `usleep` calls.
++  - xHCI Aeolia: Fixed AHCI host activation error paths.
++  - ICC: Replaced `mdelay` with `msleep` in shutdown and reboot paths to avoid busy-waiting.
++- Networking (Experimental):
++  - Advanced `sky2` fixes are being tested in `rmux/sky2/experimental-fixes` to resolve interrupt storms and memory leaks across all PS4 southbridge variations (Aeolia, Belize, Baikal).
++- Maintenance:
++  - Removed legacy BORE scheduler references.
++  - Updated build system to embed PS4 SD8797 firmware.
++  - Added new "strawberry" boot banner.
+ 
+ <br>
+ 
+ -------
+ ## Console Models and Southbridge
+ 
+-While the CUH-1216/1215 models are definitively known to have the Torus 2 models with problematic WiFi, along with some 11xx models with similar WiFi issues, here is a list of consoles reported working without any hiccups from the kernels in this repo:
+-
+-| Console Model | Variation | WiFi+BT Chip Present | Compatible Kernel (Patched) |
+-|---|---|---| --- |
+-| CUH-1216(A/B) | Phat - Belize B0 | Marvell 88w8897 (Torus 2) | *6.15.4, 5.15.15* |
+-| CUH-1215(A/B) | Phat - Belize | Marvell 88w8897 (Torus 2) | *6.15.4, 5.15.15*  |
+-| CUH-1003  | Phat  - Aeolia | ? | *6.15.4; [probably non-built in firmware version](#builtin-fw-anchor)* |
+-| CUH-1004A | Phat - Aeolia | Marvell 88w8797 (Torus 1) | *6.15.4; [non-built in firmware version](#builtin-fw-anchor)* |
+-| CUH-1116A | Phat - Aeolia | ? | *6.15.4* |
+-| CUH-2215B | Slim - Baikal | ? | *5.4.247* |
+-| CUH-2216A | Slim - Baikal B1 | MediaTek 7668 | *5.4.247* |
+-| CUH-2216A | Slim - Belize | MediaTek 7668 | *5.15.15* |
+-| CUH-7116B | Pro - Baikal B1 | ? | *5.4.247* |
+-| CUH-7202B | Pro - Baikal | ? | *5.4.247* |
+-
++The CUH-1216/1215 models are definitively known to have Torus 2 models with problematic WiFi, along with some 11xx models with similar WiFi issues. The table below is conservative and combines historical compatibility notes with the current 7.0-Stable direction.
++
++| Console Model | Variation | WiFi+BT Chip Present | Known Compatible / Relevant Branches |
++|---|---|---|---|
++| CUH-1216(A/B) | Phat - Belize B0 | Marvell 88w8897 / SD8897 / Torus 2 | `7.0-Stable`, `6.15.4`, `5.15.15` |
++| CUH-1215(A/B) | Phat - Belize | Marvell 88w8897 / SD8897 / Torus 2 | `7.0-Stable`, `6.15.4`, `5.15.15` |
++| CUH-1003 | Phat - Aeolia | Unknown | Historically `6.15.4`; test current 7.0-Stable per console |
++| CUH-1004A | Phat - Aeolia | Marvell 88w8797 / SD8797 / Torus 1 | Current SD8797 firmware workflow in `7.0-Stable`; historically `6.15.4` |
++| CUH-1116A | Phat - Aeolia | Unknown | Historically `6.15.4`; test current 7.0-Stable per console |
++| CUH-2215B | Slim - Baikal | Unknown | `5.4.247` |
++| CUH-2216A | Slim - Baikal B1 | MediaTek 7668 | `5.4.247` |
++| CUH-2216A | Slim - Belize | MediaTek 7668 | `5.15.15`; newer MediaTek fixes in `7.0-Stable` |
++| CUH-7116B | Pro - Baikal B1 | Unknown | `5.4.247` |
++| CUH-7202B | Pro - Baikal | Unknown | `5.4.247` |
++
++```text
++A and B are hard-drive specifications: 500 GB vs 1000 GB.
++
++Aeolia, Belize, and Baikal are console southbridges.
++B0, B1, etc. are southbridge subrevisions.
+ ```
+-[A and B are just hard-drive specification: 500 GB vs 1000GB].
+ 
+-Aeolia, Belize and Baikal are the console Southbridges.
+-B0, B1 etc. are the Southbridge subrevisions.
++### Firmware note for SD8797 / 88w8797
++
++Older SD8797 / 88w8797 Aeolia systems no longer need a separate "no built-in firmware" kernel variant in current builds.
++
++Current builds handle SD8797 firmware through the normal build workflow. The expected custom/Orbis-sourced firmware path is:
++
++```text
++extra_firmware/mrvl/sd8797_uapsta.bin
+ ```
+-<a name="builtin-fw-anchor"></a>
+-[ Certain older models (specifically the 1004A) needed a kernel that
+-was built without embedding the latest proprietary firmware blobs (for
+-WiFi+Bluetooth), and instead functioned properly with older firmware
+-sourced from the initramfs. For these, each affected kernel release has a "no-built-in-fw"
+-version for best functionality. See the releases page of the referring kernels for more
+-information.]
+-<br>
+ 
+-- Note: the table above is conservative and mostly reflects confirmed reports from the older release branches. `7.0-Clean` is newer rolling work and is still being validated model-by-model.
++GitHub Actions fetches this firmware from the private firmware source before building. Local builders must make sure the file exists in the worktree before running the build. If SD8797 firmware is requested but missing, `build.sh` stops early instead of silently building a bad kernel.
++
++The table above is still conservative. It reflects confirmed reports from older release branches plus current `7.0-Stable` work, but newer 7.0 kernels should still be validated model-by-model.
+ 
+-- TODO: Add a list with all supported console models, their southbridges, and their compatible kernels.
++TODO: Add a fuller list of supported console models, southbridges, WiFi/BT chips, and compatible kernels.
+ 
+ <br>
+ 
+ ----
+-## Fixing the Wireless Card on CUH-1216
++## Fixing the Wireless Card on CUH-1216 / CUH-1215
++
++The main patches which, in combination, fix the CUH-1216/1215 wireless module are:
++
++- [150 MHz rate limit quirk on the 88w8897 card's Function 0](https://github.com/feeRnt/ps4-linux-12xx/commit/df7f7dbb1b0fff6026e159540f029988c8067b70)
++- [Added SDIO ID for Function 0](https://github.com/feeRnt/ps4-linux-12xx/commit/f4835fb020010acff2b70e4c5fa9430e07f0073b)
++- [SDHCI host quirks for the PlayStation SDHCI host](https://github.com/feeRnt/ps4-linux-12xx/commit/e6f342df7737722d5e27f0ae3974e493c5fe4ca4)
+ 
+-The main patches which in combination fix the CUH-1216/1215 wireless module are:     
+-[150 MHz rate limit quirk on the 88w8897 card's Function 0](https://github.com/feeRnt/ps4-linux-12xx/commit/df7f7dbb1b0fff6026e159540f029988c8067b70).
++Only `SDHCI_QUIRK2_PRESET_VALUE_BROKEN` appears to be required now.
+ 
+-relying on the [patch for added sdio_id for the Function 0](https://github.com/feeRnt/ps4-linux-12xx/commit/f4835fb020010acff2b70e4c5fa9430e07f0073b),
++Additional optional stability work:
+ 
+-Then a [few SDHCI Host quirks for the PlayStation SDHCI host](https://github.com/feeRnt/ps4-linux-12xx/commit/e6f342df7737722d5e27f0ae3974e493c5fe4ca4) {only the SDHCI_QUIRK2_PRESET_VALUE_BROKEN is needed now},
++- [Extra retries for MMC CMD52/CMD53](https://github.com/feeRnt/ps4-linux-12xx/commit/c57162e5ec7a4aa3af3310a36dc963b5c0298dfe)
+ 
+-additionally with [extra retries for MMC CMD 52 or 53, which it would usually fail on](https://github.com/feeRnt/ps4-linux-12xx/commit/c57162e5ec7a4aa3af3310a36dc963b5c0298dfe) {this is optional}.
++The primary culprit behind the failed SDIO initialization appears to be that the card does not reliably support 208 MHz or 200 MHz operation on the PS4 SDHCI host. This causes tuning failures and other command failures during initialization.
+ 
+-The primary culprit behind the failed SDIO initialization, seems to be that the card doesn't properly support 208 or 200 MHz clock rate on this PS4 SDHCI host, causing the card to show tuning and other command failures.
+-You can read more about the search for a solution [from here](https://ps4linux.com/forums/d/221-ps4-phat-wifi-fix-test-marvell-8897-torus-20/14).    
++You can read more about the search for a solution [from here](https://ps4linux.com/forums/d/221-ps4-phat-wifi-fix-test-marvell-8897-torus-20/14).
++
++Through a lot of trial and error, this workaround eventually landed:
+ 
+-Through MUCH trial and error, I was able to reach such an arcane fix,     
+ <br>
+-![Many of the kernels I had to compile and test before finally landing
+-on the fix kernel](./IMAGES/github_pic2.png)
+ 
+-and here's a screenshot with working internal WiFi and Bluetooth as shown in the logs, on an Arch Linux system running on my CUH-1216 console:    
++![Many of the kernels I had to compile and test before finally landing on the fix kernel](./IMAGES/github_pic2.png)
++
++Here is a screenshot with working internal WiFi and Bluetooth in the logs on an Arch Linux system running on my CUH-1216 console:
++
+ <br>
++
+ ![Working WiFi image](./IMAGES/github_pic1.png)
++
+ <br>
+ 
+-Hard work paid off!
++Hard work paid off.
+ 
+ <br>
+ 
+ ----
+ ## Branches
+ 
+-`7.0-Clean` is the active branch and where current PS4 platform work lands first.
+-
+-Older branches are still useful as historical references or fallback kernels:
+-
+-- `5.15.15-belize`: clean WiFi, blackscreen, and misc. fixes for Belize southbridges.
+-- `5.15.189-belize`: later 5.15-based Belize branch, but not maintained as heavily as `5.15.15-belize`.
+-- `5.4.247-baikal-dfaus`: 5.4-based Baikal branch with blackscreen fixes and MT7668 support, based on DFAUS' source.
+-- `6.15.4-aeolia-belize-crashniels`: 6.15-based Aeolia/Belize branch based on crashniels' source.
+-
+-Debug and experimental branches are still present, but should not be treated as release kernels:
+-
+-- `x_old__ps4-linux-5.15.y` and `x_old__ps4-linux-5.15.y-conservative2` contain excessive debug logging from earlier WiFi/MMC investigation work.
+-- `x_experimental__*` and `x_exp__*` branches are kept for subsystem testing, regression hunting, or archival reference only.
+-- `x_experimental__5.15.15-fix-baikal` is an example of a non-release test branch and is not considered working.
+-- `5.15.15-aeolia-belize` intentionally omits parts of the Baikal patchset and is kept for testing only.
++The current branch layout is centered around `7.0-Stable` and topic branches.
++
++### Main 7.0 branches
++
++- `7.0-Stable`: current stable integration branch and recommended branch for normal builds.
++- `7.0-Clean`: clean 7.0 baseline/staging branch kept for reference and development.
++- `7.0-Clean-commit-cleanup-20260424`: cleanup snapshot from the 7.0-Clean line.
++- `7.0-ColorFix`: display/color-fix testing branch.
++- `7.0-Server-Test`: server-profile testing branch.
++- `7.0-ps4-unified`: older unified 7.0 work branch.
++- `7.0-Broken`: broken/testing branch; do not use as a release branch.
++
++### Current topic branches
++
++- `rmux/build/embed-sd8797-firmware`: SD8797 firmware embedding and private firmware workflow.
++- `rmux/icc/ps4-icc-hardening`: ICC hardening and cleanup work.
++- `rmux/uart/ps4-apcie-8250`: APCIE / 8250 UART work.
++- `rmux/display/ps4-bridge-6154-behavior`: bridge behavior work.
++- `rmux/display/ps4-fixed-bridge-modes`: fixed bridge mode handling.
++- `rmux/display/ps4-safe-60hz-modes`: safe 60 Hz bridge/display modes.
++- `rmux/display/ps4-belize-enable-attempts`: Belize bridge enable retry handling.
++- `rmux/display/ps4-bridge-enable-state`: bridge enable-state handling.
++- `rmux/display/ps4-belize-post-enable-retrain`: DP retraining after Belize bridge enable.
++- `rmux/perf/ps4-disable-mtk-powersave`: MediaTek WiFi power-save disabling.
++- `rmux/perf/ps4-disable-mwifiex-powersave`: mwifiex power-save disabling.
++- `rmux/perf/ps4-fan-skip-duplicate-threshold`: duplicate fan threshold write suppression.
++- `rmux/perf/ps4-led-skip-duplicates`: duplicate LED update suppression.
++- `rmux/perf/ps4-led-fan-overhead`: LED/fan runtime overhead reduction.
++- `rmux/perf/ps4-quiet-icc-boot`: quieter ICC normal-path boot logs.
++- `rmux/perf/ps4-runtime-polish`: runtime polish and cleanup.
++- `rmux/stability/ps4-pwrbutton-teardown`: power-button input teardown fix.
++- `rmux/stability/ps4-led-blocking-callbacks`: blocking LED callback handling.
++- `rmux/fixes/ps4-stability-surgical-fixes`: focused PS4 stability fixes.
++- `Kollias`: contributor/test branch.
++
++### Older Strawberry branches
++
++- `6.18.21-Strawberry`: previous Strawberry 6.18.21 branch.
++- `6.18.21-NoDrmDbg`: 6.18.21 branch with DRM debug changes stripped or adjusted.
++- `6.18.21-HotPlug`: 6.18.21 hotplug-focused branch.
++- `6.18.21-Strawberry-GpuWork`: 6.18.21 GPU work branch.
++- `6.18.20-Strawberry`: previous 6.18.20 Strawberry branch.
++- `6.18.20-Strawberry-Main`: 6.18.20 main Strawberry branch.
++- `6.18.18-Strawberry`: older 6.18.18 Strawberry branch.
++
++Only `7.0-Stable` should be presented as the current recommended branch. The `rmux/*` branches are development/topic branches, and the older `6.18.x-Strawberry` branches are retained for reference, testing, and fallback.
+ 
+ <br>
+ 
+ ---
+ ## Compile and Build
+ 
+-The current workflow is centered around `build.sh` ("Strawberry Builder") and the consolidated GitHub Actions workflow `.github/workflows/build-kernel_latest.yaml`.
++The current workflow is centered around `build.sh`, also called the Strawberry Builder, and the consolidated GitHub Actions workflow `.github/workflows/build-kernel_latest.yaml`.
+ 
+ GitHub Actions:
+ 
+ - Run `build-kernel_latest.yaml` from the Actions tab.
+ - Pick `profile=Server` or `profile=General`.
+ - Pick `lto=ThinLTO` or `lto=FullLTO`.
++- The workflow fetches the private SD8797 firmware before the build and places it at `extra_firmware/mrvl/sd8797_uapsta.bin`.
+ 
+ Profile summary:
+ 
+-- `Server`: headless/services oriented, `PREEMPT_VOLUNTARY`, performance governor, container/netfilter stack kept enabled.
+-- `General`: desktop/gaming oriented, full `PREEMPT`, BORE enabled, schedutil/reflex path, cgroup and namespace support enabled, `DMI`/`fw_cfg` sysfs enabled, and netfilter stack stripped.
++- `Server`: headless/services-oriented, `HZ=250`, `PREEMPT_VOLUNTARY`, performance governor, and container/netfilter stack kept enabled.
++- `General`: desktop/gaming-oriented, `HZ=250`, full `PREEMPT`, BORE enabled, schedutil/reflex path, cgroup and namespace support enabled, `DMI`/`fw_cfg` sysfs enabled, and netfilter stack stripped.
+ 
+ Local build:
++
+ ```bash
+-git clone https://github.com/rmuxnet/ps4-linux-12xx --branch 7.0-Clean --depth=3
++git clone https://github.com/rmuxnet/ps4-linux-12xx --branch 7.0-Stable --depth=3
+ # Keep a low depth to save space.
+ 
+ cd ps4-linux-12xx
+ 
+-# Fetch required firmware into extra_firmware/ and build with the
++# Local builds require the custom SD8797 firmware when requested by the config.
++# Place it here before building:
++# extra_firmware/mrvl/sd8797_uapsta.bin
++
++# Fetch required non-custom firmware into extra_firmware/ and build with the
+ # General profile using ThinLTO.
+ ./build.sh --option 3 use=General lto=ThinLTO
+ 
+@@ -160,10 +226,16 @@ cd ps4-linux-12xx
+ The builder will:
+ 
+ - move `config` to `.config` automatically if needed;
+-- fetch every blob listed in `CONFIG_EXTRA_FIRMWARE` into `extra_firmware/`;
++- ensure `CONFIG_EXTRA_FIRMWARE` includes `mrvl/sd8797_uapsta.bin`;
++- stop early if the required custom SD8797 firmware is missing;
++- fetch every non-custom blob listed in `CONFIG_EXTRA_FIRMWARE` into `extra_firmware/`;
++- set `CONFIG_EXTRA_FIRMWARE_DIR` to the local `extra_firmware/` directory;
+ - apply the selected profile and LTO settings;
+ - build `bzImage` with LLVM;
+-- write outputs to `out/` (`bzImage`, `.config`, `artifact_name.txt`).
++- write outputs to `out/`:
++  - `bzImage`
++  - `.config`
++  - `artifact_name.txt`
+ 
+ If you need a more manual path, you can still do:
+ 
+@@ -180,18 +252,35 @@ make -j"$(nproc)" LLVM=1 modules
+ ---
+ ## Releases and Downloads
+ 
+-To get some pre-compiled kernels, go to the [releases section](https://github.com/rmuxnet/ps4-linux-12xx/releases), and choose a kernel (bzImage) based on your needed version.
++To get pre-compiled kernels, go to the [releases section](https://github.com/rmuxnet/ps4-linux-12xx/releases), then choose a `bzImage` based on your console model, southbridge, and branch requirements.
+ 
+-Please read the boldened out and highlighted text, as they contain some information that might be useful for a particular release. It's very wordy, that needs to be fixed!!
++Read the release notes before booting a kernel. They may contain model-specific notes, firmware details, known regressions, or required userspace changes.
+ 
+ <br>
+ 
+ ---
+ ## Contributing
+ 
+-If something doesn't work on these kernels, has missing features, or your model still has unsupported WiFi, you can open a GitHub issue to share its details.
++If something does not work on these kernels, a feature is missing, or your model still has unsupported WiFi/Bluetooth, please open a GitHub issue or start a discussion with as much detail as possible.
+ 
+-Pull requests/code contributions are always welcome.
++- Issues: https://github.com/rmuxnet/ps4-linux-12xx/issues
++- Discussions: https://github.com/rmuxnet/ps4-linux-12xx/discussions
++
++Useful information includes:
++
++- console model, for example `CUH-1216A`;
++- southbridge, if known: Aeolia, Belize, Baikal, etc.;
++- WiFi/BT chip, if known;
++- kernel branch and commit;
++- boot logs, `dmesg`, and relevant errors;
++- whether HDMI, WiFi, Bluetooth, fan control, LEDs, power button, and Ethernet work.
++
++Pull requests and code contributions are welcome. When submitting a pull request, please ensure the following:
++
++- **Problem Description**: Clearly explain the issue or limitation being addressed.
++- **Technical Solution**: Describe how the change solves the problem. Mention specific registers, logic changes, or architectural decisions.
++- **Benefits and Rationale**: Explain the gain from the change, such as improved stability, performance, or hardware compatibility.
++- **Verification**: State how the change was tested and on which console models/southbridges.
+ 
+ <br>
+ 
+@@ -200,66 +289,75 @@ Pull requests/code contributions are always welcome.
+ 
+ ### Firmware and Drivers Notice
+ 
+-This repository includes non-GPL firmware/cfg blobs under extra_firmware/,
++This repository includes non-GPL firmware/cfg blobs under `extra_firmware/`.
+ 
+-These files (e.g. Marvell and MediaTek firmware) are distributed under
+-their respective vendor licenses and are not covered by the GPL.
++These files, such as Marvell and MediaTek firmware, are distributed under their respective vendor licenses and are not covered by the GPL.
+ 
+-See extra_firmware/README.license for details.
++See `extra_firmware/README.license` for details.
+ 
++There is an additional Dual BSD 3-Clause and GPLv2 license for the MediaTek wireless driver in:
+ 
+-There is an additional Dual BSD 3 & GPL 2 License for the MediaTek wireless driver in wireless/mediatek/mt76x8/**
++```text
++drivers/net/wireless/mediatek/mt76x8/**
++```
+ 
+-See drivers/net/wireless/mediatek/mt76x8/README.license for details.
++See `drivers/net/wireless/mediatek/mt76x8/README.license` for details.
+ 
+--- The rest of the repository and code is under the same terms as the Linux Kernel, GPLv2, unless noted otherwise --
++The rest of the repository and code is under the same terms as the Linux kernel, GPLv2, unless noted otherwise.
+ 
+ <br>
+ 
+ ---
+-## Documentation, Guides and the PS4 Linux Future (As of December 2025)
++## Documentation, Guides and the PS4 Linux Future
++
++While many long-standing PS4 Linux kernel and userspace issues have been fixed over the years, some problems still exist and are not always actively worked on.
++
++A few honorable mentions aimed at improving the scene:
++
++### 1. Blackscreen / No Display / Unsupported Monitor issues
++
++- https://github.com/oberdfr/kernel-ps4linux/tree/ps4-linux-v6.17.1-custom-resolution
++
++  Attempts to use display EDID information from the monitor inside Linux. This aims to improve blackscreen issues on monitors that do not support 1080p, or when using capture cards.
++
++  Work in progress.
+ 
+-While many of the bugs and issues prevalent in PS4 Linux kernels, and PS4 Linux in general have been fixed over the years, many of them still exist, and are seldom worked on.  
+-A few honorable mentions aimed at improving this scene go to:
++- https://github.com/ps4gentoo/initramfs
++- https://github.com/ps4boot/ps4-linux-payloads/
+ 
+-1. Blackscreen/No Display/Unsupported Monitor issue:
+-    - https://github.com/oberdfr/kernel-ps4linux/tree/ps4-linux-v6.17.1-custom-resolution:  
+-attempts at using the display EDID information from your monitor, to use in Linux. This aims to improve the various blackscreen issues for monitors that don't support 1080p, or when using a capture card.  
+-(Work in Progress)
++  Same general goal as the previous link, but these attempt to acquire EDID from Orbis through the PS4 Linux loader and copy it into the initramfs.
+ 
+-    - https://github.com/ps4gentoo/initramfs &  
+-    https://github.com/ps4boot/ps4-linux-payloads/  
+-    Same goal as the last link, but attempts it (successfully) by acquiring the EDID from Orbis (PS4-OS) throught the PS4-Linux Loader, and copies it over to the initramfs.  
+-    (Work in Progress; latest fix might not've been committed)
++  Work in progress; latest fixes may not have been committed yet.
+ 
++### 2. Mainlining PS4-specific patches and packages
+ 
+-2. Mainling the PS4-specific patches and packages (OS-specific):  
+-    See,
+-    - https://github.com/Jaguarlinux/
+-    - https://github.com/centi07/arch-ps4-aur
+-    - https://github.com/FalsePhilosopher/mesa-docker-ps4
++See:
+ 
++- https://github.com/Jaguarlinux/
++- https://github.com/centi07/arch-ps4-aur
++- https://github.com/FalsePhilosopher/mesa-docker-ps4
+ 
+-3. General discussion/help:
+-    - https://ps4linux.com/
+-    - https://discord.gg/QtcPmzHVVm (PS4-Linux Server Discord)
+-    - https://discord.gg/jebUjgBu6T (ps4gentoo/ps4boot (mircoho's) Discord)   
+-4. Random and other links regarding PS4-Linux that were, are, or could be useful:
+-    - https://github.com/Hakkuraifu/PS4Linux-Documentation (Early documentation on PS4-Linux)
+-    - https://github.com/Ps3itaTeam/ (Fan control, kernel, graphics drivers etc.)
+-    - https://github.com/ErkkolaMaitohappo/arch-ps4-aur-smth-fork (Clean Arch Linux on PS4 (2025, Dec))
+-    - https://github.com/7coil/archlinux-on-ps4 (Arch Linux on PS4,  automated to fetch latest release)
+-    - https://github.com/Dr4kk3N/dkn-overlay (Gentoo overlay for PS4-Linux)
+-    - https://github.com/Hakkuraifu/PS4Linux-ArchDrivers (Graphics Drivers; Arch Based)
+-    - https://github.com/rinsuki/ps4linux-video-drivers (Graphics Drivers; Arch Based)
+-    - https://github.com/IT-Mania/PS4linux-deb/ (Graphics drivers ; Debian based)
+-    - https://github.com/DionKill/ps4-video-archlinux (Graphics drivers ; Arch based - 2025, Dec)
+-    - https://github.com/noob404yt/ (Mediatek drivers, Pop!_OS drivers)
+-    - https://github.com/TigerClips1/ (Developer of PS4 JaguarLinux)
++### 3. General discussion and help
+ 
++- https://ps4linux.com/
++- https://discord.gg/QtcPmzHVVm - PS4-Linux Server Discord
++- https://discord.gg/jebUjgBu6T - ps4gentoo/ps4boot Discord
+ 
++### 4. Other useful PS4 Linux links
+ 
+-### For an instructional manual on installation and other topics, refer to this [all-around guide.](https://dionkill.github.io/ps4-linux-tutorial/)
++- https://github.com/Hakkuraifu/PS4Linux-Documentation - early PS4 Linux documentation
++- https://github.com/Ps3itaTeam/ - fan control, kernel, graphics drivers, etc.
++- https://github.com/ErkkolaMaitohappo/arch-ps4-aur-smth-fork - clean Arch Linux on PS4
++- https://github.com/7coil/archlinux-on-ps4 - Arch Linux on PS4, automated to fetch latest release
++- https://github.com/Dr4kk3N/dkn-overlay - Gentoo overlay for PS4 Linux
++- https://github.com/Hakkuraifu/PS4Linux-ArchDrivers - Arch-based graphics drivers
++- https://github.com/rinsuki/ps4linux-video-drivers - Arch-based graphics drivers
++- https://github.com/IT-Mania/PS4linux-deb/ - Debian-based graphics drivers
++- https://github.com/DionKill/ps4-video-archlinux - Arch-based graphics drivers
++- https://github.com/noob404yt/ - MediaTek drivers, Pop!_OS drivers
++- https://github.com/TigerClips1/ - developer of PS4 JaguarLinux
++
++For an instructional manual on installation and other topics, refer to this [all-around guide](https://dionkill.github.io/ps4-linux-tutorial/).
+ 
+ ---
+ <p align="center">Enjoy your Linux-Station!</p>
+@@ -270,18 +368,26 @@ attempts at using the display EDID information from your monitor, to use in Linu
+ Generic Linux Kernel Documentation
+ ------
+ 
+-There are several guides for kernel developers and users. These guides can
+-be rendered in a number of formats, like HTML and PDF. Please read
+-Documentation/admin-guide/README.rst first.
++There are several guides for kernel developers and users. These guides can be rendered in a number of formats, including HTML and PDF. Please read `Documentation/admin-guide/README.rst` first.
++
++To build the documentation, use:
++
++```bash
++make htmldocs
++```
++
++or:
+ 
+-In order to build the documentation, use ``make htmldocs`` or
+-``make pdfdocs``.  The formatted documentation can also be read online at:
++```bash
++make pdfdocs
++```
+ 
+-    https://www.kernel.org/doc/html/latest/
++The formatted documentation can also be read online at:
++
++```text
++https://www.kernel.org/doc/html/latest/
++```
+ 
+-There are various text files in the Documentation/ subdirectory,
+-several of them using the Restructured Text markup notation.
++There are various text files in the `Documentation/` subdirectory. Several of them use reStructuredText markup.
+ 
+-Please read the Documentation/process/changes.rst file, as it contains the
+-requirements for building and running the kernel, and information about
+-the problems which may result by upgrading your kernel.
++Please read `Documentation/process/changes.rst`, as it contains the requirements for building and running the kernel, along with information about problems that may result from upgrading your kernel.
+diff --git a/build.sh b/build.sh
+index 7c2efcc7ab210973582953b8d4925e6685a64854..3a58bbb9e0eed9b56ce9c9f15170b3050cd0a207 100755
+--- a/build.sh
++++ b/build.sh
+@@ -1,28 +1,33 @@
+ #!/usr/bin/env bash
+ 
+ # PS4-Linux Strawberry Builder
+-# Supports two PS4-focused build profiles and two LTO flavors:
++# Supports two PS4-focused build profiles, two LTO flavors, and an optional Baikal southbridge target:
+ #   server  — headless/services, HZ=250, PREEMPT_VOLUNTARY, performance governor
+ #   general — desktop/gaming, HZ=250, PREEMPT=y, BORE, schedutil/reflex
+ #   ThinLTO / FullLTO selectable via lto=ThinLTO or lto=FullLTO
++#   southbridge=AeoliaBelize or southbridge=Baikal
+ #
+ # Usage:
+ #   ./build.sh
+ #   ./build.sh --option N
+ #   ./build.sh --option N use=Server
+ #   ./build.sh --option N lto=ThinLTO
+-#   ./build.sh --option N use=General lto=FullLTO
++#   ./build.sh --option N southbridge=Baikal
++#   ./build.sh --option N use=General lto=FullLTO southbridge=Baikal
+ #   ./build.sh --option 7             Show/switch build profile
+ #   ./build.sh --option 8             Show/switch LTO flavor
++#   ./build.sh --option 9             Show/switch southbridge target
+ 
+ set -euo pipefail
+ 
+ OUTPUT_DIR="${PWD}/out"
+ FIRMWARE_DIR="${PWD}/extra_firmware"
+ FIRMWARE_URL_BASE="https://gitlab.com/kernel-firmware/linux-firmware/-/raw/main"
++REQUIRED_PS4_SD8797_FW="mrvl/sd8797_uapsta.bin"
+ declare -A FIRMWARE_URL_OVERRIDES
+ FIRMWARE_URL_OVERRIDES["mrvl/sd8797_uapsta.bin"]="useCustomFirmware" # Prevent download from upstream; use Orbis/Custom one
+ #FIRMWARE_URL_OVERRIDES["mrvl/sd8797_uapsta.bin"]="f87c5b8dd547bcb434d5296ead3748241810c1d8" #sucks too
++#FIRMWARE_URL_OVERRIDES["mrvl/sd8797_uapsta.bin"]="f87c5b8dd547bcb434d5296ead3748241810c1d8" #sucks too
+ # We need an older firmware version from ~2013-2016 for Aeolias' 8797 SDIO Chip, ideally the one that's used on the PS4 OS.
+ # This version is the closest to that we have (besides the one packed in Orbis Torus (WiFi+BT) firmware).
+ 
+@@ -34,20 +39,94 @@ export HOSTCFLAGS="-Wno-error=incompatible-pointer-types-discards-qualifiers"
+ 
+ PROFILE="server"
+ LTO_FLAVOR="thin"
++SOUTHBRIDGE="aeoliabelize"
+ JOBS="$(nproc)"
+ MAX_JOBS="$(nproc)"
+ 
+ lto_label() {
+     if [[ "$LTO_FLAVOR" == "full" ]]; then
+         echo "FullLTO"
++    elif [[ "$LTO_FLAVOR" == "none" ]]; then
++        echo "NoLTO"
+     else
+         echo "ThinLTO"
+     fi
+ }
+ 
++southbridge_display() {
++    if [[ "$SOUTHBRIDGE" == "baikal" ]]; then
++        echo "Baikal"
++    else
++        echo "Aeolia/Belize"
++    fi
++}
++
++southbridge_suffix() {
++    if [[ "$SOUTHBRIDGE" == "baikal" ]]; then
++        echo "-Baikal"
++    fi
++}
++
++ensure_extra_firmware_blob() {
++    local blob="$1"
++    local current=""
++
++    if grep -qE '^CONFIG_EXTRA_FIRMWARE=' .config; then
++        current="$(sed -n 's/^CONFIG_EXTRA_FIRMWARE="\(.*\)"/\1/p' .config)"
++    fi
++
++    case " ${current} " in
++        *" ${blob} "*)
++            ;;
++        *)
++            current="${current:+${current} }${blob}"
++            scripts/config --set-str CONFIG_EXTRA_FIRMWARE "${current}"
++            ;;
++    esac
++}
++
++config_has_extra_firmware_blob() {
++    local blob="$1"
++    local current=""
++
++    if grep -qE '^CONFIG_EXTRA_FIRMWARE=' .config; then
++        current="$(sed -n 's/^CONFIG_EXTRA_FIRMWARE="\(.*\)"/\1/p' .config)"
++    fi
++
++    case " ${current} " in
++        *" ${blob} "*)
++            return 0
++            ;;
++    esac
++
++    return 1
++}
++
++require_custom_firmware_blob() {
++    local blob="$1"
++    local path="${FIRMWARE_DIR}/${blob}"
++
++    if [[ ! -f "${path}" ]]; then
++        echo -e "\e[1;31mERROR:\e[0m Required PS4 custom firmware is missing: ${path}" >&2
++        echo "Place the proprietary SD8797 firmware at ${path}" >&2
++        exit 1
++    fi
++}
++
++validate_extra_firmware_blob() {
++    local blob="$1"
++
++    if ! config_has_extra_firmware_blob "${blob}"; then
++        echo -e "\e[1;31mERROR:\e[0m CONFIG_EXTRA_FIRMWARE must include required PS4 custom firmware: ${blob}" >&2
++        exit 1
++    fi
++}
++
+ # Parse optional selectors in any position:
+ #   use=Server/use=General
+ #   lto=ThinLTO/lto=FullLTO
++#   southbridge=AeoliaBelize/southbridge=Baikal
++#   baikal=on/baikal=off
+ for arg in "$@"; do
+     case "$arg" in
+         use=*)
+@@ -61,13 +140,44 @@ for arg in "$@"; do
+                     ;;
+             esac
+             ;;
++        southbridge=*|platform=*)
++            SOUTHBRIDGE_ARG="${arg#*=}"
++            case "${SOUTHBRIDGE_ARG,,}" in
++                aeolia|belize|aeoliabelize|aeolia/belize|base|default|legacy|nonbaikal)
++                    SOUTHBRIDGE="aeoliabelize"
++                    ;;
++                baikal)
++                    SOUTHBRIDGE="baikal"
++                    ;;
++                *)
++                    echo "Unknown southbridge target: ${SOUTHBRIDGE_ARG}. Valid: AeoliaBelize, Baikal"
++                    exit 1
++                    ;;
++            esac
++            ;;
++        baikal=*)
++            BAIKAL_ARG="${arg#baikal=}"
++            case "${BAIKAL_ARG,,}" in
++                1|true|yes|y|on|enable|enabled)
++                    SOUTHBRIDGE="baikal"
++                    ;;
++                0|false|no|n|off|disable|disabled)
++                    SOUTHBRIDGE="aeoliabelize"
++                    ;;
++                *)
++                    echo "Unknown Baikal toggle: ${BAIKAL_ARG}. Valid: on/off"
++                    exit 1
++                    ;;
++            esac
++            ;;
+         lto=*)
+             LTO_ARG="${arg#lto=}"
+             case "${LTO_ARG,,}" in
+                 thinlto|thin) LTO_FLAVOR="thin" ;;
+                 fulllto|full) LTO_FLAVOR="full" ;;
++                none|no|off|disabled) LTO_FLAVOR="none" ;;
+                 *)
+-                    echo "Unknown LTO flavor: ${LTO_ARG}. Valid: ThinLTO, FullLTO"
++                    echo "Unknown LTO flavor: ${LTO_ARG}. Valid: ThinLTO, FullLTO, none"
+                     exit 1
+                     ;;
+             esac
+@@ -103,6 +213,15 @@ if [[ $# -ge 2 && "$1" == "--option" ]]; then
+             fi
+             exit 0
+             ;;
++        9)
++            echo "Current southbridge target: $(southbridge_display)"
++            read -r -p "Switch southbridge target? (y/n): " SWITCH
++            if [[ "$SWITCH" =~ ^[Yy]$ ]]; then
++                [[ "$SOUTHBRIDGE" == "aeoliabelize" ]] && SOUTHBRIDGE="baikal" || SOUTHBRIDGE="aeoliabelize"
++                echo "Southbridge target switched to: $(southbridge_display)"
++            fi
++            exit 0
++            ;;
+         *)
+             echo "Invalid --option argument: $CHOICE"
+             exit 1
+@@ -127,9 +246,10 @@ if [[ "$SKIP_MENU" == "0" ]]; then
+         echo -e "\e[1;35m║\e[0m \e[1;32m6)\e[0m Build profile: \e[1;33m${PROFILE}\e[0m$(printf "%-22s" "")\e[1;35m║\e[0m"
+         echo -e "\e[1;35m║\e[0m \e[1;36m7)\e[0m Show/switch build profile                      \e[1;35m║\e[0m"
+         echo -e "\e[1;35m║\e[0m \e[1;32m8)\e[0m Build LTO: \e[1;33m$(printf "%-31s" "$(lto_label)")\e[0m \e[1;35m║\e[0m"
++        echo -e "\e[1;35m║\e[0m \e[1;32m9)\e[0m Southbridge: \e[1;33m$(printf "%-25s" "$(southbridge_display)")\e[0m \e[1;35m║\e[0m"
+         echo -e "\e[1;35m╚══════════════════════════════════════════════════╝\e[0m"
+         echo ""
+-        read -r -p "Select option [1-8]: " CHOICE
++        read -r -p "Select option [1-9]: " CHOICE
+ 
+         case "$CHOICE" in
+             1) DO_BUILD=1; DO_FETCH=0; break ;;
+@@ -183,6 +303,16 @@ if [[ "$SKIP_MENU" == "0" ]]; then
+                     sleep 1
+                 fi
+                 ;;
++            9)
++                echo ""
++                echo "Current southbridge target: $(southbridge_display)"
++                read -r -p "Switch southbridge target? (y/n): " SWITCH
++                if [[ "$SWITCH" =~ ^[Yy]$ ]]; then
++                    [[ "$SOUTHBRIDGE" == "aeoliabelize" ]] && SOUTHBRIDGE="baikal" || SOUTHBRIDGE="aeoliabelize"
++                    echo "Southbridge target switched to: $(southbridge_display)"
++                    sleep 1
++                fi
++                ;;
+             *)
+                 echo -e "\e[1;31m[!] Invalid option.\e[0m"
+                 sleep 1
+@@ -207,11 +337,17 @@ fi
+ if [[ -f config ]]; then
+     echo -e "\e[1;34m[*]\e[0m Moving 'config' -> '.config'"
+     mv config .config
+-else
+-    echo -e "\e[1;31mERROR:\e[0m No .config found." >&2
++elif [[ ! -f .config ]]; then
++    echo -e "\e[1;31mERROR:\e[0m No .config or 'config' found." >&2
+     exit 1
+ fi
+ 
++ensure_extra_firmware_blob "${REQUIRED_PS4_SD8797_FW}"
++require_custom_firmware_blob "${REQUIRED_PS4_SD8797_FW}"
++validate_extra_firmware_blob "${REQUIRED_PS4_SD8797_FW}"
++echo -e "\e[1;34m[*]\e[0m Setting CONFIG_EXTRA_FIRMWARE_DIR=${FIRMWARE_DIR}"
++scripts/config --set-str CONFIG_EXTRA_FIRMWARE_DIR "${FIRMWARE_DIR}"
++
+ if [[ "$DO_FETCH" == "1" ]]; then
+     CONFIG_LINE="$(grep -E '^CONFIG_EXTRA_FIRMWARE=' .config 2>/dev/null || true)"
+     if [[ -z "${CONFIG_LINE}" ]]; then
+@@ -238,25 +374,25 @@ if [[ "$DO_FETCH" == "1" ]]; then
+             mkdir -p "$(dirname "${dest}")"
+             echo -e "  \e[1;34m[↓]\e[0m Fetching: ${blob}"
+ 
+-            FIRMWARE_URL="${FIRMWARE_URL_BASE}"
+-            FIRMWARE_URL_FALLBACK=""
++            FIRMWARE_URL="${FIRMWARE_URL_BASE}/${blob}"
+ 
+             if [[ -n "${FIRMWARE_URL_OVERRIDES[$blob]:-}" ]]; then
+-                if [[ ${FIRMWARE_URL_OVERRIDES[$blob]} == "useCustomFirmware" ]]; then
++                OVERRIDE="${FIRMWARE_URL_OVERRIDES[$blob]}"
++                if [[ "${OVERRIDE}" == "useCustomFirmware" ]]; then
+                     echo -e "  \e[1;31mERROR:\e[0m Requested custom built-in firmware for ${blob}, but it was not found in build directory.\n"\
+                             " Please ensure the proper firmware exists in ${FIRMWARE_DIR}/${blob} . Exiting with error." >&2
+                     exit 1
+                 fi
+-                COMMIT="${FIRMWARE_URL_OVERRIDES[$blob]}"
+-                FIRMWARE_URL_FALLBACK="https://gitlab.com/kernel-firmware/linux-firmware/-/raw/${COMMIT}"
+-            fi
+-
+-            if [[ -n "${FIRMWARE_URL_FALLBACK}" ]]; then
+-                FIRMWARE_URL="${FIRMWARE_URL_FALLBACK}"
+-                echo -e '  \e[1;33m[!] Using non-default firmware for '${blob}'!\n  Using commit from '${FIRMWARE_URL}''
++                
++                if [[ "${OVERRIDE}" == http* ]]; then
++                    FIRMWARE_URL="${OVERRIDE}"
++                else
++                    FIRMWARE_URL="https://gitlab.com/kernel-firmware/linux-firmware/-/raw/${OVERRIDE}/${blob}"
++                fi
++                echo -e "  \e[1;33m[!] Using override URL for ${blob}:\e[0m\n      ${FIRMWARE_URL}"
+             fi
+ 
+-            if curl -fsSL --retry 3 --retry-delay 2 "${FIRMWARE_URL}/${blob}" -o "${dest}"; then
++            if curl -fsSL --retry 3 --retry-delay 2 "${FIRMWARE_URL}" -o "${dest}"; then
+                 echo -e "  \e[1;32m[✓]\e[0m ${blob}"
+             else
+                 echo -e "  \e[1;31m[✗]\e[0m FAILED: ${blob}" >&2
+@@ -279,13 +415,17 @@ fi
+ if [[ "$DO_BUILD" == "1" ]]; then
+     echo -e "\e[1;34m[*]\e[0m Applying invariant config..."
+ 
+-    LOCALVERSION_SUFFIX="-Strawberry-$(lto_label)-"
++    LOCALVERSION_SUFFIX="-Strawberry-$(lto_label)$(southbridge_suffix)-"
+ 
+     # Build system / LTO
+     if [[ "$LTO_FLAVOR" == "full" ]]; then
+         echo -e "\e[1;34m[*]\e[0m Enabling FullLTO..."
+         scripts/config --disable CONFIG_LTO_CLANG_THIN
+         scripts/config --enable  CONFIG_LTO_CLANG_FULL
++    elif [[ "$LTO_FLAVOR" == "none" ]]; then
++        echo -e "\e[1;34m[*]\e[0m Disabling LTO..."
++        scripts/config --disable CONFIG_LTO_CLANG_THIN
++        scripts/config --disable CONFIG_LTO_CLANG_FULL
+     else
+         echo -e "\e[1;34m[*]\e[0m Enabling ThinLTO..."
+         scripts/config --enable  CONFIG_LTO_CLANG_THIN
+@@ -316,6 +456,13 @@ if [[ "$DO_BUILD" == "1" ]]; then
+ 
+     # PS4 firmware
+     scripts/config --enable  CONFIG_PS4_DMI_SPOOF
++    if [[ "$SOUTHBRIDGE" == "baikal" ]]; then
++        echo -e "\e[1;34m[*]\e[0m Enabling Baikal southbridge support..."
++        scripts/config --enable  CONFIG_X86_PS4_BAIKAL
++    else
++        echo -e "\e[1;34m[*]\e[0m Disabling Baikal southbridge support..."
++        scripts/config --disable CONFIG_X86_PS4_BAIKAL
++    fi
+ 
+     # Memory management / cgroup base
+     scripts/config --enable  CONFIG_CGROUPS
+@@ -429,6 +576,7 @@ if [[ "$DO_BUILD" == "1" ]]; then
+     scripts/config --disable CONFIG_HARDENED_USERCOPY_DEFAULT_ON
+     scripts/config --disable CONFIG_SECURITY_DMESG_RESTRICT
+     scripts/config --disable CONFIG_IOMMU_DEFAULT_DMA_STRICT
++    scripts/config --disable CONFIG_IOMMU_DEFAULT_PASSTHROUGH
+     scripts/config --enable  CONFIG_IOMMU_DEFAULT_DMA_LAZY
+ 
+     # I/O schedulers
+@@ -564,21 +712,17 @@ if [[ "$DO_BUILD" == "1" ]]; then
+         scripts/config --set-str CONFIG_DEFAULT_NET_SCH "fq_codel"
+     fi
+ 
+-    if [[ -d "${FIRMWARE_DIR}" ]] && [[ -n "$(ls -A "${FIRMWARE_DIR}" 2>/dev/null)" ]]; then
+-        echo -e "\e[1;34m[*]\e[0m Setting CONFIG_EXTRA_FIRMWARE_DIR=${FIRMWARE_DIR}"
+-        scripts/config --set-str CONFIG_EXTRA_FIRMWARE_DIR "${FIRMWARE_DIR}"
+-    else
+-        echo -e "\e[1;33m[!]\e[0m WARNING: extra_firmware/ missing or empty -- run fetch firmware first." >&2
+-    fi
+-
+     echo -e "\e[1;34m[*]\e[0m Running olddefconfig..."
+     make "${MAKE_OPTS[@]}" olddefconfig
+ 
++    validate_extra_firmware_blob "${REQUIRED_PS4_SD8797_FW}"
++
+     echo -e "\e[1;34m[*]\e[0m Running prepare..."
+     make "${MAKE_OPTS[@]}" prepare
+ 
+     CURRENT_LTO_LABEL="$(lto_label)"
+-    echo -e "\e[1;34m[*]\e[0m Building bzImage [profile: ${PROFILE}, LTO: ${CURRENT_LTO_LABEL}] with ${JOBS} jobs..."
++    CURRENT_SOUTHBRIDGE_DISPLAY="$(southbridge_display)"
++    echo -e "\e[1;34m[*]\e[0m Building bzImage [profile: ${PROFILE}, LTO: ${CURRENT_LTO_LABEL}, southbridge: ${CURRENT_SOUTHBRIDGE_DISPLAY}] with ${JOBS} jobs..."
+     time make "${MAKE_OPTS[@]}" bzImage
+ 
+     BZIMAGE="arch/x86/boot/bzImage"
+@@ -599,18 +743,19 @@ if [[ "$DO_BUILD" == "1" ]]; then
+         PROFILE_LABEL="General"
+     fi
+ 
++    SOUTHBRIDGE_SUFFIX="$(southbridge_suffix)"
+     KVER_BASE="${KVER%%-*}"
+     RELEASE_TRACK="Mainline"
+     if [[ "$KVER_BASE" == 6.18.* ]]; then
+         RELEASE_TRACK="LTS"
+     fi
+ 
+-    ARTIFACT_BASENAME="Strawberry-${LTO_LABEL}-${PROFILE_LABEL}-${RELEASE_TRACK}-${KVER}"
++    ARTIFACT_BASENAME="Strawberry-${LTO_LABEL}-${PROFILE_LABEL}${SOUTHBRIDGE_SUFFIX}-${RELEASE_TRACK}-${KVER}"
+     printf '%s\n' "${ARTIFACT_BASENAME}" > "${OUTPUT_DIR}/artifact_name.txt"
+ 
+     echo ""
+     echo -e "\e[1;32m╔══════════════════════════════════════════════════╗\e[0m"
+-    echo -e "\e[1;32m║\e[0m  Build complete! [${PROFILE} / ${LTO_LABEL}]$(printf "%-13s" "")\e[1;32m║\e[0m"
++    echo -e "\e[1;32m║\e[0m  Build complete! [${PROFILE} / ${LTO_LABEL} / ${CURRENT_SOUTHBRIDGE_DISPLAY}]$(printf "%-2s" "")\e[1;32m║\e[0m"
+     echo -e "\e[1;32m║\e[0m  Kernel : $(printf "%-39s" "${KVER}")\e[1;32m║\e[0m"
+     echo -e "\e[1;32m║\e[0m  bzImage: $(printf "%-39s" "${OUTPUT_DIR}/bzImage")\e[1;32m║\e[0m"
+     echo -e "\e[1;32m╚══════════════════════════════════════════════════╝\e[0m"
+diff --git a/config b/config
+index a89d4630926aad25bd77c670dedd4cd7c13d1a31..24da5665b8c19795e4c6d99c1aa7ea7b223e8ca3 100644
+--- a/config
++++ b/config
+@@ -1,18 +1,18 @@
+ #
+ # Automatically generated file; DO NOT EDIT.
+-# Linux/x86_64 6.18.18 Kernel Configuration
+-#
+-CONFIG_CC_VERSION_TEXT="clang version 22.1.1"
+-CONFIG_GCC_VERSION=0
+-CONFIG_CC_IS_CLANG=y
+-CONFIG_CLANG_VERSION=220101
+-CONFIG_AS_IS_LLVM=y
+-CONFIG_AS_VERSION=220101
+-CONFIG_LD_VERSION=0
+-CONFIG_LD_IS_LLD=y
+-CONFIG_LLD_VERSION=220101
+-CONFIG_RUSTC_VERSION=0
+-CONFIG_RUSTC_LLVM_VERSION=0
++# Linux/x86 7.0.0 Kernel Configuration
++#
++CONFIG_CC_VERSION_TEXT="gcc (GCC) 16.1.1 20260430"
++CONFIG_CC_IS_GCC=y
++CONFIG_GCC_VERSION=160101
++CONFIG_CLANG_VERSION=0
++CONFIG_AS_IS_GNU=y
++CONFIG_AS_VERSION=24600
++CONFIG_LD_IS_BFD=y
++CONFIG_LD_VERSION=24600
++CONFIG_LLD_VERSION=0
++CONFIG_RUSTC_VERSION=109500
++CONFIG_RUSTC_LLVM_VERSION=220103
+ CONFIG_CC_CAN_LINK=y
+ CONFIG_CC_HAS_ASM_GOTO_OUTPUT=y
+ CONFIG_CC_HAS_ASM_GOTO_TIED_OUTPUT=y
+@@ -21,8 +21,15 @@ CONFIG_CC_HAS_ASM_INLINE=y
+ CONFIG_CC_HAS_ASSUME=y
+ CONFIG_CC_HAS_NO_PROFILE_FN_ATTR=y
+ CONFIG_CC_HAS_COUNTED_BY=y
++CONFIG_CC_HAS_COUNTED_BY_PTR=y
+ CONFIG_CC_HAS_MULTIDIMENSIONAL_NONSTRING=y
+ CONFIG_LD_CAN_USE_KEEP_IN_OVERLAY=y
++CONFIG_RUSTC_HAS_SLICE_AS_FLATTENED=y
++CONFIG_RUSTC_HAS_COERCE_POINTEE=y
++CONFIG_RUSTC_HAS_SPAN_FILE=y
++CONFIG_RUSTC_HAS_UNNECESSARY_TRANSMUTES=y
++CONFIG_RUSTC_HAS_FILE_WITH_NUL=y
++CONFIG_RUSTC_HAS_FILE_AS_C_STR=y
+ CONFIG_PAHOLE_VERSION=131
+ CONFIG_IRQ_WORK=y
+ CONFIG_BUILDTIME_TABLE_SORT=y
+@@ -34,7 +41,7 @@ CONFIG_THREAD_INFO_IN_TASK=y
+ CONFIG_INIT_ENV_ARG_LIMIT=32
+ # CONFIG_COMPILE_TEST is not set
+ # CONFIG_WERROR is not set
+-CONFIG_LOCALVERSION="-Strawberry"
++CONFIG_LOCALVERSION="-Strawberry-PS4-"
+ # CONFIG_LOCALVERSION_AUTO is not set
+ CONFIG_BUILD_SALT=""
+ CONFIG_HAVE_KERNEL_GZIP=y
+@@ -47,10 +54,10 @@ CONFIG_HAVE_KERNEL_ZSTD=y
+ # CONFIG_KERNEL_GZIP is not set
+ # CONFIG_KERNEL_BZIP2 is not set
+ # CONFIG_KERNEL_LZMA is not set
+-CONFIG_KERNEL_XZ=y
++# CONFIG_KERNEL_XZ is not set
+ # CONFIG_KERNEL_LZO is not set
+ # CONFIG_KERNEL_LZ4 is not set
+-# CONFIG_KERNEL_ZSTD is not set
++CONFIG_KERNEL_ZSTD=y
+ CONFIG_DEFAULT_INIT=""
+ CONFIG_DEFAULT_HOSTNAME="ps4"
+ CONFIG_SYSVIPC=y
+@@ -80,7 +87,6 @@ CONFIG_GENERIC_IRQ_MATRIX_ALLOCATOR=y
+ CONFIG_GENERIC_IRQ_RESERVATION_MODE=y
+ CONFIG_IRQ_FORCED_THREADING=y
+ CONFIG_SPARSE_IRQ=y
+-# CONFIG_GENERIC_IRQ_DEBUGFS is not set
+ # end of IRQ subsystem
+ 
+ CONFIG_CLOCKSOURCE_WATCHDOG=y
+@@ -102,8 +108,8 @@ CONFIG_CONTEXT_TRACKING_IDLE=y
+ CONFIG_TICK_ONESHOT=y
+ CONFIG_NO_HZ_COMMON=y
+ # CONFIG_HZ_PERIODIC is not set
+-# CONFIG_NO_HZ_IDLE is not set
+-CONFIG_NO_HZ_FULL=y
++CONFIG_NO_HZ_IDLE=y
++# CONFIG_NO_HZ_FULL is not set
+ CONFIG_CONTEXT_TRACKING_USER=y
+ # CONFIG_CONTEXT_TRACKING_USER_FORCE is not set
+ CONFIG_NO_HZ=y
+@@ -121,16 +127,14 @@ CONFIG_ARCH_WANT_DEFAULT_BPF_JIT=y
+ #
+ CONFIG_BPF_SYSCALL=y
+ CONFIG_BPF_JIT=y
+-# CONFIG_BPF_JIT_ALWAYS_ON is not set
++CONFIG_BPF_JIT_ALWAYS_ON=y
+ CONFIG_BPF_JIT_DEFAULT_ON=y
+-CONFIG_BPF_UNPRIV_DEFAULT_OFF=y
++# CONFIG_BPF_UNPRIV_DEFAULT_OFF is not set
+ # CONFIG_BPF_PRELOAD is not set
+ # end of BPF subsystem
+ 
+ CONFIG_PREEMPT_BUILD=y
+ CONFIG_ARCH_HAS_PREEMPT_LAZY=y
+-# CONFIG_PREEMPT_NONE is not set
+-# CONFIG_PREEMPT_VOLUNTARY is not set
+ CONFIG_PREEMPT=y
+ # CONFIG_PREEMPT_LAZY is not set
+ # CONFIG_PREEMPT_RT is not set
+@@ -144,6 +148,7 @@ CONFIG_SCHED_CLASS_EXT=y
+ # CPU/Task time and stats accounting
+ #
+ CONFIG_VIRT_CPU_ACCOUNTING=y
++# CONFIG_TICK_CPU_ACCOUNTING is not set
+ CONFIG_VIRT_CPU_ACCOUNTING_GEN=y
+ # CONFIG_IRQ_TIME_ACCOUNTING is not set
+ CONFIG_BSD_PROCESS_ACCT=y
+@@ -152,7 +157,8 @@ CONFIG_TASKSTATS=y
+ CONFIG_TASK_DELAY_ACCT=y
+ CONFIG_TASK_XACCT=y
+ CONFIG_TASK_IO_ACCOUNTING=y
+-# CONFIG_PSI is not set
++CONFIG_PSI=y
++CONFIG_PSI_DEFAULT_DISABLED=y
+ # end of CPU/Task time and stats accounting
+ 
+ CONFIG_CPU_ISOLATION=y
+@@ -170,9 +176,6 @@ CONFIG_TASKS_RCU=y
+ CONFIG_TASKS_TRACE_RCU=y
+ CONFIG_RCU_STALL_COMMON=y
+ CONFIG_RCU_NEED_SEGCBLIST=y
+-CONFIG_RCU_NOCB_CPU=y
+-# CONFIG_RCU_NOCB_CPU_DEFAULT_ALL is not set
+-# CONFIG_RCU_LAZY is not set
+ # end of RCU Subsystem
+ 
+ CONFIG_IKCONFIG=y
+@@ -180,7 +183,6 @@ CONFIG_IKCONFIG_PROC=y
+ # CONFIG_IKHEADERS is not set
+ CONFIG_LOG_BUF_SHIFT=16
+ CONFIG_LOG_CPU_MAX_BUF_SHIFT=16
+-# CONFIG_PRINTK_INDEX is not set
+ CONFIG_HAVE_UNSTABLE_SCHED_CLOCK=y
+ 
+ #
+@@ -192,11 +194,12 @@ CONFIG_HAVE_UNSTABLE_SCHED_CLOCK=y
+ CONFIG_ARCH_SUPPORTS_NUMA_BALANCING=y
+ CONFIG_ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH=y
+ CONFIG_CC_HAS_INT128=y
+-CONFIG_CC_IMPLICIT_FALLTHROUGH="-Wimplicit-fallthrough"
++CONFIG_CC_IMPLICIT_FALLTHROUGH="-Wimplicit-fallthrough=5"
+ CONFIG_GCC10_NO_ARRAY_BOUNDS=y
++CONFIG_CC_NO_ARRAY_BOUNDS=y
+ CONFIG_GCC_NO_STRINGOP_OVERFLOW=y
++CONFIG_CC_NO_STRINGOP_OVERFLOW=y
+ CONFIG_ARCH_SUPPORTS_INT128=y
+-# CONFIG_NUMA_BALANCING is not set
+ CONFIG_SLAB_OBJ_EXT=y
+ CONFIG_CGROUPS=y
+ CONFIG_PAGE_COUNTER=y
+@@ -209,20 +212,20 @@ CONFIG_CGROUP_SCHED=y
+ CONFIG_GROUP_SCHED_WEIGHT=y
+ CONFIG_GROUP_SCHED_BANDWIDTH=y
+ CONFIG_FAIR_GROUP_SCHED=y
+-# CONFIG_CFS_BANDWIDTH is not set
+-CONFIG_RT_GROUP_SCHED=y
+-# CONFIG_RT_GROUP_SCHED_DEFAULT_DISABLED is not set
++CONFIG_CFS_BANDWIDTH=y
++# CONFIG_RT_GROUP_SCHED is not set
+ CONFIG_EXT_GROUP_SCHED=y
+ CONFIG_CGROUP_PIDS=y
+ # CONFIG_CGROUP_RDMA is not set
+-# CONFIG_CGROUP_DMEM is not set
++CONFIG_CGROUP_DMEM=y
+ CONFIG_CGROUP_FREEZER=y
+ CONFIG_CGROUP_HUGETLB=y
+-# CONFIG_CPUSETS is not set
++CONFIG_CPUSETS=y
++# CONFIG_CPUSETS_V1 is not set
+ CONFIG_CGROUP_DEVICE=y
+ CONFIG_CGROUP_CPUACCT=y
+ CONFIG_CGROUP_PERF=y
+-# CONFIG_CGROUP_BPF is not set
++CONFIG_CGROUP_BPF=y
+ CONFIG_CGROUP_MISC=y
+ CONFIG_CGROUP_DEBUG=y
+ CONFIG_SOCK_CGROUP_DATA=y
+@@ -234,8 +237,7 @@ CONFIG_USER_NS=y
+ CONFIG_PID_NS=y
+ CONFIG_NET_NS=y
+ # CONFIG_CHECKPOINT_RESTORE is not set
+-CONFIG_SCHED_BORE=y
+-CONFIG_SCHED_AUTOGROUP=y
++# CONFIG_SCHED_AUTOGROUP is not set
+ CONFIG_RELAY=y
+ CONFIG_BLK_DEV_INITRD=y
+ CONFIG_INITRAMFS_SOURCE=""
+@@ -247,6 +249,7 @@ CONFIG_RD_LZO=y
+ CONFIG_RD_LZ4=y
+ # CONFIG_RD_ZSTD is not set
+ # CONFIG_BOOT_CONFIG is not set
++CONFIG_CMDLINE_LOG_WRAP_IDEAL_LEN=1021
+ CONFIG_INITRAMFS_PRESERVE_MTIME=y
+ CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
+ # CONFIG_CC_OPTIMIZE_FOR_SIZE is not set
+@@ -271,14 +274,14 @@ CONFIG_ELF_CORE=y
+ CONFIG_FUTEX=y
+ CONFIG_FUTEX_PI=y
+ CONFIG_FUTEX_PRIVATE_HASH=y
+-CONFIG_FUTEX_MPOL=y
+ CONFIG_EPOLL=y
+ CONFIG_SIGNALFD=y
+ CONFIG_TIMERFD=y
+ CONFIG_EVENTFD=y
+ CONFIG_SHMEM=y
+ CONFIG_AIO=y
+-# CONFIG_IO_URING is not set
++CONFIG_IO_URING=y
++# CONFIG_IO_URING_MOCK_FILE is not set
+ CONFIG_ADVISE_SYSCALLS=y
+ CONFIG_MEMBARRIER=y
+ CONFIG_KCMP=y
+@@ -290,7 +293,6 @@ CONFIG_KALLSYMS_ALL=y
+ CONFIG_ARCH_HAS_MEMBARRIER_SYNC_CORE=y
+ CONFIG_ARCH_SUPPORTS_MSEAL_SYSTEM_MAPPINGS=y
+ CONFIG_HAVE_PERF_EVENTS=y
+-CONFIG_GUEST_PERF_EVENTS=y
+ 
+ #
+ # Kernel Performance Events And Counters
+@@ -301,7 +303,6 @@ CONFIG_PERF_EVENTS=y
+ 
+ CONFIG_SYSTEM_DATA_VERIFICATION=y
+ # CONFIG_PROFILING is not set
+-CONFIG_TRACEPOINTS=y
+ 
+ #
+ # Kexec and crash features
+@@ -312,12 +313,17 @@ CONFIG_KEXEC_CORE=y
+ CONFIG_KEXEC=y
+ CONFIG_KEXEC_FILE=y
+ # CONFIG_KEXEC_SIG is not set
+-# CONFIG_KEXEC_HANDOVER is not set
+ CONFIG_CRASH_DUMP=y
+ # CONFIG_CRASH_DM_CRYPT is not set
+ CONFIG_CRASH_HOTPLUG=y
+ CONFIG_CRASH_MAX_MEMORY_RANGES=8192
+ # end of Kexec and crash features
++
++#
++# Live Update and Kexec HandOver
++#
++# CONFIG_KEXEC_HANDOVER is not set
++# end of Live Update and Kexec HandOver
+ # end of General setup
+ 
+ CONFIG_64BIT=y
+@@ -355,15 +361,14 @@ CONFIG_X86_MPPARSE=y
+ # CONFIG_X86_CPU_RESCTRL is not set
+ # CONFIG_X86_FRED is not set
+ CONFIG_X86_EXTENDED_PLATFORM=y
+-# CONFIG_X86_NUMACHIP is not set
+ CONFIG_X86_PS4=y
++CONFIG_X86_PS4_BAIKAL=y
+ # CONFIG_X86_VSMP is not set
+ # CONFIG_X86_INTEL_MID is not set
+ # CONFIG_X86_GOLDFISH is not set
+ # CONFIG_X86_INTEL_LPSS is not set
+ # CONFIG_X86_AMD_PLATFORM_DEVICE is not set
+ CONFIG_IOSF_MBI=y
+-# CONFIG_IOSF_MBI_DEBUG is not set
+ CONFIG_X86_SUPPORTS_MEMORY_FAILURE=y
+ CONFIG_SCHED_OMIT_FRAME_POINTER=y
+ # CONFIG_HYPERVISOR_GUEST is not set
+@@ -403,7 +408,6 @@ CONFIG_X86_MCE=y
+ # CONFIG_X86_MCE_INTEL is not set
+ CONFIG_X86_MCE_AMD=y
+ CONFIG_X86_MCE_THRESHOLD=y
+-# CONFIG_X86_MCE_INJECT is not set
+ 
+ #
+ # Performance monitoring
+@@ -422,11 +426,7 @@ CONFIG_MICROCODE=y
+ CONFIG_X86_MSR=y
+ CONFIG_X86_CPUID=y
+ CONFIG_X86_DIRECT_GBPAGES=y
+-# CONFIG_X86_CPA_STATISTICS is not set
+-CONFIG_NUMA=y
+-CONFIG_AMD_NUMA=y
+-CONFIG_X86_64_ACPI_NUMA=y
+-CONFIG_NODES_SHIFT=6
++# CONFIG_NUMA is not set
+ CONFIG_ARCH_SPARSEMEM_ENABLE=y
+ CONFIG_ARCH_SPARSEMEM_DEFAULT=y
+ CONFIG_ILLEGAL_POINTER_VALUE=0xdead000000000000
+@@ -445,10 +445,10 @@ CONFIG_ARCH_PKEY_BITS=4
+ # CONFIG_X86_USER_SHADOW_STACK is not set
+ # CONFIG_EFI is not set
+ # CONFIG_HZ_100 is not set
+-# CONFIG_HZ_250 is not set
++CONFIG_HZ_250=y
+ # CONFIG_HZ_300 is not set
+-CONFIG_HZ_1000=y
+-CONFIG_HZ=1000
++# CONFIG_HZ_1000 is not set
++CONFIG_HZ=250
+ CONFIG_SCHED_HRTICK=y
+ CONFIG_MIN_BASE_SLICE_NS=2000000
+ CONFIG_ARCH_SUPPORTS_KEXEC=y
+@@ -477,14 +477,16 @@ CONFIG_LEGACY_VSYSCALL_XONLY=y
+ # CONFIG_MODIFY_LDT_SYSCALL is not set
+ # CONFIG_STRICT_SIGALTSTACK_SIZE is not set
+ CONFIG_HAVE_LIVEPATCH=y
++CONFIG_HAVE_KLP_BUILD=y
+ CONFIG_X86_BUS_LOCK_DETECT=y
+ # end of Processor type and features
+ 
++CONFIG_CC_HAS_NAMED_AS=y
+ CONFIG_CC_HAS_NAMED_AS_FIXED_SANITIZERS=y
++CONFIG_USE_X86_SEG_SUPPORT=y
+ CONFIG_CC_HAS_SLS=y
+ CONFIG_CC_HAS_RETURN_THUNK=y
+ CONFIG_CC_HAS_ENTRY_PADDING=y
+-CONFIG_CC_HAS_KCFI_ARITY=y
+ CONFIG_FUNCTION_PADDING_CFI=11
+ CONFIG_FUNCTION_PADDING_BYTES=16
+ # CONFIG_CPU_MITIGATIONS is not set
+@@ -495,6 +497,7 @@ CONFIG_ARCH_HAS_ADD_PAGES=y
+ #
+ # CONFIG_SUSPEND is not set
+ # CONFIG_HIBERNATION is not set
++# CONFIG_PM_QOS_CPU_SYSTEM_WAKEUP is not set
+ # CONFIG_PM is not set
+ # CONFIG_ENERGY_MODEL is not set
+ CONFIG_ARCH_SUPPORTS_ACPI=y
+@@ -535,8 +538,6 @@ CONFIG_ACPI_HOTPLUG_IOAPIC=y
+ # CONFIG_ACPI_REDUCED_HARDWARE_ONLY is not set
+ CONFIG_ACPI_NHLT=y
+ # CONFIG_ACPI_NFIT is not set
+-CONFIG_ACPI_NUMA=y
+-# CONFIG_ACPI_HMAT is not set
+ CONFIG_HAVE_ACPI_APEI=y
+ CONFIG_HAVE_ACPI_APEI_NMI=y
+ # CONFIG_ACPI_APEI is not set
+@@ -555,19 +556,18 @@ CONFIG_ACPI_MRRM=y
+ CONFIG_CPU_FREQ=y
+ CONFIG_CPU_FREQ_GOV_ATTR_SET=y
+ # CONFIG_CPU_FREQ_STAT is not set
+-# CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE is not set
++CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y
+ # CONFIG_CPU_FREQ_DEFAULT_GOV_POWERSAVE is not set
+ # CONFIG_CPU_FREQ_DEFAULT_GOV_USERSPACE is not set
+ # CONFIG_CPU_FREQ_DEFAULT_GOV_ONDEMAND is not set
+ # CONFIG_CPU_FREQ_DEFAULT_GOV_CONSERVATIVE is not set
+-CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
++# CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL is not set
+ CONFIG_CPU_FREQ_GOV_PERFORMANCE=y
+ # CONFIG_CPU_FREQ_GOV_POWERSAVE is not set
+ # CONFIG_CPU_FREQ_GOV_USERSPACE is not set
+ # CONFIG_CPU_FREQ_GOV_ONDEMAND is not set
+ # CONFIG_CPU_FREQ_GOV_CONSERVATIVE is not set
+ CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+-CONFIG_CPU_FREQ_GOV_REFLEX=y
+ 
+ #
+ # CPU frequency scaling drivers
+@@ -614,51 +614,19 @@ CONFIG_AMD_NODE=y
+ #
+ CONFIG_IA32_EMULATION=y
+ # CONFIG_IA32_EMULATION_DEFAULT_DISABLED is not set
++# CONFIG_X86_X32_ABI is not set
+ CONFIG_COMPAT_32=y
+ CONFIG_COMPAT=y
+ CONFIG_COMPAT_FOR_U64_ALIGNMENT=y
+ # end of Binary Emulations
+ 
+-CONFIG_KVM_COMMON=y
+-CONFIG_HAVE_KVM_PFNCACHE=y
+-CONFIG_HAVE_KVM_IRQCHIP=y
+-CONFIG_HAVE_KVM_IRQ_ROUTING=y
+-CONFIG_HAVE_KVM_DIRTY_RING=y
+-CONFIG_HAVE_KVM_DIRTY_RING_TSO=y
+-CONFIG_HAVE_KVM_DIRTY_RING_ACQ_REL=y
+-CONFIG_KVM_MMIO=y
+-CONFIG_KVM_ASYNC_PF=y
+-CONFIG_HAVE_KVM_MSI=y
+-CONFIG_HAVE_KVM_READONLY_MEM=y
+-CONFIG_HAVE_KVM_CPU_RELAX_INTERCEPT=y
+-CONFIG_KVM_VFIO=y
+-CONFIG_KVM_GENERIC_DIRTYLOG_READ_PROTECT=y
+-CONFIG_KVM_GENERIC_PRE_FAULT_MEMORY=y
+-CONFIG_KVM_COMPAT=y
+-CONFIG_HAVE_KVM_IRQ_BYPASS=y
+-CONFIG_HAVE_KVM_NO_POLL=y
+-CONFIG_VIRT_XFER_TO_GUEST_WORK=y
+-CONFIG_KVM_GENERIC_HARDWARE_ENABLING=y
+-CONFIG_KVM_GENERIC_MMU_NOTIFIER=y
+-CONFIG_KVM_ELIDE_TLB_FLUSH_IF_YOUNG=y
+-CONFIG_KVM_MMU_LOCKLESS_AGING=y
+-CONFIG_KVM_GUEST_MEMFD=y
+ CONFIG_VIRTUALIZATION=y
+-CONFIG_KVM_X86=y
+-CONFIG_KVM=y
+-# CONFIG_KVM_WERROR is not set
+-# CONFIG_KVM_SW_PROTECTED_VM is not set
+-CONFIG_KVM_AMD=y
+-CONFIG_KVM_IOAPIC=y
+-CONFIG_KVM_SMM=y
+-CONFIG_KVM_HYPERV=y
+-CONFIG_KVM_XEN=y
+-# CONFIG_KVM_PROVE_MMU is not set
+-CONFIG_KVM_MAX_NR_VCPUS=1024
++# CONFIG_KVM is not set
+ CONFIG_X86_REQUIRED_FEATURE_ALWAYS=y
+ CONFIG_X86_REQUIRED_FEATURE_NOPL=y
+ CONFIG_X86_REQUIRED_FEATURE_CX8=y
+ CONFIG_X86_REQUIRED_FEATURE_CMOV=y
++CONFIG_X86_REQUIRED_FEATURE_SYSFAST32=y
+ CONFIG_X86_REQUIRED_FEATURE_CPUID=y
+ CONFIG_X86_REQUIRED_FEATURE_FPU=y
+ CONFIG_X86_REQUIRED_FEATURE_PAE=y
+@@ -714,10 +682,8 @@ CONFIG_GENERIC_ENTRY=y
+ CONFIG_JUMP_LABEL=y
+ # CONFIG_STATIC_KEYS_SELFTEST is not set
+ # CONFIG_STATIC_CALL_SELFTEST is not set
+-CONFIG_UPROBES=y
+ CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS=y
+ CONFIG_ARCH_USE_BUILTIN_BSWAP=y
+-CONFIG_USER_RETURN_NOTIFIER=y
+ CONFIG_HAVE_IOREMAP_PROT=y
+ CONFIG_HAVE_KPROBES=y
+ CONFIG_HAVE_KRETPROBES=y
+@@ -776,21 +742,12 @@ CONFIG_SECCOMP_FILTER=y
+ CONFIG_HAVE_ARCH_KSTACK_ERASE=y
+ CONFIG_HAVE_STACKPROTECTOR=y
+ # CONFIG_STACKPROTECTOR is not set
+-CONFIG_LTO=y
+-CONFIG_LTO_CLANG=y
+ CONFIG_ARCH_SUPPORTS_LTO_CLANG=y
+ CONFIG_ARCH_SUPPORTS_LTO_CLANG_THIN=y
+-CONFIG_HAS_LTO_CLANG=y
+-# CONFIG_LTO_NONE is not set
+-# CONFIG_LTO_CLANG_FULL is not set
+-CONFIG_LTO_CLANG_THIN=y
++CONFIG_LTO_NONE=y
+ CONFIG_ARCH_SUPPORTS_AUTOFDO_CLANG=y
+-# CONFIG_AUTOFDO_CLANG is not set
+ CONFIG_ARCH_SUPPORTS_PROPELLER_CLANG=y
+-# CONFIG_PROPELLER_CLANG is not set
+ CONFIG_ARCH_SUPPORTS_CFI=y
+-# CONFIG_CFI is not set
+-CONFIG_HAVE_CFI_ICALL_NORMALIZE_INTEGERS=y
+ CONFIG_HAVE_ARCH_WITHIN_STACK_FRAMES=y
+ CONFIG_HAVE_CONTEXT_TRACKING_USER=y
+ CONFIG_HAVE_CONTEXT_TRACKING_USER_OFFSTACK=y
+@@ -844,7 +801,6 @@ CONFIG_STRICT_KERNEL_RWX=y
+ CONFIG_ARCH_HAS_STRICT_MODULE_RWX=y
+ CONFIG_STRICT_MODULE_RWX=y
+ CONFIG_HAVE_ARCH_PREL32_RELOCATIONS=y
+-# CONFIG_LOCK_EVENT_COUNTS is not set
+ CONFIG_ARCH_HAS_MEM_ENCRYPT=y
+ CONFIG_HAVE_STATIC_CALL=y
+ CONFIG_HAVE_STATIC_CALL_INLINE=y
+@@ -864,20 +820,21 @@ CONFIG_HAVE_GENERIC_TIF_BITS=y
+ #
+ # GCOV-based kernel profiling
+ #
+-# CONFIG_GCOV_KERNEL is not set
+ CONFIG_ARCH_HAS_GCOV_PROFILE_ALL=y
+ # end of GCOV-based kernel profiling
+ 
+ CONFIG_HAVE_GCC_PLUGINS=y
++CONFIG_GCC_PLUGINS=y
++# CONFIG_GCC_PLUGIN_LATENT_ENTROPY is not set
+ CONFIG_FUNCTION_ALIGNMENT_4B=y
+ CONFIG_FUNCTION_ALIGNMENT_16B=y
+ CONFIG_FUNCTION_ALIGNMENT=16
++CONFIG_CC_HAS_MIN_FUNCTION_ALIGNMENT=y
+ CONFIG_CC_HAS_SANE_FUNCTION_ALIGNMENT=y
+ # end of General architecture-dependent options
+ 
+ CONFIG_RT_MUTEXES=y
+ CONFIG_MODULES=y
+-# CONFIG_MODULE_DEBUG is not set
+ CONFIG_MODULE_FORCE_LOAD=y
+ CONFIG_MODULE_UNLOAD=y
+ CONFIG_MODULE_FORCE_UNLOAD=y
+@@ -906,7 +863,6 @@ CONFIG_BLK_WBT_MQ=y
+ # CONFIG_BLK_CGROUP_IOLATENCY is not set
+ # CONFIG_BLK_CGROUP_IOCOST is not set
+ # CONFIG_BLK_CGROUP_IOPRIO is not set
+-CONFIG_BLK_DEBUG_FS=y
+ # CONFIG_BLK_SED_OPAL is not set
+ # CONFIG_BLK_INLINE_ENCRYPTION is not set
+ 
+@@ -948,7 +904,6 @@ CONFIG_BFQ_GROUP_IOSCHED=y
+ # CONFIG_BFQ_CGROUP_DEBUG is not set
+ # end of IO Schedulers
+ 
+-CONFIG_PREEMPT_NOTIFIERS=y
+ CONFIG_PADATA=y
+ CONFIG_ASN1=y
+ CONFIG_UNINLINE_SPIN_UNLOCK=y
+@@ -985,12 +940,12 @@ CONFIG_ZSWAP=y
+ # CONFIG_ZSWAP_DEFAULT_ON is not set
+ # CONFIG_ZSWAP_SHRINKER_DEFAULT_ON is not set
+ # CONFIG_ZSWAP_COMPRESSOR_DEFAULT_DEFLATE is not set
+-CONFIG_ZSWAP_COMPRESSOR_DEFAULT_LZO=y
++# CONFIG_ZSWAP_COMPRESSOR_DEFAULT_LZO is not set
+ # CONFIG_ZSWAP_COMPRESSOR_DEFAULT_842 is not set
+ # CONFIG_ZSWAP_COMPRESSOR_DEFAULT_LZ4 is not set
+ # CONFIG_ZSWAP_COMPRESSOR_DEFAULT_LZ4HC is not set
+-# CONFIG_ZSWAP_COMPRESSOR_DEFAULT_ZSTD is not set
+-CONFIG_ZSWAP_COMPRESSOR_DEFAULT="lzo"
++CONFIG_ZSWAP_COMPRESSOR_DEFAULT_ZSTD=y
++CONFIG_ZSWAP_COMPRESSOR_DEFAULT="zstd"
+ CONFIG_ZSMALLOC=y
+ 
+ #
+@@ -1015,7 +970,6 @@ CONFIG_SLAB_MERGE_DEFAULT=y
+ # CONFIG_SLAB_FREELIST_HARDENED is not set
+ # CONFIG_SLAB_BUCKETS is not set
+ # CONFIG_SLUB_STATS is not set
+-# CONFIG_SLUB_CPU_PARTIAL is not set
+ # CONFIG_RANDOM_KMALLOC_CACHES is not set
+ # end of Slab allocator options
+ 
+@@ -1036,8 +990,8 @@ CONFIG_ARCH_MHP_MEMMAP_ON_MEMORY_ENABLE=y
+ CONFIG_SPLIT_PTE_PTLOCKS=y
+ CONFIG_ARCH_ENABLE_SPLIT_PMD_PTLOCK=y
+ CONFIG_SPLIT_PMD_PTLOCKS=y
+-CONFIG_MEMORY_BALLOON=y
+-CONFIG_BALLOON_COMPACTION=y
++CONFIG_BALLOON=y
++CONFIG_BALLOON_MIGRATION=y
+ CONFIG_COMPACTION=y
+ CONFIG_COMPACT_UNEVICTABLE_DEFAULT=1
+ CONFIG_PAGE_REPORTING=y
+@@ -1056,9 +1010,17 @@ CONFIG_ARCH_WANTS_THP_SWAP=y
+ # CONFIG_PERSISTENT_HUGE_ZERO_FOLIO is not set
+ CONFIG_MM_ID=y
+ CONFIG_TRANSPARENT_HUGEPAGE=y
+-CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS=y
+-# CONFIG_TRANSPARENT_HUGEPAGE_MADVISE is not set
++# CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS is not set
++CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y
+ # CONFIG_TRANSPARENT_HUGEPAGE_NEVER is not set
++CONFIG_TRANSPARENT_HUGEPAGE_SHMEM_HUGE_NEVER=y
++# CONFIG_TRANSPARENT_HUGEPAGE_SHMEM_HUGE_ALWAYS is not set
++# CONFIG_TRANSPARENT_HUGEPAGE_SHMEM_HUGE_WITHIN_SIZE is not set
++# CONFIG_TRANSPARENT_HUGEPAGE_SHMEM_HUGE_ADVISE is not set
++CONFIG_TRANSPARENT_HUGEPAGE_TMPFS_HUGE_NEVER=y
++# CONFIG_TRANSPARENT_HUGEPAGE_TMPFS_HUGE_ALWAYS is not set
++# CONFIG_TRANSPARENT_HUGEPAGE_TMPFS_HUGE_WITHIN_SIZE is not set
++# CONFIG_TRANSPARENT_HUGEPAGE_TMPFS_HUGE_ADVISE is not set
+ CONFIG_THP_SWAP=y
+ # CONFIG_READ_ONLY_THP_FOR_FS is not set
+ # CONFIG_NO_PAGE_MAPCOUNT is not set
+@@ -1071,7 +1033,6 @@ CONFIG_ARCH_SUPPORTS_PMD_PFNMAP=y
+ CONFIG_ARCH_SUPPORTS_PUD_PFNMAP=y
+ CONFIG_NEED_PER_CPU_EMBED_FIRST_CHUNK=y
+ CONFIG_NEED_PER_CPU_PAGE_FIRST_CHUNK=y
+-CONFIG_USE_PERCPU_NUMA_NODE_ID=y
+ CONFIG_HAVE_SETUP_PER_CPU_AREA=y
+ # CONFIG_CMA is not set
+ CONFIG_PAGE_BLOCK_MAX_ORDER=10
+@@ -1089,22 +1050,25 @@ CONFIG_ARCH_HAS_PKEYS=y
+ CONFIG_ARCH_USES_PG_ARCH_2=y
+ CONFIG_VM_EVENT_COUNTERS=y
+ # CONFIG_PERCPU_STATS is not set
+-# CONFIG_GUP_TEST is not set
++
++#
++# GUP_TEST needs to have DEBUG_FS enabled
++#
+ # CONFIG_DMAPOOL_TEST is not set
+ CONFIG_ARCH_HAS_PTE_SPECIAL=y
+ CONFIG_MEMFD_CREATE=y
+ CONFIG_SECRETMEM=y
+ # CONFIG_ANON_VMA_NAME is not set
+ # CONFIG_USERFAULTFD is not set
+-# CONFIG_LRU_GEN is not set
++CONFIG_LRU_GEN=y
++CONFIG_LRU_GEN_ENABLED=y
++CONFIG_LRU_GEN_STATS=y
++CONFIG_LRU_GEN_WALKS_MMU=y
+ CONFIG_ARCH_SUPPORTS_PER_VMA_LOCK=y
+ CONFIG_PER_VMA_LOCK=y
+ CONFIG_LOCK_MM_AND_FIND_VMA=y
+ CONFIG_IOMMU_MM_DATA=y
+ CONFIG_EXECMEM=y
+-CONFIG_NUMA_MEMBLKS=y
+-# CONFIG_NUMA_EMU is not set
+-CONFIG_ARCH_SUPPORTS_PT_RECLAIM=y
+ CONFIG_PT_RECLAIM=y
+ 
+ #
+@@ -1198,8 +1162,9 @@ CONFIG_TCP_CONG_HTCP=m
+ # CONFIG_TCP_CONG_ILLINOIS is not set
+ # CONFIG_TCP_CONG_DCTCP is not set
+ # CONFIG_TCP_CONG_CDG is not set
+-# CONFIG_TCP_CONG_BBR is not set
++CONFIG_TCP_CONG_BBR=y
+ CONFIG_DEFAULT_CUBIC=y
++# CONFIG_DEFAULT_BBR is not set
+ # CONFIG_DEFAULT_RENO is not set
+ CONFIG_DEFAULT_TCP_CONG="cubic"
+ CONFIG_TCP_SIGPOOL=y
+@@ -1574,7 +1539,6 @@ CONFIG_X25=y
+ CONFIG_LAPB=y
+ CONFIG_PHONET=y
+ CONFIG_6LOWPAN=y
+-CONFIG_6LOWPAN_DEBUGFS=y
+ CONFIG_6LOWPAN_NHC=y
+ CONFIG_6LOWPAN_NHC_DEST=y
+ CONFIG_6LOWPAN_NHC_FRAGMENT=y
+@@ -1619,9 +1583,9 @@ CONFIG_NET_SCH_HTB=y
+ # CONFIG_NET_SCH_CHOKE is not set
+ # CONFIG_NET_SCH_QFQ is not set
+ # CONFIG_NET_SCH_CODEL is not set
+-# CONFIG_NET_SCH_FQ_CODEL is not set
+-# CONFIG_NET_SCH_CAKE is not set
+-# CONFIG_NET_SCH_FQ is not set
++CONFIG_NET_SCH_FQ_CODEL=y
++CONFIG_NET_SCH_CAKE=y
++CONFIG_NET_SCH_FQ=y
+ # CONFIG_NET_SCH_HHF is not set
+ # CONFIG_NET_SCH_PIE is not set
+ # CONFIG_NET_SCH_INGRESS is not set
+@@ -1629,7 +1593,11 @@ CONFIG_NET_SCH_HTB=y
+ # CONFIG_NET_SCH_ETS is not set
+ # CONFIG_NET_SCH_BPF is not set
+ # CONFIG_NET_SCH_DUALPI2 is not set
+-# CONFIG_NET_SCH_DEFAULT is not set
++CONFIG_NET_SCH_DEFAULT=y
++CONFIG_DEFAULT_FQ=y
++# CONFIG_DEFAULT_FQ_CODEL is not set
++# CONFIG_DEFAULT_PFIFO_FAST is not set
++CONFIG_DEFAULT_NET_SCH="fq"
+ 
+ #
+ # Classification
+@@ -1677,7 +1645,6 @@ CONFIG_BATMAN_ADV_BLA=y
+ CONFIG_BATMAN_ADV_DAT=y
+ CONFIG_BATMAN_ADV_MCAST=y
+ # CONFIG_BATMAN_ADV_DEBUG is not set
+-# CONFIG_BATMAN_ADV_TRACING is not set
+ # CONFIG_OPENVSWITCH is not set
+ CONFIG_VSOCKETS=y
+ CONFIG_VSOCKETS_DIAG=y
+@@ -1704,13 +1671,13 @@ CONFIG_XPS=y
+ CONFIG_CGROUP_NET_CLASSID=y
+ CONFIG_NET_RX_BUSY_POLL=y
+ CONFIG_BQL=y
++# CONFIG_BPF_STREAM_PARSER is not set
+ CONFIG_NET_FLOW_LIMIT=y
+ 
+ #
+ # Network testing
+ #
+ # CONFIG_NET_PKTGEN is not set
+-# CONFIG_NET_DROP_MONITOR is not set
+ # end of Network testing
+ # end of Networking options
+ 
+@@ -1730,7 +1697,6 @@ CONFIG_BT_LE_L2CAP_ECRED=y
+ CONFIG_BT_LEDS=y
+ # CONFIG_BT_MSFTEXT is not set
+ # CONFIG_BT_AOSPEXT is not set
+-# CONFIG_BT_DEBUGFS is not set
+ # CONFIG_BT_SELFTEST is not set
+ # CONFIG_BT_FEATURE_DEBUG is not set
+ 
+@@ -1766,7 +1732,6 @@ CONFIG_CFG80211=y
+ CONFIG_CFG80211_REQUIRE_SIGNED_REGDB=y
+ CONFIG_CFG80211_USE_KERNEL_REGDB_KEYS=y
+ CONFIG_CFG80211_DEFAULT_PS=y
+-# CONFIG_CFG80211_DEBUGFS is not set
+ CONFIG_CFG80211_CRDA_SUPPORT=y
+ CONFIG_CFG80211_WEXT=y
+ CONFIG_MAC80211=y
+@@ -1776,7 +1741,6 @@ CONFIG_MAC80211_RC_DEFAULT_MINSTREL=y
+ CONFIG_MAC80211_RC_DEFAULT="minstrel_ht"
+ # CONFIG_MAC80211_MESH is not set
+ # CONFIG_MAC80211_LEDS is not set
+-# CONFIG_MAC80211_MESSAGE_TRACING is not set
+ # CONFIG_MAC80211_DEBUG_MENU is not set
+ CONFIG_MAC80211_STA_HASH_MAX_SIZE=0
+ CONFIG_RFKILL=y
+@@ -1794,6 +1758,7 @@ CONFIG_DST_CACHE=y
+ CONFIG_GRO_CELLS=y
+ CONFIG_NET_SELFTESTS=y
+ CONFIG_NET_SOCK_MSG=y
++CONFIG_NET_DEVLINK=y
+ CONFIG_PAGE_POOL=y
+ # CONFIG_PAGE_POOL_STATS is not set
+ # CONFIG_FAILOVER is not set
+@@ -1822,6 +1787,7 @@ CONFIG_PCI_QUIRKS=y
+ # CONFIG_PCI_DEBUG is not set
+ # CONFIG_PCI_STUB is not set
+ CONFIG_PCI_ATS=y
++# CONFIG_PCI_TSM is not set
+ # CONFIG_PCI_DOE is not set
+ CONFIG_PCI_LOCKLESS_CONFIG=y
+ # CONFIG_PCI_IOV is not set
+@@ -1880,6 +1846,7 @@ CONFIG_VGA_ARB_MAX_GPUS=2
+ # end of PCI switch controller drivers
+ 
+ # CONFIG_PCI_PWRCTRL_SLOT is not set
++# CONFIG_PCI_PWRCTRL_TC9563 is not set
+ # CONFIG_CXL_BUS is not set
+ # CONFIG_PCCARD is not set
+ # CONFIG_RAPIDIO is not set
+@@ -1888,6 +1855,7 @@ CONFIG_VGA_ARB_MAX_GPUS=2
+ #
+ # Generic Driver Options
+ #
++CONFIG_AUXILIARY_BUS=y
+ # CONFIG_UEVENT_HELPER is not set
+ CONFIG_DEVTMPFS=y
+ CONFIG_DEVTMPFS_MOUNT=y
+@@ -1901,8 +1869,8 @@ CONFIG_PREVENT_FIRMWARE_BUILD=y
+ CONFIG_FW_LOADER=y
+ CONFIG_FW_LOADER_PAGED_BUF=y
+ CONFIG_FW_LOADER_SYSFS=y
+-CONFIG_EXTRA_FIRMWARE="mrvl/sd8897_uapsta.bin mediatek/mt7668pr2h.bin EEPROM_MT7668.bin EEPROM_MT7668_e1.bin mt7668_patch_e1_hdr.bin mt7668_patch_e2_hdr.bin TxPwrLimit_MT76x8.dat wifi.cfg WIFI_RAM_CODE2_SDIO_MT7668.bin WIFI_RAM_CODE2_USB_MT7668.bin WIFI_RAM_CODE_MT7668.bin"
+-CONFIG_EXTRA_FIRMWARE_DIR="/home/rmux/ps4_testing/ps4-linux-12xx/extra_firmware"
++CONFIG_EXTRA_FIRMWARE="mrvl/sd8897_uapsta.bin mediatek/mt7668pr2h.bin EEPROM_MT7668.bin EEPROM_MT7668_e1.bin mt7668_patch_e1_hdr.bin mt7668_patch_e2_hdr.bin TxPwrLimit_MT76x8.dat wifi.cfg WIFI_RAM_CODE2_SDIO_MT7668.bin WIFI_RAM_CODE2_USB_MT7668.bin WIFI_RAM_CODE_MT7668.bin mrvl/sd8797_uapsta.bin amdgpu/liverpool_ce.bin amdgpu/liverpool_me.bin amdgpu/liverpool_mec.bin amdgpu/liverpool_mec2.bin amdgpu/liverpool_pfp.bin amdgpu/liverpool_rlc.bin amdgpu/liverpool_sdma.bin amdgpu/liverpool_sdma1.bin amdgpu/gladius_ce.bin amdgpu/gladius_me.bin amdgpu/gladius_mec.bin amdgpu/gladius_mec2.bin amdgpu/gladius_pfp.bin amdgpu/gladius_rlc.bin amdgpu/gladius_sdma.bin amdgpu/gladius_sdma1.bin"
++CONFIG_EXTRA_FIRMWARE_DIR="extra_firmware"
+ CONFIG_FW_LOADER_USER_HELPER=y
+ # CONFIG_FW_LOADER_USER_HELPER_FALLBACK is not set
+ CONFIG_FW_LOADER_COMPRESS=y
+@@ -1935,11 +1903,6 @@ CONFIG_DMA_SHARED_BUFFER=y
+ # CONFIG_MHI_BUS_EP is not set
+ # end of Bus devices
+ 
+-#
+-# Cache Drivers
+-#
+-# end of Cache Drivers
+-
+ CONFIG_CONNECTOR=y
+ CONFIG_PROC_EVENTS=y
+ 
+@@ -1957,6 +1920,7 @@ CONFIG_FIRMWARE_MEMMAP=y
+ CONFIG_DMIID=y
+ CONFIG_DMI_SYSFS=y
+ CONFIG_DMI_SCAN_MACHINE_NON_EFI_FALLBACK=y
++CONFIG_PS4_DMI_SPOOF=y
+ # CONFIG_ISCSI_IBFT is not set
+ # CONFIG_FW_CFG_SYSFS is not set
+ CONFIG_SYSFB=y
+@@ -1999,12 +1963,11 @@ CONFIG_ZRAM_BACKEND_ZSTD=y
+ # CONFIG_ZRAM_BACKEND_DEFLATE is not set
+ # CONFIG_ZRAM_BACKEND_842 is not set
+ # CONFIG_ZRAM_BACKEND_LZO is not set
+-CONFIG_ZRAM_DEF_COMP_LZ4=y
+-# CONFIG_ZRAM_DEF_COMP_ZSTD is not set
+-CONFIG_ZRAM_DEF_COMP="lz4"
++# CONFIG_ZRAM_DEF_COMP_LZ4 is not set
++CONFIG_ZRAM_DEF_COMP_ZSTD=y
++CONFIG_ZRAM_DEF_COMP="zstd"
+ # CONFIG_ZRAM_WRITEBACK is not set
+ # CONFIG_ZRAM_TRACK_ENTRY_ACTIME is not set
+-# CONFIG_ZRAM_MEMORY_TRACKING is not set
+ # CONFIG_ZRAM_MULTI_COMP is not set
+ CONFIG_BLK_DEV_LOOP=y
+ CONFIG_BLK_DEV_LOOP_MIN_COUNT=8
+@@ -2195,7 +2158,7 @@ CONFIG_MD=y
+ # CONFIG_BCACHE is not set
+ CONFIG_BLK_DEV_DM_BUILTIN=y
+ CONFIG_BLK_DEV_DM=y
+-CONFIG_DM_DEBUG=y
++# CONFIG_DM_DEBUG is not set
+ CONFIG_DM_BUFIO=y
+ # CONFIG_DM_DEBUG_BLOCK_MANAGER_LOCKING is not set
+ # CONFIG_DM_UNSTRIPED is not set
+@@ -2234,6 +2197,7 @@ CONFIG_DM_INIT=y
+ 
+ # CONFIG_MACINTOSH_DRIVERS is not set
+ CONFIG_NETDEVICES=y
++CONFIG_MII=y
+ CONFIG_NET_CORE=y
+ # CONFIG_BONDING is not set
+ # CONFIG_DUMMY is not set
+@@ -2286,7 +2250,6 @@ CONFIG_NET_VENDOR_ASIX=y
+ # CONFIG_NET_VENDOR_CISCO is not set
+ # CONFIG_NET_VENDOR_CORTINA is not set
+ CONFIG_NET_VENDOR_DAVICOM=y
+-# CONFIG_DNET is not set
+ # CONFIG_NET_VENDOR_DEC is not set
+ # CONFIG_NET_VENDOR_DLINK is not set
+ # CONFIG_NET_VENDOR_EMULEX is not set
+@@ -2306,7 +2269,6 @@ CONFIG_NET_VENDOR_MARVELL=y
+ # CONFIG_MVMDIO is not set
+ # CONFIG_SKGE is not set
+ CONFIG_SKY2=y
+-# CONFIG_SKY2_DEBUG is not set
+ # CONFIG_OCTEON_EP is not set
+ # CONFIG_OCTEON_EP_VF is not set
+ # CONFIG_NET_VENDOR_MELLANOX is not set
+@@ -2316,11 +2278,12 @@ CONFIG_NET_VENDOR_META=y
+ # CONFIG_NET_VENDOR_MICROCHIP is not set
+ # CONFIG_NET_VENDOR_MICROSEMI is not set
+ # CONFIG_NET_VENDOR_MICROSOFT is not set
++CONFIG_NET_VENDOR_MUCSE=y
++# CONFIG_MGBE is not set
+ # CONFIG_NET_VENDOR_MYRI is not set
+ # CONFIG_FEALNX is not set
+ # CONFIG_NET_VENDOR_NI is not set
+ # CONFIG_NET_VENDOR_NATSEMI is not set
+-# CONFIG_NET_VENDOR_NETERION is not set
+ # CONFIG_NET_VENDOR_NETRONOME is not set
+ # CONFIG_NET_VENDOR_NVIDIA is not set
+ # CONFIG_NET_VENDOR_OKI is not set
+@@ -2346,6 +2309,13 @@ CONFIG_NET_VENDOR_REALTEK=y
+ # CONFIG_NET_VENDOR_SMSC is not set
+ # CONFIG_NET_VENDOR_SOCIONEXT is not set
+ # CONFIG_NET_VENDOR_STMICRO is not set
++# CONFIG_STMMAC_ETH is not set
++# CONFIG_STMMAC_SELFTESTS is not set
++# CONFIG_STMMAC_PLATFORM is not set
++CONFIG_STMMAC_LIBPCI=y
++CONFIG_DWMAC_INTEL=y
++# CONFIG_DWMAC_MOTORCOMM is not set
++# CONFIG_STMMAC_PCI is not set
+ # CONFIG_NET_VENDOR_SUN is not set
+ # CONFIG_NET_VENDOR_SYNOPSYS is not set
+ # CONFIG_NET_VENDOR_TEHUTI is not set
+@@ -2359,12 +2329,13 @@ CONFIG_NET_VENDOR_WANGXUN=y
+ # CONFIG_NET_VENDOR_WIZNET is not set
+ # CONFIG_NET_VENDOR_XILINX is not set
+ # CONFIG_FDDI is not set
+-# CONFIG_HIPPI is not set
+ CONFIG_MDIO_BUS=y
++CONFIG_PHYLINK=y
+ CONFIG_PHYLIB=y
+ CONFIG_SWPHY=y
+ # CONFIG_LED_TRIGGER_PHY is not set
+ CONFIG_FIXED_PHY=y
++# CONFIG_SFP is not set
+ 
+ #
+ # MII PHY device drivers
+@@ -2438,7 +2409,7 @@ CONFIG_ACPI_MDIO=y
+ #
+ # PCS device drivers
+ #
+-# CONFIG_PCS_XPCS is not set
++CONFIG_PCS_XPCS=y
+ # end of PCS device drivers
+ 
+ # CONFIG_PPP is not set
+@@ -2517,7 +2488,6 @@ CONFIG_IEEE802154_DRIVERS=y
+ 
+ # CONFIG_VMXNET3 is not set
+ # CONFIG_FUJITSU_ES is not set
+-# CONFIG_NETDEVSIM is not set
+ # CONFIG_NET_FAILOVER is not set
+ # CONFIG_ISDN is not set
+ 
+@@ -2738,7 +2708,6 @@ CONFIG_LEGACY_TIOCSTI=y
+ #
+ CONFIG_SERIAL_EARLYCON=y
+ CONFIG_SERIAL_8250=y
+-# CONFIG_SERIAL_8250_DEPRECATED_OPTIONS is not set
+ CONFIG_SERIAL_8250_PNP=y
+ # CONFIG_SERIAL_8250_16550A_VARIANTS is not set
+ # CONFIG_SERIAL_8250_FINTEK is not set
+@@ -2750,11 +2719,11 @@ CONFIG_SERIAL_8250_EXAR=y
+ CONFIG_SERIAL_8250_NR_UARTS=4
+ CONFIG_SERIAL_8250_RUNTIME_UARTS=4
+ CONFIG_SERIAL_8250_EXTENDED=y
+-# CONFIG_SERIAL_8250_MANY_PORTS is not set
+-# CONFIG_SERIAL_8250_PCI1XXXX is not set
+ CONFIG_SERIAL_8250_SHARE_IRQ=y
+ # CONFIG_SERIAL_8250_DETECT_IRQ is not set
+ # CONFIG_SERIAL_8250_RSA is not set
++# CONFIG_SERIAL_8250_MANY_PORTS is not set
++# CONFIG_SERIAL_8250_PCI1XXXX is not set
+ # CONFIG_SERIAL_8250_DW is not set
+ # CONFIG_SERIAL_8250_RT288X is not set
+ # CONFIG_SERIAL_8250_LPSS is not set
+@@ -2801,7 +2770,6 @@ CONFIG_HW_RANDOM_AMD=y
+ # CONFIG_HW_RANDOM_VIRTIO is not set
+ # CONFIG_HW_RANDOM_XIPHERA is not set
+ # CONFIG_APPLICOM is not set
+-# CONFIG_MWAVE is not set
+ CONFIG_DEVMEM=y
+ CONFIG_NVRAM=y
+ CONFIG_DEVPORT=y
+@@ -2896,12 +2864,13 @@ CONFIG_I2C_ALGOBIT=y
+ CONFIG_I2C_SLAVE=y
+ CONFIG_I2C_SLAVE_EEPROM=y
+ # CONFIG_I2C_SLAVE_TESTUNIT is not set
+-CONFIG_I2C_DEBUG_CORE=y
+-CONFIG_I2C_DEBUG_ALGO=y
+-CONFIG_I2C_DEBUG_BUS=y
++# CONFIG_I2C_DEBUG_CORE is not set
++# CONFIG_I2C_DEBUG_ALGO is not set
++# CONFIG_I2C_DEBUG_BUS is not set
+ # end of I2C support
+ 
+ # CONFIG_I3C is not set
++CONFIG_I3C_OR_I2C=y
+ # CONFIG_SPI is not set
+ # CONFIG_SPMI is not set
+ # CONFIG_HSI is not set
+@@ -2952,6 +2921,7 @@ CONFIG_POWER_SUPPLY=y
+ # CONFIG_BATTERY_GAUGE_LTC2941 is not set
+ # CONFIG_BATTERY_GOLDFISH is not set
+ # CONFIG_BATTERY_RT5033 is not set
++# CONFIG_CHARGER_RT9756 is not set
+ # CONFIG_CHARGER_BD99954 is not set
+ # CONFIG_BATTERY_UG3105 is not set
+ # CONFIG_FUEL_GAUGE_MM8013 is not set
+@@ -3110,6 +3080,7 @@ CONFIG_SENSORS_FAM15H_POWER=y
+ # CONFIG_SENSORS_TMP421 is not set
+ # CONFIG_SENSORS_TMP464 is not set
+ # CONFIG_SENSORS_TMP513 is not set
++# CONFIG_SENSORS_TSC1641 is not set
+ # CONFIG_SENSORS_VIA_CPUTEMP is not set
+ # CONFIG_SENSORS_VIA686A is not set
+ # CONFIG_SENSORS_VT1211 is not set
+@@ -3137,8 +3108,6 @@ CONFIG_SENSORS_FAM15H_POWER=y
+ CONFIG_THERMAL=y
+ # CONFIG_THERMAL_NETLINK is not set
+ # CONFIG_THERMAL_STATISTICS is not set
+-# CONFIG_THERMAL_DEBUGFS is not set
+-# CONFIG_THERMAL_CORE_TESTING is not set
+ CONFIG_THERMAL_EMERGENCY_POWEROFF_DELAY_MS=0
+ # CONFIG_THERMAL_HWMON is not set
+ CONFIG_THERMAL_DEFAULT_GOV_STEP_WISE=y
+@@ -3206,6 +3175,7 @@ CONFIG_BCMA_POSSIBLE=y
+ # CONFIG_MFD_88PM800 is not set
+ # CONFIG_MFD_88PM805 is not set
+ # CONFIG_MFD_88PM860X is not set
++# CONFIG_MFD_MAX5970 is not set
+ # CONFIG_MFD_MAX14577 is not set
+ # CONFIG_MFD_MAX77541 is not set
+ # CONFIG_MFD_MAX77693 is not set
+@@ -3247,7 +3217,6 @@ CONFIG_BCMA_POSSIBLE=y
+ # CONFIG_MFD_TPS6594_I2C is not set
+ # CONFIG_TWL4030_CORE is not set
+ # CONFIG_TWL6040_CORE is not set
+-# CONFIG_MFD_WL1273_CORE is not set
+ # CONFIG_MFD_LM3533 is not set
+ # CONFIG_MFD_TQMX86 is not set
+ # CONFIG_MFD_VX855 is not set
+@@ -3337,20 +3306,7 @@ CONFIG_DRM_BUDDY=y
+ CONFIG_DRM_TTM_HELPER=y
+ CONFIG_DRM_SUBALLOC_HELPER=y
+ CONFIG_DRM_SCHED=y
+-
+-#
+-# Drivers for system framebuffers
+-#
+-# CONFIG_DRM_SIMPLEDRM is not set
+-# CONFIG_DRM_VESADRM is not set
+-# end of Drivers for system framebuffers
+-
+-#
+-# ARM devices
+-#
+-# end of ARM devices
+-
+-# CONFIG_DRM_RADEON is not set
++CONFIG_DRM_PANEL_BACKLIGHT_QUIRKS=y
+ CONFIG_DRM_AMDGPU=y
+ # CONFIG_DRM_AMDGPU_SI is not set
+ CONFIG_DRM_AMDGPU_CIK=y
+@@ -3369,28 +3325,16 @@ CONFIG_DRM_AMDGPU_USERPTR=y
+ #
+ CONFIG_DRM_AMD_DC=y
+ CONFIG_DRM_AMD_DC_FP=y
+-CONFIG_DRM_AMD_SECURE_DISPLAY=y
+ # end of Display Engine Configuration
+ 
+ # CONFIG_HSA_AMD is not set
+-# CONFIG_DRM_NOUVEAU is not set
+-# CONFIG_DRM_I915 is not set
+-# CONFIG_DRM_XE is not set
+-# CONFIG_DRM_VGEM is not set
+-# CONFIG_DRM_VKMS is not set
+-# CONFIG_DRM_GMA500 is not set
+-# CONFIG_DRM_UDL is not set
+-# CONFIG_DRM_AST is not set
+-# CONFIG_DRM_MGAG200 is not set
+-# CONFIG_DRM_QXL is not set
+-# CONFIG_DRM_VIRTIO_GPU is not set
+-CONFIG_DRM_PANEL=y
+ 
+ #
+-# Display Panels
++# ARM devices
+ #
+-# end of Display Panels
++# end of ARM devices
+ 
++# CONFIG_DRM_AST is not set
+ CONFIG_DRM_BRIDGE=y
+ CONFIG_DRM_PANEL_BRIDGE=y
+ 
+@@ -3402,16 +3346,41 @@ CONFIG_DRM_PANEL_BRIDGE=y
+ # end of Display Interface Bridges
+ 
+ # CONFIG_DRM_ETNAVIV is not set
++# CONFIG_DRM_GMA500 is not set
++# CONFIG_DRM_GUD is not set
+ # CONFIG_DRM_HISI_HIBMC is not set
++# CONFIG_DRM_I915 is not set
++# CONFIG_DRM_MGAG200 is not set
++# CONFIG_DRM_NOUVEAU is not set
++CONFIG_DRM_PANEL=y
++
++#
++# Display Panels
++#
++# end of Display Panels
++
++# CONFIG_DRM_QXL is not set
++# CONFIG_DRM_RADEON is not set
++# CONFIG_DRM_ST7571 is not set
++# CONFIG_DRM_SSD130X is not set
++
++#
++# Drivers for system framebuffers
++#
++# CONFIG_DRM_SIMPLEDRM is not set
++# CONFIG_DRM_VESADRM is not set
++# end of Drivers for system framebuffers
++
+ # CONFIG_DRM_APPLETBDRM is not set
+ # CONFIG_DRM_BOCHS is not set
+ # CONFIG_DRM_CIRRUS_QEMU is not set
+ # CONFIG_DRM_GM12U320 is not set
++# CONFIG_DRM_UDL is not set
+ # CONFIG_DRM_VBOXVIDEO is not set
+-# CONFIG_DRM_GUD is not set
+-# CONFIG_DRM_ST7571_I2C is not set
+-# CONFIG_DRM_SSD130X is not set
+-CONFIG_DRM_PANEL_BACKLIGHT_QUIRKS=y
++# CONFIG_DRM_VGEM is not set
++# CONFIG_DRM_VIRTIO_GPU is not set
++# CONFIG_DRM_VKMS is not set
++# CONFIG_DRM_XE is not set
+ CONFIG_DRM_PANEL_ORIENTATION_QUIRKS=y
+ 
+ #
+@@ -3434,20 +3403,16 @@ CONFIG_FB_VESA=y
+ # CONFIG_FB_NVIDIA is not set
+ # CONFIG_FB_RIVA is not set
+ # CONFIG_FB_I740 is not set
+-# CONFIG_FB_MATROX is not set
+ # CONFIG_FB_RADEON is not set
+ # CONFIG_FB_ATY128 is not set
+ # CONFIG_FB_ATY is not set
+-# CONFIG_FB_S3 is not set
+ # CONFIG_FB_SAVAGE is not set
+ # CONFIG_FB_SIS is not set
+ # CONFIG_FB_NEOMAGIC is not set
+ # CONFIG_FB_KYRO is not set
+ # CONFIG_FB_3DFX is not set
+ # CONFIG_FB_VOODOO1 is not set
+-# CONFIG_FB_VT8623 is not set
+ # CONFIG_FB_TRIDENT is not set
+-# CONFIG_FB_ARK is not set
+ # CONFIG_FB_PM3 is not set
+ # CONFIG_FB_CARMINE is not set
+ # CONFIG_FB_SMSCUFX is not set
+@@ -3474,7 +3439,6 @@ CONFIG_FB_IOMEM_FOPS=y
+ CONFIG_FB_IOMEM_HELPERS=y
+ CONFIG_FB_SYSMEM_HELPERS=y
+ CONFIG_FB_SYSMEM_HELPERS_DEFERRED=y
+-CONFIG_FB_MODE_HELPERS=y
+ # CONFIG_FB_TILEBLITTING is not set
+ # end of Frame buffer Devices
+ 
+@@ -3483,7 +3447,7 @@ CONFIG_FB_MODE_HELPERS=y
+ #
+ # CONFIG_LCD_CLASS_DEVICE is not set
+ CONFIG_BACKLIGHT_CLASS_DEVICE=y
+-# CONFIG_BACKLIGHT_KTD2801 is not set
++# CONFIG_BACKLIGHT_AW99706 is not set
+ # CONFIG_BACKLIGHT_KTZ8866 is not set
+ # CONFIG_BACKLIGHT_APPLE is not set
+ # CONFIG_BACKLIGHT_QCOM_WLED is not set
+@@ -3559,7 +3523,6 @@ CONFIG_SND_SEQ_MIDI=y
+ CONFIG_SND_DRIVERS=y
+ # CONFIG_SND_DUMMY is not set
+ # CONFIG_SND_ALOOP is not set
+-# CONFIG_SND_PCMTEST is not set
+ # CONFIG_SND_VIRMIDI is not set
+ # CONFIG_SND_MTPAV is not set
+ # CONFIG_SND_SERIAL_U16550 is not set
+@@ -3796,6 +3759,7 @@ CONFIG_HID_GENERIC=y
+ CONFIG_HID_PLAYSTATION=y
+ CONFIG_PLAYSTATION_FF=y
+ # CONFIG_HID_PXRC is not set
++# CONFIG_HID_RAPOO is not set
+ # CONFIG_HID_RAZER is not set
+ # CONFIG_HID_PRIMAX is not set
+ # CONFIG_HID_RETRODE is not set
+@@ -4038,6 +4002,7 @@ CONFIG_LEDS_CLASS_MULTICOLOR=y
+ # LED drivers
+ #
+ # CONFIG_LEDS_APU is not set
++# CONFIG_LEDS_OSRAM_AMS_AS3668 is not set
+ # CONFIG_LEDS_AW200XX is not set
+ # CONFIG_LEDS_LM3530 is not set
+ # CONFIG_LEDS_LM3532 is not set
+@@ -4073,6 +4038,7 @@ CONFIG_LEDS_CLASS_MULTICOLOR=y
+ # RGB LED drivers
+ #
+ # CONFIG_LEDS_KTD202X is not set
++# CONFIG_LEDS_LP5812 is not set
+ 
+ #
+ # LED Triggers
+@@ -4110,8 +4076,7 @@ CONFIG_RTC_LIB=y
+ CONFIG_RTC_MC146818_LIB=y
+ # CONFIG_RTC_CLASS is not set
+ CONFIG_DMADEVICES=y
+-CONFIG_DMADEVICES_DEBUG=y
+-CONFIG_DMADEVICES_VDEBUG=y
++# CONFIG_DMADEVICES_DEBUG is not set
+ 
+ #
+ # DMA Devices
+@@ -4139,13 +4104,11 @@ CONFIG_DMA_ACPI=y
+ # DMABUF options
+ #
+ CONFIG_SYNC_FILE=y
+-# CONFIG_SW_SYNC is not set
+ # CONFIG_UDMABUF is not set
+ # CONFIG_DMABUF_MOVE_NOTIFY is not set
+ # CONFIG_DMABUF_DEBUG is not set
+ # CONFIG_DMABUF_SELFTESTS is not set
+ # CONFIG_DMABUF_HEAPS is not set
+-# CONFIG_DMABUF_SYSFS_STATS is not set
+ # end of DMABUF options
+ 
+ CONFIG_UIO=y
+@@ -4157,13 +4120,13 @@ CONFIG_UIO_DMEM_GENIRQ=y
+ CONFIG_UIO_PCI_GENERIC=y
+ # CONFIG_UIO_NETX is not set
+ # CONFIG_UIO_MF624 is not set
++# CONFIG_UIO_PCI_GENERIC_SVA is not set
+ CONFIG_VFIO=y
+ CONFIG_VFIO_GROUP=y
+ CONFIG_VFIO_CONTAINER=y
+ CONFIG_VFIO_IOMMU_TYPE1=y
+ # CONFIG_VFIO_NOIOMMU is not set
+ CONFIG_VFIO_VIRQFD=y
+-# CONFIG_VFIO_DEBUGFS is not set
+ 
+ #
+ # VFIO support for PCI devices
+@@ -4208,15 +4171,15 @@ CONFIG_VHOST_ENABLE_FORK_OWNER_CONTROL=y
+ 
+ # CONFIG_GREYBUS is not set
+ # CONFIG_COMEDI is not set
++# CONFIG_GPIB is not set
+ # CONFIG_STAGING is not set
+ # CONFIG_GOLDFISH is not set
+ # CONFIG_CHROME_PLATFORMS is not set
+ # CONFIG_MELLANOX_PLATFORM is not set
+ # CONFIG_SURFACE_PLATFORMS is not set
+ CONFIG_X86_PLATFORM_DEVICES=y
+-CONFIG_ACPI_WMI=y
+-# CONFIG_ACPI_WMI_LEGACY_DEVICE_NAMES is not set
+ CONFIG_WMI_BMOF=y
++# CONFIG_X86_PLATFORM_DRIVERS_UNIWILL is not set
+ # CONFIG_MXM_WMI is not set
+ # CONFIG_NVIDIA_WMI_EC_BACKLIGHT is not set
+ # CONFIG_XIAOMI_WMI is not set
+@@ -4268,6 +4231,7 @@ CONFIG_WMI_BMOF=y
+ 
+ # CONFIG_INTEL_HID_EVENT is not set
+ # CONFIG_INTEL_VBTN is not set
++# CONFIG_INTEL_EHL_PSE_IO is not set
+ # CONFIG_INTEL_OAKTRAIL is not set
+ # CONFIG_INTEL_PUNIT_IPC is not set
+ # CONFIG_INTEL_RST is not set
+@@ -4302,6 +4266,8 @@ CONFIG_WMI_BMOF=y
+ # CONFIG_SIEMENS_SIMATIC_IPC is not set
+ # CONFIG_WINMATE_FM07_KEYS is not set
+ # CONFIG_TUXEDO_NB04_WMI_AB is not set
++CONFIG_ACPI_WMI=y
++# CONFIG_ACPI_WMI_LEGACY_DEVICE_NAMES is not set
+ CONFIG_HAVE_CLK=y
+ CONFIG_HAVE_CLK_PREPARE=y
+ CONFIG_COMMON_CLK=y
+@@ -4331,13 +4297,11 @@ CONFIG_IOMMU_SUPPORT=y
+ #
+ # Generic IOMMU Pagetable Support
+ #
+-CONFIG_IOMMU_IO_PGTABLE=y
+ # end of Generic IOMMU Pagetable Support
+ 
+-# CONFIG_IOMMU_DEBUGFS is not set
+ # CONFIG_IOMMU_DEFAULT_DMA_STRICT is not set
+-# CONFIG_IOMMU_DEFAULT_DMA_LAZY is not set
+-CONFIG_IOMMU_DEFAULT_PASSTHROUGH=y
++CONFIG_IOMMU_DEFAULT_DMA_LAZY=y
++# CONFIG_IOMMU_DEFAULT_PASSTHROUGH is not set
+ CONFIG_IOMMU_DMA=y
+ CONFIG_IOMMU_SVA=y
+ CONFIG_IOMMU_IOPF=y
+@@ -4346,6 +4310,12 @@ CONFIG_AMD_IOMMU=y
+ # CONFIG_IOMMUFD is not set
+ CONFIG_IRQ_REMAP=y
+ # CONFIG_VIRTIO_IOMMU is not set
++CONFIG_GENERIC_PT=y
++# CONFIG_DEBUG_GENERIC_PT is not set
++CONFIG_IOMMU_PT=y
++CONFIG_IOMMU_PT_AMDV1=y
++# CONFIG_IOMMU_PT_VTDSS is not set
++CONFIG_IOMMU_PT_X86_64=y
+ 
+ #
+ # Remoteproc drivers
+@@ -4564,6 +4534,7 @@ CONFIG_FUSE_FS=y
+ CONFIG_CUSE=y
+ # CONFIG_VIRTIO_FS is not set
+ CONFIG_FUSE_PASSTHROUGH=y
++CONFIG_FUSE_IO_URING=y
+ CONFIG_OVERLAY_FS=y
+ # CONFIG_OVERLAY_FS_REDIRECT_DIR is not set
+ CONFIG_OVERLAY_FS_REDIRECT_ALWAYS_FOLLOW=y
+@@ -4735,6 +4706,7 @@ CONFIG_NLS_ISO8859_15=y
+ CONFIG_NLS_UTF8=y
+ # CONFIG_DLM is not set
+ # CONFIG_UNICODE is not set
++CONFIG_IO_WQ=y
+ # end of File systems
+ 
+ #
+@@ -4770,7 +4742,6 @@ CONFIG_CC_HAS_AUTO_VAR_INIT_ZERO=y
+ CONFIG_INIT_STACK_NONE=y
+ # CONFIG_INIT_STACK_ALL_PATTERN is not set
+ # CONFIG_INIT_STACK_ALL_ZERO is not set
+-CONFIG_CC_HAS_SANCOV_STACK_DEPTH_CALLBACK=y
+ # CONFIG_KSTACK_ERASE is not set
+ # CONFIG_INIT_ON_ALLOC_DEFAULT_ON is not set
+ # CONFIG_INIT_ON_FREE_DEFAULT_ON is not set
+@@ -4792,9 +4763,9 @@ CONFIG_CC_HAS_ZERO_CALL_USED_REGS=y
+ # CONFIG_BUG_ON_DATA_CORRUPTION is not set
+ # end of Hardening of kernel data structures
+ 
+-CONFIG_CC_HAS_RANDSTRUCT=y
+ CONFIG_RANDSTRUCT_NONE=y
+ # CONFIG_RANDSTRUCT_FULL is not set
++# CONFIG_RANDSTRUCT_PERFORMANCE is not set
+ # end of Kernel hardening options
+ # end of Security options
+ 
+@@ -4843,13 +4814,13 @@ CONFIG_CRYPTO_ECC=y
+ CONFIG_CRYPTO_ECDH=y
+ # CONFIG_CRYPTO_ECDSA is not set
+ # CONFIG_CRYPTO_ECRDSA is not set
++# CONFIG_CRYPTO_MLDSA is not set
+ # end of Public-key cryptography
+ 
+ #
+ # Block ciphers
+ #
+ CONFIG_CRYPTO_AES=y
+-# CONFIG_CRYPTO_AES_TI is not set
+ # CONFIG_CRYPTO_ANUBIS is not set
+ # CONFIG_CRYPTO_ARIA is not set
+ # CONFIG_CRYPTO_BLOWFISH is not set
+@@ -4934,13 +4905,12 @@ CONFIG_CRYPTO_LZO=y
+ # CONFIG_CRYPTO_842 is not set
+ # CONFIG_CRYPTO_LZ4 is not set
+ # CONFIG_CRYPTO_LZ4HC is not set
+-# CONFIG_CRYPTO_ZSTD is not set
++CONFIG_CRYPTO_ZSTD=y
+ # end of Compression
+ 
+ #
+ # Random number generation
+ #
+-CONFIG_CRYPTO_ANSI_CPRNG=y
+ CONFIG_CRYPTO_DRBG_MENU=y
+ CONFIG_CRYPTO_DRBG_HMAC=y
+ # CONFIG_CRYPTO_DRBG_HASH is not set
+@@ -4987,11 +4957,8 @@ CONFIG_CRYPTO_TWOFISH_AVX_X86_64=y
+ # CONFIG_CRYPTO_ARIA_AESNI_AVX2_X86_64 is not set
+ # CONFIG_CRYPTO_ARIA_GFNI_AVX512_X86_64 is not set
+ # CONFIG_CRYPTO_AEGIS128_AESNI_SSE2 is not set
+-# CONFIG_CRYPTO_NHPOLY1305_SSE2 is not set
+-# CONFIG_CRYPTO_NHPOLY1305_AVX2 is not set
+-# CONFIG_CRYPTO_POLYVAL_CLMUL_NI is not set
+ # CONFIG_CRYPTO_SM3_AVX_X86_64 is not set
+-# CONFIG_CRYPTO_GHASH_CLMUL_NI_INTEL is not set
++CONFIG_CRYPTO_GHASH_CLMUL_NI_INTEL=y
+ # end of Accelerated Cryptographic Algorithms for CPU (x86)
+ 
+ CONFIG_CRYPTO_HW=y
+@@ -5030,6 +4997,7 @@ CONFIG_SYSTEM_TRUSTED_KEYS=""
+ # CONFIG_SYSTEM_EXTRA_CERTIFICATE is not set
+ # CONFIG_SECONDARY_TRUSTED_KEYRING is not set
+ # CONFIG_SYSTEM_BLACKLIST_KEYRING is not set
++CONFIG_OPENSSL_SUPPORTS_ML_DSA=y
+ # end of Certificates for signature checking
+ 
+ # CONFIG_CRYPTO_KRB5 is not set
+@@ -5064,8 +5032,10 @@ CONFIG_CRC_OPTIMIZATIONS=y
+ CONFIG_CRYPTO_HASH_INFO=y
+ CONFIG_CRYPTO_LIB_UTILS=y
+ CONFIG_CRYPTO_LIB_AES=y
++CONFIG_CRYPTO_LIB_AES_ARCH=y
+ CONFIG_CRYPTO_LIB_ARC4=y
+ CONFIG_CRYPTO_LIB_GF128MUL=y
++CONFIG_CRYPTO_LIB_BLAKE2B=y
+ CONFIG_CRYPTO_LIB_BLAKE2S_ARCH=y
+ CONFIG_CRYPTO_LIB_CHACHA=y
+ CONFIG_CRYPTO_LIB_CHACHA_ARCH=y
+@@ -5084,6 +5054,7 @@ CONFIG_CRYPTO_LIB_SHA256=y
+ CONFIG_CRYPTO_LIB_SHA256_ARCH=y
+ CONFIG_CRYPTO_LIB_SHA512=y
+ CONFIG_CRYPTO_LIB_SHA512_ARCH=y
++CONFIG_CRYPTO_LIB_SHA3=y
+ # end of Crypto library routines
+ 
+ CONFIG_XXHASH=y
+@@ -5135,13 +5106,11 @@ CONFIG_SWIOTLB=y
+ # CONFIG_SWIOTLB_DYNAMIC is not set
+ CONFIG_DMA_NEED_SYNC=y
+ # CONFIG_DMA_API_DEBUG is not set
+-# CONFIG_DMA_MAP_BENCHMARK is not set
+ CONFIG_SGL_ALLOC=y
+ CONFIG_IOMMU_HELPER=y
+ CONFIG_CPU_RMAP=y
+ CONFIG_DQL=y
+ CONFIG_GLOB=y
+-# CONFIG_GLOB_SELFTEST is not set
+ CONFIG_NLATTR=y
+ CONFIG_CLZ_TAB=y
+ # CONFIG_IRQ_POLL is not set
+@@ -5165,6 +5134,7 @@ CONFIG_FONT_6x10=y
+ CONFIG_FONT_10x18=y
+ CONFIG_FONT_SUN8x16=y
+ # CONFIG_FONT_SUN12x22 is not set
++# CONFIG_FONT_TER10x18 is not set
+ # CONFIG_FONT_TER16x32 is not set
+ # CONFIG_FONT_6x8 is not set
+ CONFIG_SG_POOL=y
+@@ -5178,6 +5148,7 @@ CONFIG_SBITMAP=y
+ # end of Library routines
+ 
+ CONFIG_FIRMWARE_TABLE=y
++CONFIG_UNION_FIND=y
+ 
+ #
+ # Kernel hacking
+@@ -5197,6 +5168,7 @@ CONFIG_MESSAGE_LOGLEVEL_DEFAULT=5
+ # CONFIG_DYNAMIC_DEBUG_CORE is not set
+ CONFIG_SYMBOLIC_ERRNAME=y
+ CONFIG_DEBUG_BUGVERBOSE=y
++# CONFIG_DEBUG_BUGVERBOSE_DETAILED is not set
+ # end of printk and dmesg options
+ 
+ CONFIG_DEBUG_KERNEL=y
+@@ -5217,15 +5189,15 @@ CONFIG_DEBUG_INFO_COMPRESSED_NONE=y
+ # CONFIG_DEBUG_INFO_COMPRESSED_ZSTD is not set
+ # CONFIG_DEBUG_INFO_SPLIT is not set
+ CONFIG_DEBUG_INFO_BTF=y
+-CONFIG_PAHOLE_HAS_SPLIT_BTF=y
+-CONFIG_PAHOLE_HAS_BTF_TAG=y
+ CONFIG_PAHOLE_HAS_LANG_EXCLUDE=y
+ CONFIG_DEBUG_INFO_BTF_MODULES=y
+ # CONFIG_MODULE_ALLOW_BTF_MISMATCH is not set
+ # CONFIG_GDB_SCRIPTS is not set
+ CONFIG_FRAME_WARN=2048
+ # CONFIG_STRIP_ASM_SYMS is not set
++# CONFIG_READABLE_ASM is not set
+ # CONFIG_HEADERS_INSTALL is not set
++# CONFIG_DEBUG_SECTION_MISMATCH is not set
+ # CONFIG_SECTION_MISMATCH_WARN_ONLY is not set
+ # CONFIG_DEBUG_FORCE_FUNCTION_ALIGN_64B is not set
+ CONFIG_ARCH_WANT_FRAME_POINTERS=y
+@@ -5241,10 +5213,7 @@ CONFIG_STACK_VALIDATION=y
+ # Generic Kernel Debugging Instruments
+ #
+ # CONFIG_MAGIC_SYSRQ is not set
+-CONFIG_DEBUG_FS=y
+-CONFIG_DEBUG_FS_ALLOW_ALL=y
+-# CONFIG_DEBUG_FS_DISALLOW_MOUNT is not set
+-# CONFIG_DEBUG_FS_ALLOW_NONE is not set
++# CONFIG_DEBUG_FS is not set
+ CONFIG_HAVE_ARCH_KGDB=y
+ # CONFIG_KGDB is not set
+ CONFIG_ARCH_HAS_UBSAN=y
+@@ -5271,17 +5240,14 @@ CONFIG_HAVE_KCSAN_COMPILER=y
+ # CONFIG_SLUB_DEBUG is not set
+ # CONFIG_PAGE_OWNER is not set
+ # CONFIG_PAGE_POISONING is not set
+-# CONFIG_DEBUG_PAGE_REF is not set
+ # CONFIG_DEBUG_RODATA_TEST is not set
+ CONFIG_ARCH_HAS_DEBUG_WX=y
+ # CONFIG_DEBUG_WX is not set
+ CONFIG_ARCH_HAS_PTDUMP=y
+-# CONFIG_PTDUMP_DEBUGFS is not set
+ CONFIG_HAVE_DEBUG_KMEMLEAK=y
+ # CONFIG_DEBUG_KMEMLEAK is not set
+ # CONFIG_PER_VMA_LOCK_STATS is not set
+ # CONFIG_DEBUG_OBJECTS is not set
+-# CONFIG_SHRINKER_DEBUG is not set
+ # CONFIG_DEBUG_STACK_USAGE is not set
+ # CONFIG_SCHED_STACK_END_CHECK is not set
+ CONFIG_ARCH_HAS_DEBUG_VM_PGTABLE=y
+@@ -5304,8 +5270,6 @@ CONFIG_CC_HAS_WORKING_NOSANITIZE_ADDRESS=y
+ CONFIG_HAVE_ARCH_KFENCE=y
+ # CONFIG_KFENCE is not set
+ CONFIG_HAVE_ARCH_KMSAN=y
+-CONFIG_HAVE_KMSAN_COMPILER=y
+-# CONFIG_KMSAN is not set
+ # end of Memory Debugging
+ 
+ # CONFIG_DEBUG_SHIRQ is not set
+@@ -5333,6 +5297,7 @@ CONFIG_SCHED_INFO=y
+ # end of Scheduler Debugging
+ 
+ # CONFIG_DEBUG_PREEMPT is not set
++# CONFIG_DEBUG_ATOMIC is not set
+ 
+ #
+ # Lock Debugging (spinlocks, mutexes, etc...)
+@@ -5386,7 +5351,6 @@ CONFIG_RCU_EXP_CPU_STALL_TIMEOUT=0
+ # CONFIG_CPU_HOTPLUG_STATE_CONTROL is not set
+ # CONFIG_LATENCYTOP is not set
+ CONFIG_USER_STACKTRACE_SUPPORT=y
+-CONFIG_NOP_TRACER=y
+ CONFIG_HAVE_RETHOOK=y
+ CONFIG_HAVE_FUNCTION_TRACER=y
+ CONFIG_HAVE_DYNAMIC_FTRACE=y
+@@ -5395,53 +5359,15 @@ CONFIG_HAVE_DYNAMIC_FTRACE_WITH_DIRECT_CALLS=y
+ CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS=y
+ CONFIG_HAVE_FTRACE_REGS_HAVING_PT_REGS=y
+ CONFIG_HAVE_DYNAMIC_FTRACE_NO_PATCHABLE=y
++CONFIG_HAVE_DYNAMIC_FTRACE_WITH_JMP=y
+ CONFIG_HAVE_SYSCALL_TRACEPOINTS=y
+ CONFIG_HAVE_FENTRY=y
+ CONFIG_HAVE_OBJTOOL_MCOUNT=y
+ CONFIG_HAVE_OBJTOOL_NOP_MCOUNT=y
+ CONFIG_HAVE_C_RECORDMCOUNT=y
+ CONFIG_HAVE_BUILDTIME_MCOUNT_SORT=y
+-CONFIG_TRACE_CLOCK=y
+-CONFIG_RING_BUFFER=y
+-CONFIG_EVENT_TRACING=y
+-CONFIG_CONTEXT_SWITCH_TRACER=y
+-CONFIG_TRACING=y
+ CONFIG_TRACING_SUPPORT=y
+-CONFIG_FTRACE=y
+-CONFIG_TRACEFS_AUTOMOUNT_DEPRECATED=y
+-# CONFIG_BOOTTIME_TRACING is not set
+-# CONFIG_FUNCTION_TRACER is not set
+-# CONFIG_STACK_TRACER is not set
+-# CONFIG_IRQSOFF_TRACER is not set
+-# CONFIG_PREEMPT_TRACER is not set
+-# CONFIG_SCHED_TRACER is not set
+-# CONFIG_HWLAT_TRACER is not set
+-# CONFIG_OSNOISE_TRACER is not set
+-# CONFIG_TIMERLAT_TRACER is not set
+-# CONFIG_MMIOTRACE is not set
+-# CONFIG_ENABLE_DEFAULT_TRACERS is not set
+-# CONFIG_FTRACE_SYSCALLS is not set
+-# CONFIG_TRACER_SNAPSHOT is not set
+-CONFIG_BRANCH_PROFILE_NONE=y
+-# CONFIG_PROFILE_ANNOTATED_BRANCHES is not set
+-# CONFIG_PROFILE_ALL_BRANCHES is not set
+-# CONFIG_BLK_DEV_IO_TRACE is not set
+-CONFIG_UPROBE_EVENTS=y
+-CONFIG_EPROBE_EVENTS=y
+-CONFIG_BPF_EVENTS=y
+-CONFIG_DYNAMIC_EVENTS=y
+-CONFIG_PROBE_EVENTS=y
+-# CONFIG_SYNTH_EVENTS is not set
+-# CONFIG_USER_EVENTS is not set
+-# CONFIG_HIST_TRIGGERS is not set
+-# CONFIG_TRACE_EVENT_INJECT is not set
+-# CONFIG_TRACEPOINT_BENCHMARK is not set
+-# CONFIG_RING_BUFFER_BENCHMARK is not set
+-# CONFIG_TRACE_EVAL_MAP_FILE is not set
+-# CONFIG_RING_BUFFER_STARTUP_TEST is not set
+-# CONFIG_RING_BUFFER_VALIDATE_TIME_DELTAS is not set
+-# CONFIG_PREEMPTIRQ_DELAY_TEST is not set
+-# CONFIG_RV is not set
++# CONFIG_FTRACE is not set
+ # CONFIG_PROVIDE_OHCI1394_DMA_INIT is not set
+ # CONFIG_SAMPLES is not set
+ CONFIG_HAVE_SAMPLE_FTRACE_DIRECT=y
+@@ -5457,14 +5383,13 @@ CONFIG_EARLY_PRINTK=y
+ # CONFIG_EARLY_PRINTK_DBGP is not set
+ # CONFIG_EARLY_PRINTK_USB_XDBC is not set
+ # CONFIG_DEBUG_TLBFLUSH is not set
+-CONFIG_IOMMU_DEBUG=y
++# CONFIG_IOMMU_DEBUG is not set
+ CONFIG_HAVE_MMIOTRACE_SUPPORT=y
+ # CONFIG_X86_DECODER_SELFTEST is not set
+ CONFIG_IO_DELAY_0X80=y
+ # CONFIG_IO_DELAY_0XED is not set
+ # CONFIG_IO_DELAY_UDELAY is not set
+ # CONFIG_IO_DELAY_NONE is not set
+-CONFIG_DEBUG_BOOT_PARAMS=y
+ # CONFIG_CPA_DEBUG is not set
+ # CONFIG_DEBUG_ENTRY is not set
+ # CONFIG_DEBUG_NMI_SELFTEST is not set
+@@ -5493,4 +5418,6 @@ CONFIG_ARCH_USE_MEMTEST=y
+ #
+ # end of Rust hacking
+ # end of Kernel hacking
+-CONFIG_PS4_DMI_SPOOF=y
++
++CONFIG_IO_URING_ZCRX=y
++CONFIG_IO_URING_BPF=y

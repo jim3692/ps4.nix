@@ -1,0 +1,43 @@
+From 8665d4a7f1d56d8f21792773cefecade236a7377 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Tue, 10 Nov 2026 20:56:20 +0100
+Subject: [PATCH 110/124] ps4: sflash: put the driver behind PS4_SFLASH, off by
+ default
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ arch/x86/Kconfig     | 7 +++++++
+ drivers/ps4/Makefile | 2 +-
+ 2 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
+index 382f4f43177fbf40fc30a8d88b94b4a33e938e41..e6f16227ba185302ff45fc4874840e2743894ccc 100644
+--- a/arch/x86/Kconfig
++++ b/arch/x86/Kconfig
+@@ -632,6 +632,13 @@ config PS4_TRNG
+ 	depends on DRM_AMDGPU=y
+ 	help
+ 	  Enable the PS4 SAMU true random number generator driver (ps4-trng).
++
++config PS4_SFLASH
++	bool "PS4 southbridge SPI flash reader"
++	depends on X86_PS4
++	help
++	  Enable the read only /dev/ps4sflash node for the southbridge
++	  SPI NOR flash (Aeolia, Belize and Baikal).
+  
+ config X86_VSMP
+ 	bool "ScaleMP vSMP"
+diff --git a/drivers/ps4/Makefile b/drivers/ps4/Makefile
+index 912054b43935cdf1e78561c083705cc5300f6998..5ccf61077ad15e6db6c607e90d91758dc544d4c0 100644
+--- a/drivers/ps4/Makefile
++++ b/drivers/ps4/Makefile
+@@ -12,6 +12,6 @@ obj-$(CONFIG_RTC_CLASS) += sb-rtc.o
+ obj-y += ps4-led.o
+ obj-y += ps4-fan.o
+ obj-y += ps4-buzzer.o
+-obj-y += sb-sflash.o
++obj-$(CONFIG_PS4_SFLASH) += sb-sflash.o
+ obj-$(CONFIG_PS4_TRNG) += ps4-trng.o
+ obj-$(CONFIG_PS4_CCP) += ps4-ccp.o
+\ No newline at end of file

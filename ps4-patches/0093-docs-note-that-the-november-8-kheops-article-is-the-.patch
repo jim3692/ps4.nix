@@ -1,0 +1,39 @@
+From 246b4fa114e8cf58f6f884228126df6468eaf912 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sun, 8 Nov 2026 11:16:06 +0100
+Subject: [PATCH 093/124] docs: note that the november 8 kheops article is the
+ same v2.1 pack
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ KHEOPS.md | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/KHEOPS.md b/KHEOPS.md
+index bc4bddc3f437903f7011a3f7fb2f9cbb6bf0f632..8885ce20dedaf4b07af7e53941fd00b27fc65980 100644
+--- a/KHEOPS.md
++++ b/KHEOPS.md
+@@ -42,6 +42,23 @@ the firmware:
+ - the built in firmware list is the exact list string from feeRnts tree and mine
+ - all 9 mt7668 blobs are md5 identical to the ones in our `extra_firmware`
+ 
++## The november 8 article
++
++on november 8 2026 ps4linux.com posted "multi-resolution kernels for PS4 aeolia and belize released by saya, with 4K60, NTSYNC support, gaming patches and more" as a new release.
++
++its download is the same KHEOPS v2.1 pack from october:
++
++- file: `pack_bzImages-release_october_2026-KHEOPS-v2.1.zip`, 171685066 bytes
++- sha256: `1d277fe849f3deae339d149581c6fdd39e064cd41679cb599df11df831a34907`, the same as the october copy i took apart above
++
++so everything in the teardown still applies. the claims in the article against the binaries:
++
++- "720p to 4K": the multi resolution builds offer 2160p60 and 4096x2160p60, then their own mode check rejects both. that is why the article tells you to switch back to 1080p60 every time
++- "4K60 only on pro": the 4k build has one fixed mode, 3840x2160 at 60 hz, and nothing else
++- "set 2160p rgb in orbis first": the bridge never reads your tv, so it depends on what gameos left behind. this tree reads the edid from the tv itself and offers the modes your tv lists
++- "NTSYNC and FSYNC gaming patches": NTSYNC is a normal kernel option since 6.14, FSYNC (futex_waitv) since 5.16. turning on a config option is not a patch
++- still no source, still no hardware video, still no baikal
++
+ ## The 7.0 kernels
+ 
+ on may 8 2026 vvsx87 posted a "7.0.4 belize" kernel in the ps4linux discord. on may 9 saya showed off a "7.0.4.src-KHEOPS-FullLTO-v2.1_1080p60Hz_aeolia-belize" build. when people asked for the source he wrote "My source ... For you ? Never". he never released that kernel or its source.

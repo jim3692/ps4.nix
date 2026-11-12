@@ -1,0 +1,96 @@
+From 74bf0140f4449ceb54767055886a4548c813f192 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Fri, 15 May 2026 13:05:50 +0000
+Subject: [PATCH 041/124] amdgpu: skip asic_init on reset and set the vram type
+ and clocks on ps4
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_device.c | 6 ++++--
+ drivers/gpu/drm/amd/amdgpu/cik.c           | 8 ++++++++
+ drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c      | 6 +++---
+ 3 files changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+index b9b5cceb2ec539e18fede692265d57af85cb6f58..a84422d618e9d53224aeb9ff4d80da9ca7eb5ca5 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+@@ -964,6 +964,10 @@ static int amdgpu_device_asic_init(struct amdgpu_device *adev)
+ 	int ret;
+ 
+ 	amdgpu_asic_pre_asic_init(adev);
++
++	if (adev->asic_type == CHIP_LIVERPOOL ||
++	    adev->asic_type == CHIP_GLADIUS)
++		return 0;
+ 	flags = amdgpu_device_get_vbios_flags(adev);
+ 	optional = !!(flags & (AMDGPU_VBIOS_OPTIONAL | AMDGPU_VBIOS_SKIP));
+ 
+@@ -2358,7 +2362,6 @@ static int amdgpu_device_init_schedulers(struct amdgpu_device *adev)
+ 	return 0;
+ }
+ 
+-
+ /**
+  * amdgpu_device_ip_init - run init for hardware IPs
+  *
+@@ -5707,7 +5710,6 @@ static void amdgpu_device_gpu_resume(struct amdgpu_device *adev,
+ 	}
+ }
+ 
+-
+ /**
+  * amdgpu_device_gpu_recover - reset the asic and recover scheduler
+  *
+diff --git a/drivers/gpu/drm/amd/amdgpu/cik.c b/drivers/gpu/drm/amd/amdgpu/cik.c
+index fb098bf22fb124f4c1e09fb2ebae50bdbc977aa3..c93243f34e6d08aa81c9f549526695610d771814 100644
+--- a/drivers/gpu/drm/amd/amdgpu/cik.c
++++ b/drivers/gpu/drm/amd/amdgpu/cik.c
+@@ -2564,6 +2564,14 @@ static int cik_common_hw_init(struct amdgpu_ip_block *ip_block)
+ 	    adev->asic_type == CHIP_GLADIUS)
+ 		liverpool_clk_force_max(adev);
+ 
++	if (adev->asic_type == CHIP_LIVERPOOL) {
++		adev->clock.default_sclk = 80000;
++		adev->clock.default_mclk = 137500;
++	} else if (adev->asic_type == CHIP_GLADIUS) {
++		adev->clock.default_sclk = 91100;
++		adev->clock.default_mclk = 170000;
++	}
++
+ 	return 0;
+ }
+ 
+diff --git a/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c b/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c
+index ee9a76db4997d5aa89bc99dbdb41ca13f2ff8799..ce3d2a68056ebdbf4ce3db532a0ca92e7ac33f0b 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c
+@@ -799,7 +799,6 @@ static void gmc_v7_0_vm_decode_fault(struct amdgpu_device *adev, u32 status,
+ 	       "write" : "read", block, mc_client, mc_id);
+ }
+ 
+-
+ static const u32 mc_cg_registers[] = {
+ 	mmMC_HUB_MISC_HUB_CG,
+ 	mmMC_HUB_MISC_SIP_CG,
+@@ -1003,6 +1002,9 @@ static int gmc_v7_0_sw_init(struct amdgpu_ip_block *ip_block)
+ 
+ 	if (adev->flags & AMD_IS_APU) {
+ 		adev->gmc.vram_type = AMDGPU_VRAM_TYPE_UNKNOWN;
++		if (adev->asic_type == CHIP_LIVERPOOL ||
++		    adev->asic_type == CHIP_GLADIUS)
++			adev->gmc.vram_type = AMDGPU_VRAM_TYPE_GDDR5;
+ 	} else {
+ 		u32 tmp = RREG32(mmMC_SEQ_MISC0);
+ 
+@@ -1057,10 +1059,8 @@ static int gmc_v7_0_sw_init(struct amdgpu_ip_block *ip_block)
+ 	if (r)
+ 		return r;
+ 
+-
+ 	dev_info(adev->dev, "Done gart\n");
+ 
+-
+ 	/*
+ 	 * number of VMs
+ 	 * VMID 0 is reserved for System

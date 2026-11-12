@@ -1,0 +1,5992 @@
+From 8ce92f46093d921ca0994610ff8ed611eb30d18b Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Fri, 6 Nov 2026 21:34:10 +0100
+Subject: [PATCH 074/124] ps4: merge the southbridge headers and rename the
+ drivers
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ arch/x86/include/asm/ps4.h          |   8 +-
+ arch/x86/platform/ps4/ps4.c         |   8 +-
+ drivers/ata/ahci.c                  | 212 ++++----
+ drivers/ata/ahci.h                  |  10 +-
+ drivers/net/ethernet/marvell/sky2.c |  10 +-
+ drivers/ps4/Makefile                |  10 +-
+ drivers/ps4/aeolia.h                | 115 ----
+ drivers/ps4/baikal.h                | 165 ------
+ drivers/ps4/icc/i2c.c               | 166 ------
+ drivers/ps4/ps4-apcie-pwrbutton.c   |  76 ---
+ drivers/ps4/ps4-apcie.c             | 713 ------------------------
+ drivers/ps4/ps4-bpcie.c             | 813 ----------------------------
+ drivers/ps4/ps4-buzzer.c            |   2 +-
+ drivers/ps4/ps4-fan.c               |   2 +-
+ drivers/ps4/ps4-led.c               |   2 +-
+ drivers/ps4/ps4-sflash.c            | 546 -------------------
+ drivers/ps4/ps4-sflash.h            |  59 --
+ drivers/ps4/ps4sb.h                 | 242 ++++++++-
+ drivers/ps4/sb-aeolia.c             | 713 ++++++++++++++++++++++++
+ drivers/ps4/sb-baikal.c             | 813 ++++++++++++++++++++++++++++
+ drivers/ps4/sb-icc-i2c.c            | 166 ++++++
+ drivers/ps4/sb-icc-pwrbutton.c      |  76 +++
+ drivers/ps4/sb-sflash.c             | 546 +++++++++++++++++++
+ drivers/ps4/sb-sflash.h             |  59 ++
+ drivers/usb/host/xhci-aeolia.c      |   6 +-
+ 25 files changed, 2748 insertions(+), 2790 deletions(-)
+ delete mode 100644 drivers/ps4/aeolia.h
+ delete mode 100644 drivers/ps4/baikal.h
+ delete mode 100644 drivers/ps4/icc/i2c.c
+ delete mode 100644 drivers/ps4/ps4-apcie-pwrbutton.c
+ delete mode 100644 drivers/ps4/ps4-apcie.c
+ delete mode 100644 drivers/ps4/ps4-bpcie.c
+ delete mode 100644 drivers/ps4/ps4-sflash.c
+ delete mode 100644 drivers/ps4/ps4-sflash.h
+ create mode 100644 drivers/ps4/sb-aeolia.c
+ create mode 100644 drivers/ps4/sb-baikal.c
+ create mode 100644 drivers/ps4/sb-icc-i2c.c
+ create mode 100644 drivers/ps4/sb-icc-pwrbutton.c
+ create mode 100644 drivers/ps4/sb-sflash.c
+ create mode 100644 drivers/ps4/sb-sflash.h
+
+diff --git a/arch/x86/include/asm/ps4.h b/arch/x86/include/asm/ps4.h
+index 2694d59324c0422978e27246ad0bd85a70ee002f..537b776b5e1cc5a49921fa88df78f831ea5c5ae1 100644
+--- a/arch/x86/include/asm/ps4.h
++++ b/arch/x86/include/asm/ps4.h
+@@ -32,8 +32,8 @@ extern unsigned long ps4_calibrate_tsc(void);
+  * Returns 1 or count, depending on IRQ allocation constraints, or negative on
+  * error. Assigned IRQ(s) start at dev->irq.
+  */
+-extern int apcie_assign_irqs(struct pci_dev *dev, int nvec);
+-extern void apcie_free_irqs(unsigned int virq, unsigned int nr_irqs);
++extern int aeolia_assign_irqs(struct pci_dev *dev, int nvec);
++extern void aeolia_free_irqs(unsigned int virq, unsigned int nr_irqs);
+ 
+ typedef void (*ps4sb_icc_event_fn)(void *ctx, u16 minor, const u8 *data,
+ 				   u16 length);
+@@ -49,8 +49,8 @@ extern int ps4sb_status(void);
+ extern int ps4sb_assign_irqs(struct pci_dev *dev, int nvec);
+ extern void ps4sb_free_irqs(unsigned int virq, unsigned int nr_irqs);
+ extern bool ps4_is_baikal(void);
+-extern int bpcie_assign_irqs(struct pci_dev *dev, int nvec);
+-extern void bpcie_free_irqs(unsigned int virq, unsigned int nr_irqs);
++extern int baikal_assign_irqs(struct pci_dev *dev, int nvec);
++extern void baikal_free_irqs(unsigned int virq, unsigned int nr_irqs);
+ extern void ps4sb_icc_reboot(void);
+ extern int ps4sb_icc_cmd(u8 major, u16 minor, const void *data,
+ 			 u16 length, void *reply, u16 reply_length);
+diff --git a/arch/x86/platform/ps4/ps4.c b/arch/x86/platform/ps4/ps4.c
+index 564eb3112751750041587f2184e884f351dd09d2..9dade8e2612ce3797b2b08bcd25dccbc5d836578 100644
+--- a/arch/x86/platform/ps4/ps4.c
++++ b/arch/x86/platform/ps4/ps4.c
+@@ -56,17 +56,17 @@ EXPORT_SYMBOL_GPL(ps4sb_status);
+ 
+ int ps4sb_assign_irqs(struct pci_dev *dev, int nvec)
+ {
+-	return is_baikal ? bpcie_assign_irqs(dev, nvec) :
+-			   apcie_assign_irqs(dev, nvec);
++	return is_baikal ? baikal_assign_irqs(dev, nvec) :
++			   aeolia_assign_irqs(dev, nvec);
+ }
+ EXPORT_SYMBOL_GPL(ps4sb_assign_irqs);
+ 
+ void ps4sb_free_irqs(unsigned int virq, unsigned int nr_irqs)
+ {
+ 	if (is_baikal)
+-		bpcie_free_irqs(virq, nr_irqs);
++		baikal_free_irqs(virq, nr_irqs);
+ 	else
+-		apcie_free_irqs(virq, nr_irqs);
++		aeolia_free_irqs(virq, nr_irqs);
+ }
+ EXPORT_SYMBOL_GPL(ps4sb_free_irqs);
+ 
+diff --git a/drivers/ata/ahci.c b/drivers/ata/ahci.c
+index 2d2844c1c4d74a35b7d2e5f84ab9aa614433ede8..7cad1ac6888d37a0db4698d39be4d3221262b9ab 100644
+--- a/drivers/ata/ahci.c
++++ b/drivers/ata/ahci.c
+@@ -3087,7 +3087,7 @@ static int ahci_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	if (pdev->vendor == PCI_VENDOR_ID_SONY &&
+ 	    pdev->device == PCI_DEVICE_ID_SONY_BAIKAL_AHCI) {
+ 		if (!ahci_baikal_shared_phy_seeded(pdev)) {
+-			rc = bpcie_baikal_sata_phy_init(pdev, hpriv->mmio);
++			rc = baikal_sata_phy_init(pdev, hpriv->mmio);
+ 			if (rc)
+ 				goto err_rm_sysfs_file;
+ 		} else {
+@@ -3273,7 +3273,7 @@ static void ahci_remove_one(struct pci_dev *pdev)
+ }
+ 
+ #ifdef CONFIG_X86_PS4
+-void bpcie_sata_phy_init(struct device *dev, struct ahci_controller *ctlr)
++void ps4sb_sata_phy_init(struct device *dev, struct ahci_controller *ctlr)
+ {
+ 	int i;
+ 	u32 v;
+@@ -3288,27 +3288,27 @@ void bpcie_sata_phy_init(struct device *dev, struct ahci_controller *ctlr)
+ 	}
+ 
+  	//step 1
+-  	bpcie_ahci_write(ctlr->r_mem, 0x178, 0x81);
++  	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0x81);
+ 
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffff00) | 1);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffff00) | 1);
+ 
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0xa5);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0xa5);
+ 
+ 	//step 2
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
+ 
+ 	if (ctlr->dev_id == 0x90ca104d || ctlr->dev_id == 0x909f104d || ctlr->dev_id == 0x90d9104d) {
+ 		is_phy_gen_3 = false;
+-		bpcie_ahci_write(ctlr->r_mem, 0x17c, v & 0xfffff3ff);
++		ps4sb_ahci_write(ctlr->r_mem, 0x17c, v & 0xfffff3ff);
+ 	} else {
+-		u32 v2 = bpcie_ahci_read(ctlr->r_mem, 0);
++		u32 v2 = ps4sb_ahci_read(ctlr->r_mem, 0);
+ 	  	if ((v2 & 0xf00000) != 0x300000) {
+-	    		bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff3ff) | 0x400);
++	    		ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff3ff) | 0x400);
+ 	    		is_phy_gen_3 = false;
+ 	  	} else {
+ 	    		 dev_info(dev,"PHY SET GEN3\n");
+-	    		 bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff3ff) | 0x800);
++	    		 ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff3ff) | 0x800);
+ 	    		 is_phy_gen_3 = true;
+ 	  	}
+ 	}
+@@ -3325,163 +3325,163 @@ void bpcie_sata_phy_init(struct device *dev, struct ahci_controller *ctlr)
+ 
+ 	dev_info(dev,"Belize SATA PHY Trace length : %d\n",trace_length);
+ 
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0xa3);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0xa3);
+ 
+ 	//--- step 4 ---
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff3ff) | 0x800);
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0xd0);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff3ff) | 0x800);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0xd0);
+ 
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff800) | 0x441);
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0xe1);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff800) | 0x441);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0xe1);
+ 
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffff8f) | 0x60);
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0xd0);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffff8f) | 0x60);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0xd0);
+ 
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffff3fff) | 0x8000);
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0xf1);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffff3fff) | 0x8000);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0xf1);
+ 
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff3ff) | 0x400);
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0x48);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff3ff) | 0x400);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0x48);
+ 
+ 	//--- step 5 ---
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, 0x62d8);
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0xe);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, 0x62d8);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0xe);
+ 
+ 	//--- step 6 ---
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, v & 0xffffdfff);
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0x8d);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, v & 0xffffdfff);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0x8d);
+ 
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, v | 1);
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0x8f);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, v | 1);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0x8f);
+ 
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, v | 1);
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0x91);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, v | 1);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0x91);
+ 
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, v | 1);
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0x8d);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, v | 1);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0x8d);
+ 
+ 	//--- step 7 ---
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
+ 	if (trace_length >= 0xe) {
+-		bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffffc1) | 0x28);
++		ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffffc1) | 0x28);
+ 	} else {
+ 		if (trace_length < 0xb) {
+-	    		bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffffc1) | 8);
++	    		ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffffc1) | 8);
+ 	  	} else {
+-	    		bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffffc1) | 0x10);
++	    		ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffffc1) | 0x10);
+ 	  	}
+ 	}
+ 
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0x8f);
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffffc1) | 0x12);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0x8f);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffffc1) | 0x12);
+ 
+ 	//--- step 8 ---
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0x91);
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0x91);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
+ 	if (trace_length < 5) {
+-		bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffffc1) | 0x24);
++		ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffffc1) | 0x24);
+ 	} else {
+-	  	bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffffc1) | 0x2a);
++	  	ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffffc1) | 0x2a);
+ 	}
+ 
+ 	//--- step 9 ---
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0xff);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, 1);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0xff);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, 1);
+ 
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0x97);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0x97);
+ 
+ 	//--- step 10 ---
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
+ 	if (is_phy_gen_3) {
+-		bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffff80) | 0xd3);
++		ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffff80) | 0xd3);
+ 	} else {
+-	  	bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffff80) | 0xee);
++	  	ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffff80) | 0xee);
+ 	}
+ 
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0x95);
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffff00) | 0xee);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0x95);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffff00) | 0xee);
+ 
+ 	//--- step 11 ---
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0xff);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, 0);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0xff);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, 0);
+ 
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0x8d);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0x8d);
+ 
+ 	//--- step 12 ---
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
+ 	if (trace_length < 0xe) {
+-		bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff87f) | 0x900);
++		ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff87f) | 0x900);
+ 	} else {
+-		bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff87f) | 0xe00);
++		ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff87f) | 0xe00);
+ 	}
+ 
+ 	//--- step 13 ---
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0x8f);
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff07f) | 0x900);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0x8f);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff07f) | 0x900);
+ 
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0x91);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0x91);
+ 
+ 	//--- step 14 ---
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
+ 	if (is_phy_gen_3) {
+-		bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff87f) | 0xd00);
++		ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff87f) | 0xd00);
+ 	} else {
+-		bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff87f) | 0xe80);
++		ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xfffff87f) | 0xe80);
+ 	}
+ 
+ 	//--- step 15 ---
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 200);
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, v & 0xffffefff);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 200);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, v & 0xffffefff);
+ 
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 10);
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, v & 0xffffefff);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 10);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, v & 0xffffefff);
+ 
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0x82);
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, v | 0x1000);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0x82);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, v | 0x1000);
+ 
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0xc9);
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, v | 0x1000);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0xc9);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, v | 0x1000);
+ 
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0x84);
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffffc0) | 0xc);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0x84);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffffffc0) | 0xc);
+ 
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0x8d);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0x8d);
+ 
+ 	//--- step 16 ---
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
+ 	v = v & 0xffff0fff;
+ 	if (trace_length < 0xe) {
+-		bpcie_ahci_write(ctlr->r_mem, 0x17c, v | 0x8000);
++		ps4sb_ahci_write(ctlr->r_mem, 0x17c, v | 0x8000);
+ 	} else {
+-		bpcie_ahci_write(ctlr->r_mem, 0x17c, v);
++		ps4sb_ahci_write(ctlr->r_mem, 0x17c, v);
+ 	}
+ 
+ 	//--- step 17 ---
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0x8f);
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
+-	bpcie_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffff0fff) | 0x8000);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0x8f);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x17c, (v & 0xffff0fff) | 0x8000);
+ 
+ 	//--- step 18 ---
+-	bpcie_ahci_write(ctlr->r_mem, 0xa0, 0);
+-	v = bpcie_ahci_read(ctlr->r_mem, 0xa4);
+-	bpcie_ahci_write(ctlr->r_mem, 0xa4, v | 0x40);
++	ps4sb_ahci_write(ctlr->r_mem, 0xa0, 0);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0xa4);
++	ps4sb_ahci_write(ctlr->r_mem, 0xa4, v | 0x40);
+ 
+ 	//--- step 19 ---
+ 	if (ctlr->dev_id != 0x909f104d && ctlr->dev_id != 0x90ca104d && ctlr->dev_id != 0x90d9104d) {
+@@ -3491,12 +3491,12 @@ void bpcie_sata_phy_init(struct device *dev, struct ahci_controller *ctlr)
+ 	}
+ 
+ 	//--- step 20 ---
+-	bpcie_ahci_write(ctlr->r_mem, 0xa0, 4);
+-	v = bpcie_ahci_read(ctlr->r_mem, 0xa4);
+-	bpcie_ahci_write(ctlr->r_mem, 0xa4, (v & 0x88ffffff) | v2);
++	ps4sb_ahci_write(ctlr->r_mem, 0xa0, 4);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0xa4);
++	ps4sb_ahci_write(ctlr->r_mem, 0xa4, (v & 0x88ffffff) | v2);
+ 
+ 	//--- step 21 ---
+-	v = bpcie_ahci_read(ctlr->r_mem, 0xa4);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0xa4);
+ 
+ 	//--- step 22 ---
+ 	for (i = 0; i < 100; i++) {
+@@ -3504,8 +3504,8 @@ void bpcie_sata_phy_init(struct device *dev, struct ahci_controller *ctlr)
+ 	}
+ 
+ 	//--- step 23 ---
+-	bpcie_ahci_write(ctlr->r_mem, 0x178, 0xf9);
+-	v = bpcie_ahci_read(ctlr->r_mem, 0x17c);
++	ps4sb_ahci_write(ctlr->r_mem, 0x178, 0xf9);
++	v = ps4sb_ahci_read(ctlr->r_mem, 0x17c);
+ 
+ 	if (is_phy_gen_3) {
+ 		dev_info(dev,"Align 90=0x%02x\n",v & 0x7f);
+@@ -3513,7 +3513,7 @@ void bpcie_sata_phy_init(struct device *dev, struct ahci_controller *ctlr)
+ 	//done!
+ }
+ 
+-EXPORT_SYMBOL_GPL(bpcie_sata_phy_init);
++EXPORT_SYMBOL_GPL(ps4sb_sata_phy_init);
+ #endif
+ 
+ module_pci_driver(ahci_pci_driver);
+diff --git a/drivers/ata/ahci.h b/drivers/ata/ahci.h
+index fc562b97d51b6134e4db610c5854cfab1baa9381..88554dedf56992755769e6d563ed6ebbe16f4f6d 100644
+--- a/drivers/ata/ahci.h
++++ b/drivers/ata/ahci.h
+@@ -487,22 +487,22 @@ struct ahci_controller{
+ 	u32 trace_len;
+ };
+ 
+-void bpcie_sata_phy_init(struct device *dev, struct ahci_controller *ctlr);
++void ps4sb_sata_phy_init(struct device *dev, struct ahci_controller *ctlr);
+ #ifdef CONFIG_X86_PS4
+-int bpcie_baikal_sata_phy_init(struct pci_dev *pdev, void __iomem *ahci_mmio);
++int baikal_sata_phy_init(struct pci_dev *pdev, void __iomem *ahci_mmio);
+ #else
+-static inline int bpcie_baikal_sata_phy_init(struct pci_dev *pdev,
++static inline int baikal_sata_phy_init(struct pci_dev *pdev,
+ 					     void __iomem *ahci_mmio)
+ {
+ 	return -ENODEV;
+ }
+ #endif
+ 
+-static inline void bpcie_ahci_write(struct f_resource *r_mem, u32 offset, u32 val) {
++static inline void ps4sb_ahci_write(struct f_resource *r_mem, u32 offset, u32 val) {
+ 	iowrite32(val, r_mem->r_bushandle + offset);
+ }
+ 
+-static inline u32 bpcie_ahci_read(struct f_resource *r_mem, u32 offset) {
++static inline u32 ps4sb_ahci_read(struct f_resource *r_mem, u32 offset) {
+ 		return ioread32(r_mem->r_bushandle + offset);
+ }
+ #endif
+diff --git a/drivers/net/ethernet/marvell/sky2.c b/drivers/net/ethernet/marvell/sky2.c
+index 11d71a097b9eea3602f6a258fce7a4f1678f310b..ddec74bd94a4a41b8cf8ae07c7ecd918f5299c4f 100644
+--- a/drivers/net/ethernet/marvell/sky2.c
++++ b/drivers/net/ethernet/marvell/sky2.c
+@@ -40,7 +40,7 @@
+ 
+ #ifdef CONFIG_X86_PS4
+ #include <asm/ps4.h>
+-#include "../../../ps4/aeolia.h"
++#include "../../../ps4/ps4sb.h"
+ #endif
+ 
+ #include "sky2.h"
+@@ -4628,13 +4628,13 @@ static void aeolia_get_mac_address(struct sky2_hw *hw, unsigned char *addr) {
+ 		return;
+ 	}
+ 
+-	bp_base = pci_resource_start(mem_dev, 5) + APCIE_SPM_BP_BASE;
+-	if (!request_mem_region(bp_base, APCIE_SPM_BP_SIZE, "spm.bp")) {
++	bp_base = pci_resource_start(mem_dev, 5) + AEOLIA_SPM_BP_BASE;
++	if (!request_mem_region(bp_base, AEOLIA_SPM_BP_SIZE, "spm.bp")) {
+ 		dev_err(&hw->pdev->dev, "sky2: failed to request bootparam SPM region\n");
+ 		return;
+ 	}
+ 
+-	bp = ioremap(bp_base, APCIE_SPM_BP_SIZE);
++	bp = ioremap(bp_base, AEOLIA_SPM_BP_SIZE);
+ 	if (!bp) {
+ 		dev_err(&hw->pdev->dev, "sky2: failed to map bootparam portion of SPM\n");
+ 		goto release_bp;
+@@ -4644,7 +4644,7 @@ static void aeolia_get_mac_address(struct sky2_hw *hw, unsigned char *addr) {
+ 
+ 	iounmap(bp);
+ release_bp:
+-	release_mem_region(bp_base, APCIE_SPM_BP_SIZE);
++	release_mem_region(bp_base, AEOLIA_SPM_BP_SIZE);
+ }
+ #endif
+ 
+diff --git a/drivers/ps4/Makefile b/drivers/ps4/Makefile
+index 87185bad571c1a9e07eee2ef3fca943db5035a11..912054b43935cdf1e78561c083705cc5300f6998 100644
+--- a/drivers/ps4/Makefile
++++ b/drivers/ps4/Makefile
+@@ -2,16 +2,16 @@
+ # LISTED IN INIT ORDER \o/ ...  ._.
+ # N.B. this driver must be init'd before pretty much everything, but actual dependants are:
+ # drivers/net/ethernet/marvell/sky2 (implements ps4-gbe)
+-obj-y += ps4-apcie.o \
+-    ps4-bpcie.o \
++obj-y += sb-aeolia.o \
++    sb-baikal.o \
+     sb-uart.o \
+     sb-icc.o \
+-    ps4-apcie-pwrbutton.o \
+-    icc/i2c.o
++    sb-icc-pwrbutton.o \
++    sb-icc-i2c.o
+ obj-$(CONFIG_RTC_CLASS) += sb-rtc.o
+ obj-y += ps4-led.o
+ obj-y += ps4-fan.o
+ obj-y += ps4-buzzer.o
+-obj-y += ps4-sflash.o
++obj-y += sb-sflash.o
+ obj-$(CONFIG_PS4_TRNG) += ps4-trng.o
+ obj-$(CONFIG_PS4_CCP) += ps4-ccp.o
+\ No newline at end of file
+diff --git a/drivers/ps4/aeolia.h b/drivers/ps4/aeolia.h
+deleted file mode 100644
+index 251b298a54f9acbfb91a33b98d666d834be34808..0000000000000000000000000000000000000000
+--- a/drivers/ps4/aeolia.h
++++ /dev/null
+@@ -1,115 +0,0 @@
+-#ifndef _AEOLIA_H
+-#define _AEOLIA_H
+-
+-#include <linux/io.h>
+-#include <linux/pci.h>
+-#include <linux/i2c.h>
+-#include "ps4sb.h"
+-
+-#define apcie_dev		ps4sb_dev
+-
+-enum aeolia_func_id {
+-	AEOLIA_FUNC_ID_ACPI = 0,
+-	AEOLIA_FUNC_ID_GBE,
+-	AEOLIA_FUNC_ID_AHCI,
+-	AEOLIA_FUNC_ID_SDHCI,
+-	AEOLIA_FUNC_ID_PCIE,
+-	AEOLIA_FUNC_ID_DMAC,
+-	AEOLIA_FUNC_ID_MEM,
+-	AEOLIA_FUNC_ID_XHCI,
+-
+-	AEOLIA_NUM_FUNCS
+-};
+-
+-/* MSI registers for up to 31, but only 23 known. */
+-#define APCIE_NUM_SUBFUNC		23
+-
+-/* Sub-functions, aka MSI vectors */
+-enum apcie_subfunc {
+-	APCIE_SUBFUNC_GLUE	= 0,
+-	APCIE_SUBFUNC_ICC	= 3,
+-	APCIE_SUBFUNC_HPET	= 5,
+-	APCIE_SUBFUNC_SFLASH	= 11,
+-	APCIE_SUBFUNC_RTC	= 13,
+-	APCIE_SUBFUNC_UART0	= 19,
+-	APCIE_SUBFUNC_UART1	= 20,
+-	APCIE_SUBFUNC_TWSI	= 21,
+-
+-	APCIE_NUM_SUBFUNCS	= 23
+-};
+-
+-#define APCIE_NR_UARTS 2
+-
+-/* Relative to BAR2 */
+-#define APCIE_RGN_RTC_BASE		0x0
+-#define APCIE_RGN_RTC_SIZE		0x1000
+-
+-#define APCIE_RGN_CHIPID_BASE		0x1000
+-#define APCIE_RGN_CHIPID_SIZE		0x1000
+-
+-#define APCIE_REG_CHIPID_0		0x1104
+-#define APCIE_REG_CHIPID_1		0x1108
+-#define APCIE_REG_CHIPREV		0x110c
+-
+-/* Relative to BAR4 */
+-#define APCIE_RGN_UART_BASE		0x140000
+-#define APCIE_RGN_UART_SIZE		0x1000
+-
+-#define APCIE_RGN_PCIE_BASE		0x1c8000
+-#define APCIE_RGN_PCIE_SIZE		0x1000
+-
+-#define APCIE_RGN_ICC_BASE		0x184000
+-#define APCIE_RGN_ICC_SIZE		0x1000
+-
+-#define APCIE_REG_BAR(x)		(APCIE_RGN_PCIE_BASE + (x))
+-#define APCIE_REG_BAR_MASK(func, bar)	APCIE_REG_BAR(((func) * 0x30) + \
+-						((bar) << 3))
+-#define APCIE_REG_BAR_ADDR(func, bar)	APCIE_REG_BAR(((func) * 0x30) + \
+-						((bar) << 3) + 0x4)
+-
+-#define APCIE_REG_MSI(x)		(APCIE_RGN_PCIE_BASE + 0x400 + (x))
+-#define APCIE_REG_MSI_CONTROL		APCIE_REG_MSI(0x0)
+-#define APCIE_REG_MSI_MASK(func)	APCIE_REG_MSI(0x4c + ((func) << 2))
+-#define APCIE_REG_MSI_DATA_HI(func)	APCIE_REG_MSI(0x8c + ((func) << 2))
+-#define APCIE_REG_MSI_ADDR(func)	APCIE_REG_MSI(0xac + ((func) << 2))
+-/* This register has non-uniform structure per function, dealt with in code */
+-#define APCIE_REG_MSI_DATA_LO(off)	APCIE_REG_MSI(0x100 + (off))
+-
+-/* Not sure what the two individual bits do */
+-#define APCIE_REG_MSI_CONTROL_ENABLE	0x05
+-
+-/* Enable for the entire function, 4 is special */
+-#define APCIE_REG_MSI_MASK_FUNC		0x01000000
+-#define APCIE_REG_MSI_MASK_FUNC4	0x80000000
+-
+-#define APCIE_REG_ICC(x)		(APCIE_RGN_ICC_BASE + (x))
+-#define APCIE_REG_ICC_DOORBELL		APCIE_REG_ICC(0x804)
+-#define APCIE_REG_ICC_STATUS		APCIE_REG_ICC(0x814)
+-#define APCIE_REG_ICC_IRQ_MASK		APCIE_REG_ICC(0x824)
+-
+-/* Apply to both DOORBELL and STATUS */
+-#define APCIE_ICC_SEND			0x01
+-#define APCIE_ICC_ACK			0x02
+-
+-/* Relative to func6 BAR5 */
+-#define APCIE_SPM_ICC_BASE		0x2c000
+-#define APCIE_SPM_ICC_SIZE		0x1000
+-
+-/* Boot params passed from southbridge */
+-#define APCIE_SPM_BP_BASE		0x2f000
+-#define APCIE_SPM_BP_SIZE		0x20
+-
+-#define APCIE_SPM_ICC_REQUEST		0x0
+-#define APCIE_SPM_ICC_REPLY		0x800
+-
+-static inline int apcie_irqnum(struct apcie_dev *sc, int index)
+-{
+-	if (sc->nvec > 1) {
+-		return sc->pdev->irq + index;
+-	} else {
+-		return sc->pdev->irq;
+-	}
+-}
+-
+-
+-#endif
+diff --git a/drivers/ps4/baikal.h b/drivers/ps4/baikal.h
+deleted file mode 100644
+index 8c052b33ff052803368ea6b79569da8b88cef084..0000000000000000000000000000000000000000
+--- a/drivers/ps4/baikal.h
++++ /dev/null
+@@ -1,165 +0,0 @@
+-#ifndef _BAIKAL_H
+-#define _BAIKAL_H
+-
+-#include <linux/io.h>
+-#include <linux/pci.h>
+-#include <linux/i2c.h>
+-#include "ps4sb.h"
+-
+-#define bpcie_dev		ps4sb_dev
+-enum baikal_func_id {
+-	BAIKAL_FUNC_ID_ACPI = 0,
+-	BAIKAL_FUNC_ID_GBE,
+-	BAIKAL_FUNC_ID_AHCI,
+-	BAIKAL_FUNC_ID_SDHCI,
+-	BAIKAL_FUNC_ID_PCIE,
+-	BAIKAL_FUNC_ID_DMAC,
+-	BAIKAL_FUNC_ID_MEM,
+-	BAIKAL_FUNC_ID_XHCI,
+-
+-	BAIKAL_NUM_FUNCS
+-};
+-
+-enum bpcie_subfuncs_per_func {
+-	SUBFUNCS_PER_FUNC4 = 31,
+-	SUBFUNCS_PER_FUNC2 = 1,
+-	SUBFUNCS_PER_FUNC7 = 3,
+-	SUBFUNCS_PER_FUNC0 = 2,
+-	SUBFUNCS_PER_FUNC1 = 1,
+-	SUBFUNCS_PER_FUNC3 = 1,
+-	SUBFUNCS_PER_FUNC5 = 2,
+-	SUBFUNCS_PER_FUNC6 = 3,
+-};
+-
+-enum bpcie_subfunc {
+-	BPCIE_SUBFUNC_GLUE	= 0,
+-	BPCIE_SUBFUNC_ICC	= 3,
+-	BPCIE_SUBFUNC_HPET	= 22,
+-	BPCIE_SUBFUNC_SFLASH	= 19,
+-	BPCIE_SUBFUNC_RTC	= 21,
+-	BPCIE_SUBFUNC_UART0	= 26,
+-	BPCIE_SUBFUNC_UART1	= 27,
+-
+-	BPCIE_SUBFUNC_USB0	= 0, BPCIE_SUBFUNC_USB2 = 2,
+-	BPCIE_SUBFUNC_ACPI= 1,
+-	BPCIE_SUBFUNC_SPM = 1,
+-	BPCIE_SUBFUNC_DMAC1	= 0,
+-	BPCIE_SUBFUNC_DMAC2	= 1,
+-	BPCIE_NUM_SUBFUNCS	= 32
+-};
+-
+-#define BPCIE_NR_UARTS 1
+-
+-#define BPCIE_RGN_CHIPID_BASE		0x4000
+-#define BPCIE_RGN_CHIPID_SIZE		0x9000
+-
+-#define BPCIE_REG_CHIPID_0		0xC020
+-#define BPCIE_REG_CHIPID_1		0xC024
+-#define BPCIE_REG_CHIPREV		0x4084
+-
+-#define BPCIE_HPET_BASE         0x109000
+-#define BPCIE_HPET_SIZE         0x400
+-
+-#define BPCIE_RGN_UART_BASE		0x10E000
+-#define BPCIE_RGN_UART_SIZE		0x1000
+-#define BPCIE_RGN_ICC_BASE		(0x108000 - 0x800)
+-#define BPCIE_RGN_ICC_SIZE		0x1000
+-
+-#define BPCIE_ACK_WRITE 		0x110084
+-#define BPCIE_ACK_READ  		0x110088
+-
+-#define BPCIE_REG_ICC(x)		(BPCIE_RGN_ICC_BASE + (x))
+-#define BPCIE_REG_ICC_DOORBELL		BPCIE_REG_ICC(0x804)
+-#define BPCIE_REG_ICC_STATUS		BPCIE_REG_ICC(0x814)
+-#define BPCIE_REG_ICC_IRQ_MASK		BPCIE_REG_ICC(0x824)
+-
+-#define BPCIE_ICC_SEND			0x01
+-#define BPCIE_ICC_ACK			0x02
+-
+-#define BPCIE_USB_BASE			0x180000
+-
+-#define BPCIE_SPM_ICC_BASE		0x2c000
+-#define BPCIE_SPM_ICC_SIZE		0x1000
+-
+-#define BPCIE_SPM_BP_BASE		0x2f000
+-#define BPCIE_SPM_BP_SIZE		0x20
+-
+-#define BPCIE_SPM_ICC_REQUEST		0x0
+-#define BPCIE_SPM_ICC_REPLY		0x800
+-
+-static inline int bpcie_irqnum(struct bpcie_dev *sc, int index)
+-{
+-	
+-	if (sc->nvec > 1) {
+-		return sc->pdev->irq + index;
+-	} else {
+-		return sc->pdev->irq;
+-	}
+-}
+-
+-
+-#define CHAR_BIT 8
+-static inline u32 rol (u32 n, unsigned int c) {
+-	const unsigned int mask = (CHAR_BIT*sizeof(n) - 1);
+-
+-	c &= mask;
+-	return (n<<c) | (n>>( (-c)&mask ));
+-}
+-
+-static inline u32 ror (u32 n, unsigned int c) {
+-	const unsigned int mask = (CHAR_BIT*sizeof(n) - 1);
+-
+-	c &= mask;
+-	return (n>>c) | (n<<( (-c)&mask ));
+-}
+-
+-static inline void cpu_stop(void)
+-{
+-    for (;;)
+-        asm volatile("cli; hlt;" : : : "memory");
+-}
+-
+-static inline void stop_hpet_timers(struct bpcie_dev *sc) {
+-		*(volatile u64 *)(sc->bar2 + BPCIE_HPET_BASE + 0x10) &= ~(1UL << 0);
+-		u64 NUM_TIM_CAP;
+-		NUM_TIM_CAP = *(volatile u64 *)(sc->bar2 + BPCIE_HPET_BASE) & 0x1F00;
+-		u64 N;
+-		for (N = 0; N <= NUM_TIM_CAP; N++) {
+-			*(volatile u64 *)(sc->bar2 + BPCIE_HPET_BASE + (0x20*N) + 0x100) &= ~(1UL << 2);
+-		}
+-		cpu_stop();
+-}
+-
+-static inline int pci_pm_stop(struct pci_dev *dev)
+-{
+-	u16 csr;
+-
+-	if (!dev->pm_cap)
+-		return -ENOTTY;
+-
+-	pci_read_config_word(dev, dev->pm_cap + PCI_PM_CTRL, &csr);
+-
+-	csr &= ~PCI_PM_CTRL_STATE_MASK;
+-	csr |= PCI_D3hot;
+-	pci_write_config_word(dev, dev->pm_cap + PCI_PM_CTRL, csr);
+-
+-	return 0;
+-}
+-
+-static inline void pci_pm_stop_all(struct pci_dev *dev)
+-{
+-	struct pci_dev *sc_dev;
+-	unsigned int func;
+-	for (func = 0; func < 8; ++func) {
+-		sc_dev = pci_get_slot(pci_find_bus(pci_domain_nr(dev->bus), 0), PCI_DEVFN(20, func));
+-		pci_pm_stop(sc_dev);
+-	}
+-	cpu_stop();
+-}
+-
+-int bpcie_is_compatible_device(struct pci_dev *dev);
+-u32 glue_read32(struct bpcie_dev *sc, u32 offset);
+-void glue_write32(struct bpcie_dev *sc, u32 offset, u32 value);
+-int bpcie_baikal_sata_phy_init(struct pci_dev *pdev, void __iomem *ahci_mmio);
+-
+-#endif
+diff --git a/drivers/ps4/icc/i2c.c b/drivers/ps4/icc/i2c.c
+deleted file mode 100644
+index b7d10341971c654635b61ade7fbd90efbf11fbf4..0000000000000000000000000000000000000000
+--- a/drivers/ps4/icc/i2c.c
++++ /dev/null
+@@ -1,166 +0,0 @@
+-#include <linux/serial_8250.h>
+-#include <linux/serial_core.h>
+-#include <linux/serial_reg.h>
+-
+-#include <asm/ps4.h>
+-
+-#include "../aeolia.h"
+-
+-#define ICC_MAX_READ_DATA 0xff
+-#define ICC_MAX_WRITE_DATA 0xf8
+-#define ICC_REPLY_HEADER_SIZE 0x14
+-
+-u32 icc_i2c_functionality(struct i2c_adapter *adap);
+-int icc_i2c_init(struct apcie_dev *sc);
+-void icc_i2c_remove(struct apcie_dev *sc);
+-
+-
+-/* This is actually multiple nested variable length structures, but since we
+- * currently only support one op per transaction, we hardcode it. */
+-struct icc_i2c_msg {
+-	/* Header */
+-	u8 code;
+-	u16 length;
+-	u8 count;
+-	struct {
+-		u8 major;
+-		u8 length;
+-		u8 minor;
+-		u8 count;
+-		struct {
+-			u8 length;
+-			u8 slave_addr;
+-			u8 reg_addr;
+-			u8 data[ICC_MAX_WRITE_DATA];
+-		} xfer;
+-	} cmd;
+-} __packed;
+-
+-static int icc_i2c_smbus_xfer(struct i2c_adapter *adapter, u16 addr,
+-			  unsigned short flags,
+-			  char read_write, u8 command, int size,
+-			  union i2c_smbus_data *data)
+-{
+-	struct apcie_dev *sc = i2c_get_adapdata(adapter);
+-	int ret;
+-	struct icc_i2c_msg msg;
+-	u8 resultbuf[ICC_REPLY_HEADER_SIZE + ICC_MAX_READ_DATA];
+-	int data_off = sc->family->i2c_data_off;
+-	int err_off = sc->family->i2c_err_off;
+-
+-	msg.code = 4; /* Don't really know what this is */
+-	msg.count = 1;
+-	msg.cmd.count = 1;
+-	msg.cmd.xfer.slave_addr = addr << 1;
+-	msg.cmd.xfer.reg_addr = command;
+-	if (read_write == I2C_SMBUS_READ) {
+-		msg.cmd.major = 1;
+-		msg.cmd.minor = 1;
+-		msg.cmd.length = 8;
+-		msg.cmd.xfer.data[0] = 0; /* unknown */
+-	} else {
+-		msg.cmd.major = 2;
+-		msg.cmd.minor = 2;
+-	}
+-
+-	switch (size) {
+-	case I2C_SMBUS_BYTE_DATA:
+-		msg.cmd.xfer.length = 1;
+-		if (read_write == I2C_SMBUS_WRITE) {
+-			msg.cmd.length = 8;
+-			msg.cmd.xfer.data[0] = data->byte;
+-		}
+-		break;
+-	case I2C_SMBUS_WORD_DATA:
+-		msg.cmd.xfer.length = 2;
+-		if (read_write == I2C_SMBUS_WRITE) {
+-			msg.cmd.length = 9;
+-			msg.cmd.xfer.data[0] = data->word & 0xff;
+-			msg.cmd.xfer.data[1] = data->word >> 8;
+-		}
+-		break;
+-	case I2C_SMBUS_I2C_BLOCK_DATA:
+-		msg.cmd.xfer.length = data->block[0];
+-		if (read_write == I2C_SMBUS_WRITE) {
+-			if (data->block[0] > ICC_MAX_WRITE_DATA) {
+-				sc_err("icc-i2c: transaction too large: %d\n",
+-				       data->block[0]);
+-				return -E2BIG;
+-			}
+-			msg.cmd.length = 7 + data->block[0];
+-			memcpy(msg.cmd.xfer.data, &data->block[1],
+-			       data->block[0]);
+-		}
+-		break;
+-	default:
+-		sc_err("icc-i2c: unsupported transaction %d\n", size);
+-		return -ENOTSUPP;
+-	}
+-
+-	msg.length = msg.cmd.length + 4;
+-	ret = ps4sb_icc_cmd(0x10, 0x0, &msg, msg.length, resultbuf,
+-		      sizeof(resultbuf));
+-	if (ret < err_off + 2 || ret > sizeof(resultbuf)) {
+-		sc_err("icc-i2c: icc command failed: %d\n", ret);
+-		return -EIO;
+-	}
+-	if (resultbuf[err_off] != 0 || resultbuf[err_off + 1] != 0) {
+-		sc_err("icc-i2c: i2c command failed: %d, %d\n",
+-		       resultbuf[err_off], resultbuf[err_off + 1]);
+-		return -EIO;
+-	}
+-
+-	if (read_write == I2C_SMBUS_READ)
+-		switch (size) {
+-		case I2C_SMBUS_BYTE_DATA:
+-			data->byte = resultbuf[data_off];
+-			break;
+-		case I2C_SMBUS_WORD_DATA:
+-			data->word = resultbuf[data_off] | (resultbuf[data_off + 1] << 8);
+-			break;
+-		case I2C_SMBUS_I2C_BLOCK_DATA:
+-			memcpy(&data->block[1], &resultbuf[data_off],
+-			       data->block[0]);
+-			break;
+-		}
+-
+-	return 0;
+-}
+-
+-u32 icc_i2c_functionality(struct i2c_adapter *adap)
+-{
+-	return I2C_FUNC_SMBUS_BYTE_DATA |
+-		I2C_FUNC_SMBUS_WORD_DATA |
+-		I2C_FUNC_SMBUS_I2C_BLOCK;
+-}
+-
+-static const struct i2c_algorithm icc_i2c_algo = {
+-	.smbus_xfer   = &icc_i2c_smbus_xfer,
+-	.functionality = &icc_i2c_functionality,
+-};
+-
+-
+-int icc_i2c_init(struct apcie_dev *sc)
+-{
+-	struct i2c_adapter *i2c;
+-	int ret;
+-
+-	i2c = &sc->icc.i2c;
+-	i2c->owner = THIS_MODULE;
+-	i2c->algo = &icc_i2c_algo;
+-	i2c->algo_data = NULL;
+-	i2c->dev.parent = &sc->pdev->dev;
+-	strncpy(i2c->name, "icc", sizeof(i2c->name));
+-	i2c_set_adapdata(i2c, sc);
+-	ret = i2c_add_adapter(i2c);
+-	if (ret < 0) {
+-		sc_err("failed to add i2c adapter\n");
+-		return ret;
+-	}
+-	return 0;
+-}
+-
+-void icc_i2c_remove(struct apcie_dev *sc)
+-{
+-	i2c_del_adapter(&sc->icc.i2c);
+-}
+diff --git a/drivers/ps4/ps4-apcie-pwrbutton.c b/drivers/ps4/ps4-apcie-pwrbutton.c
+deleted file mode 100644
+index ed5c28f7f6baef8d46a0dd58d4b522f5ba9d4a64..0000000000000000000000000000000000000000
+--- a/drivers/ps4/ps4-apcie-pwrbutton.c
++++ /dev/null
+@@ -1,76 +0,0 @@
+-#include <linux/input.h>
+-#include <asm/ps4.h>
+-#include "aeolia.h"
+-
+-/* Prototype declarations */
+-void icc_pwrbutton_trigger(struct apcie_dev *sc, int state);
+-int icc_pwrbutton_init(struct apcie_dev *sc);
+-void icc_pwrbutton_remove(struct apcie_dev *sc);
+-/* ---------------------- */ //this file just felt very empty at the top hence the comments
+-
+-void icc_pwrbutton_trigger(struct apcie_dev *sc, int state)
+-{
+-	if (sc->icc.pwrbutton_dev) {
+-		input_report_key(sc->icc.pwrbutton_dev, KEY_POWER, state ? 1 : 0);
+-		input_sync(sc->icc.pwrbutton_dev);
+-	}
+-}
+-
+-int icc_pwrbutton_init(struct apcie_dev *sc)
+-{
+-	int ret = 0;
+-	u16 button;
+-	struct input_dev *dev;
+-
+-	dev = input_allocate_device();
+-	if (!dev) {
+-		sc_err("%s: Not enough memory.\n", __func__);
+-		return -ENOMEM;
+-	}
+-
+-	set_bit(EV_KEY, dev->evbit);
+-	set_bit(KEY_POWER, dev->keybit);
+-
+-	dev->name = "Power Button";
+-	dev->id.bustype = BUS_HOST;
+-
+-	/* this makes the button look like an acpi power button
+-	 * no clue whether anyone relies on that though */
+-	dev->id.product = 0x02;
+-	dev->phys = "LNXPWRBN/button/input0";
+-
+-	dev->dev.parent = &sc->pdev->dev;
+-	ret = input_register_device(dev);
+-	if (ret) {
+-		sc_err("%s: Failed to register device\n", __func__);
+-		input_free_device(dev);
+-		return ret;
+-	}
+-
+-	sc->icc.pwrbutton_dev = dev;
+-
+-	// enable power button notifications
+-	button = 0x100;
+-	ret = ps4sb_icc_cmd(8, 1, &button, sizeof(button), NULL, 0);
+-	if (ret < 0) {
+-		sc_info("%s: Failed to enable power notifications (%d)\n",
+-			__func__, ret);
+-	}
+-
+-	// enable reset button notifications (?)
+-	button = 0x102;
+-	ret = ps4sb_icc_cmd(8, 1, &button, sizeof(button), NULL, 0);
+-	if (ret < 0) {
+-		sc_info("%s: Failed to enable reset notifications (%d)\n",
+-		        __func__, ret);
+-	}
+-
+-	return 0;
+-}
+-
+-void icc_pwrbutton_remove(struct apcie_dev *sc)
+-{
+-	if (sc->icc.pwrbutton_dev)
+-		input_unregister_device(sc->icc.pwrbutton_dev);
+-	sc->icc.pwrbutton_dev = NULL;
+-}
+diff --git a/drivers/ps4/ps4-apcie.c b/drivers/ps4/ps4-apcie.c
+deleted file mode 100644
+index bdf0bfe386b04bebc128f743b70e11d046c0cf1b..0000000000000000000000000000000000000000
+--- a/drivers/ps4/ps4-apcie.c
++++ /dev/null
+@@ -1,713 +0,0 @@
+-#include <linux/kernel.h>
+-#include <linux/module.h>
+-#include <linux/pci.h>
+-#include <linux/init.h>
+-#include <linux/irq.h>
+-#include <linux/irqchip.h>
+-#include <linux/irqdomain.h>
+-#include <linux/msi.h>
+-#include <asm/apic.h>
+-#include <asm/irqdomain.h>
+-#include <asm/irq_remapping.h>
+-
+-#include <asm/msi.h>
+-
+-#include <asm/ps4.h>
+-
+-#include "aeolia.h"
+-
+-
+-#define     MSI_DATA_VECTOR_SHIFT	0
+-#define	    MSI_DATA_VECTOR(v)		(((u8)v) << MSI_DATA_VECTOR_SHIFT)
+-#define     MSI_DATA_VECTOR_MASK	0xffffff00
+-
+-/* #define QEMU_HACK_NO_IOMMU */
+-
+-/* Number of implemented MSI registers per function */
+-static const int subfuncs_per_func[AEOLIA_NUM_FUNCS] = {
+-	4, 4, 4, 4, 31, 2, 2, 4
+-};
+-
+-struct apcie_irq_data {
+-	struct apcie_dev *sc;
+-	u8 msi_data;
+-};
+-
+-struct apcie_msi_domain_ctx {
+-	struct irq_chip controller;
+-	struct msi_domain_info info;
+-};
+-
+-static inline u32 glue_read32(struct apcie_dev *sc, u32 offset) {
+-	return ioread32(sc->bar4 + offset);
+-}
+-
+-static inline void glue_write32(struct apcie_dev *sc, u32 offset, u32 value) {
+-	iowrite32(value, sc->bar4 + offset);
+-}
+-
+-static inline void glue_set_region(struct apcie_dev *sc, u32 func, u32 bar,
+-			    u32 base, u32 mask) {
+-	glue_write32(sc, APCIE_REG_BAR_MASK(func, bar), mask);
+-	glue_write32(sc, APCIE_REG_BAR_ADDR(func, bar), base);
+-}
+-
+-static inline void glue_set_mask(struct apcie_dev *sc, u32 offset, u32 mask) {
+-	void __iomem *ptr = sc->bar4 + offset;
+-	iowrite32(ioread32(ptr) | mask, ptr);
+-}
+-
+-static inline void glue_clear_mask(struct apcie_dev *sc, u32 offset, u32 mask) {
+-	void __iomem *ptr = sc->bar4 + offset;
+-	iowrite32(ioread32(ptr) & ~mask, ptr);
+-}
+-
+-static inline void glue_mask_and_set(struct apcie_dev *sc, u32 offset, u32 mask, u32 set) {
+-	void __iomem *ptr = sc->bar4 + offset;
+-	iowrite32((ioread32(ptr) & ~mask) | set, ptr);
+-}
+-
+-static void apcie_config_msi(struct apcie_dev *sc, u32 func, u32 subfunc,
+-			     u32 addr, u32 data) {
+-	u32 offset;
+-
+-	sc_dbg("apcie_config_msi: func: %u, subfunc: %u, addr %08x data: 0x%08x (%u)\n",
+-		func, subfunc, addr, data, data);
+-
+-	glue_clear_mask(sc, APCIE_REG_MSI_CONTROL, APCIE_REG_MSI_CONTROL_ENABLE);
+-	/* Unknown */
+-	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4, APCIE_REG_MSI(0x8), 0xffffffff);
+-	glue_write32(sc, APCIE_REG_MSI(0x8), 0xffffffff);
+-	/* Unknown */
+-	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4, APCIE_REG_MSI(0xc + (func << 2)), 0xB7FFFF00 + func * 16);
+-	glue_write32(sc, APCIE_REG_MSI(0xc + (func << 2)), 0xB7FFFF00 + func * 16);
+-
+-	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4, APCIE_REG_MSI_ADDR(func), addr);
+-	glue_write32(sc, APCIE_REG_MSI_ADDR(func), addr);
+-	/* Unknown */
+-
+-	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4, APCIE_REG_MSI(0xcc + (func << 2)), 0);
+-	glue_write32(sc, APCIE_REG_MSI(0xcc + (func << 2)), 0);
+-
+-	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4, APCIE_REG_MSI_DATA_HI(func),  data & 0xffe0);
+-	glue_write32(sc, APCIE_REG_MSI_DATA_HI(func), data & 0xffe0);
+-
+-	if (func < 4) {
+-		/* First 4 functions have 4 IRQs/subfuncs each */
+-		offset = (func << 4) | (subfunc << 2);
+-	} else if (func == 4) {
+-		/* Function 4 gets 24 consecutive slots,
+-		 * then 7 more at the end. */
+-		if (subfunc < 24)
+-			offset = 0x40 + (subfunc << 2);
+-		else
+-			offset = 0xe0 + ((subfunc - 24) << 2);
+-	} else {
+-		offset = 0xa0 + ((func - 5) << 4) + (subfunc << 2);
+-	}
+-
+-	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4,  APCIE_REG_MSI_DATA_LO(offset), data & 0x1f);
+-	glue_write32(sc, APCIE_REG_MSI_DATA_LO(offset), data & 0x1f);
+-
+-	if (func == AEOLIA_FUNC_ID_PCIE)
+-		glue_set_mask(sc, APCIE_REG_MSI_MASK(func), APCIE_REG_MSI_MASK_FUNC4);
+-	else
+-		glue_set_mask(sc, APCIE_REG_MSI_MASK(func), APCIE_REG_MSI_MASK_FUNC);
+-
+-	glue_set_mask(sc, APCIE_REG_MSI_CONTROL, APCIE_REG_MSI_CONTROL_ENABLE);
+-}
+-
+-static void apcie_msi_write_msg(struct irq_data *data, struct msi_msg *msg)
+-{
+-	struct apcie_irq_data *irq_data = data->chip_data;
+-	struct apcie_dev *sc = irq_data->sc;
+-	u32 func = data->hwirq >> 8;
+-	u32 subfunc = data->hwirq & 0xff;
+-
+-	/* Linux likes to unconfigure MSIs like this, but since we share the
+-	 * address between subfunctions, we can't do that. The IRQ should be
+-	 * masked via apcie_msi_mask anyway, so just do nothing. */
+-	if (!msg->address_lo) {
+-		return;
+-	}
+-
+-	sc_dbg("apcie_msi_write_msg(%08x, %08x) mask=0x%x irq=%d hwirq=0x%lx %p\n",
+-	       msg->address_lo, msg->data, data->mask, data->irq, data->hwirq, sc);
+-
+-	if (subfunc == 0xff) {
+-		int i;
+-		for (i = 0; i < subfuncs_per_func[func]; i++)
+-			apcie_config_msi(sc, func, i, msg->address_lo, msg->data);
+-	} else {
+-		apcie_config_msi(sc, func, subfunc, msg->address_lo, msg->data);
+-	}
+-}
+-
+-static void apcie_msi_unmask(struct irq_data *data)
+-{
+-	struct apcie_irq_data *irq_data = data->chip_data;
+-	struct apcie_dev *sc = irq_data->sc;
+-	u32 func = data->hwirq >> 8;
+-
+-	glue_set_mask(sc, APCIE_REG_MSI_MASK(func), data->mask);
+-}
+-
+-static void apcie_msi_mask(struct irq_data *data)
+-{
+-	struct apcie_irq_data *irq_data = data->chip_data;
+-	struct apcie_dev *sc = irq_data->sc;
+-	u32 func = data->hwirq >> 8;
+-
+-	glue_clear_mask(sc, APCIE_REG_MSI_MASK(func), data->mask);
+-}
+-
+-static void apcie_msi_calc_mask(struct irq_data *data) {
+-	u32 func = data->hwirq >> 8;
+-	u32 subfunc = data->hwirq & 0xff;
+-
+-	if (subfunc == 0xff) {
+-		data->mask = (1 << subfuncs_per_func[func]) - 1;
+-	} else {
+-		data->mask = 1 << subfunc;
+-	}
+-}
+-
+-static void apcie_irq_msi_compose_msg(struct irq_data *data,
+-				       struct msi_msg *msg)
+-{
+-	struct apcie_irq_data *irq_data = data->chip_data;
+-	struct irq_cfg *cfg __maybe_unused = irqd_cfg(data);
+-
+-	memset(msg, 0, sizeof(*msg));
+-	msg->address_hi = X86_MSI_BASE_ADDRESS_HIGH;
+-	msg->address_lo = 0xfee00000;// Just do it like this for now
+-	msg->data = irq_data ? irq_data->msi_data : data->irq - 1;
+-
+-	pr_debug("apcie_irq_msi_compose_msg\n");
+-}
+-
+-static const struct irq_chip apcie_msi_controller_template = {
+-	.name = "Aeolia-MSI",
+-	.irq_unmask = apcie_msi_unmask,
+-	.irq_mask = apcie_msi_mask,
+-	.irq_ack = irq_chip_ack_parent,
+-	.irq_set_affinity = msi_domain_set_affinity,
+-	.irq_retrigger = irq_chip_retrigger_hierarchy,
+-	.irq_compose_msi_msg = apcie_irq_msi_compose_msg,
+-	.irq_write_msi_msg = apcie_msi_write_msg,
+-	.flags = IRQCHIP_SKIP_SET_WAKE | IRQCHIP_AFFINITY_PRE_STARTUP,
+-};
+-
+-static irq_hw_number_t apcie_msi_get_hwirq(struct msi_domain_info *info,
+-					  msi_alloc_info_t *arg)
+-{
+-	return arg->hwirq;
+-}
+-
+-static int apcie_msi_init(struct irq_domain *domain,
+-			 struct msi_domain_info *info, unsigned int virq,
+-			 irq_hw_number_t hwirq, msi_alloc_info_t *arg)
+-{
+-	struct irq_data *data;
+-	struct apcie_irq_data *irq_data;
+-	struct apcie_dev *sc = info->chip_data;
+-	int i;
+-	int slot = -1;
+-
+-	pr_debug("apcie_msi_init(%p, %p, %d, 0x%lx, %p)\n",
+-		 domain, info, virq, hwirq, arg);
+-
+-	if (sc) {
+-		for (i = 0; i < ARRAY_SIZE(sc->irq_map); i++) {
+-			if (sc->irq_map[i] == -1) {
+-				slot = i;
+-				break;
+-			}
+-		}
+-
+-		if (slot < 0) {
+-			pr_err("apcie_msi_init: no free irq_map entry for virq %u\n", virq);
+-			return -ENOSPC;
+-		}
+-	}
+-
+-	irq_data = kzalloc(sizeof(*irq_data), GFP_KERNEL);
+-	if (!irq_data)
+-		return -ENOMEM;
+-
+-	irq_data->sc = sc;
+-	irq_data->msi_data = slot >= 0 ? slot : virq - 1;
+-
+-	data = irq_domain_get_irq_data(domain, virq);
+-	irq_domain_set_info(domain, virq, hwirq, info->chip, irq_data,
+-			    handle_edge_irq, NULL, "edge");
+-	apcie_msi_calc_mask(data);
+-
+-	if (sc) {
+-		sc->irq_map[slot] = virq;
+-	}
+-
+-	return 0;
+-}
+-
+-static void apcie_msi_free(struct irq_domain *domain,
+-			  struct msi_domain_info *info, unsigned int virq)
+-{
+-	struct irq_data *data;
+-	struct apcie_irq_data *irq_data;
+-	struct apcie_dev *sc = info->chip_data;
+-	int i;
+-
+-	data = irq_domain_get_irq_data(domain, virq);
+-	irq_data = data ? data->chip_data : NULL;
+-
+-	if (sc) {
+-		for (i = 0; i < ARRAY_SIZE(sc->irq_map); i++) {
+-			if (sc->irq_map[i] == virq) {
+-				sc->irq_map[i] = -1;
+-				break;
+-			}
+-		}
+-	}
+-
+-	pr_debug("apcie_msi_free(%d)\n", virq);
+-	kfree(irq_data);
+-}
+-
+-
+-static void apcie_set_desc(msi_alloc_info_t *arg, struct msi_desc *desc)
+-{
+-	struct pci_dev *device;
+-
+-	arg->desc = desc;
+-	device = msi_desc_to_pci_dev(desc);
+-
+-	arg->hwirq = PCI_FUNC(device->devfn) << 8;
+-
+-#ifndef QEMU_HACK_NO_IOMMU
+-	arg->hwirq |= 0xFF;
+-#endif
+-}
+-
+-static struct msi_domain_ops apcie_msi_domain_ops = {
+-	.get_hwirq	= apcie_msi_get_hwirq,
+-	.set_desc       = apcie_set_desc,
+-	.msi_init	= apcie_msi_init,
+-	.msi_free	= apcie_msi_free,
+-};
+-
+-static const struct msi_domain_info apcie_msi_domain_info_template = {
+-	.flags		= MSI_FLAG_USE_DEF_DOM_OPS | MSI_FLAG_USE_DEF_CHIP_OPS,
+-	.ops		= &apcie_msi_domain_ops,
+-	.handler	= handle_edge_irq,
+-	.handler_name	= "edge"
+-};
+-
+-static struct irq_domain *apcie_create_irq_domain(struct apcie_dev *sc)
+-{
+-	struct apcie_msi_domain_ctx *ctx;
+-	struct irq_domain *domain, *parent;
+-	struct fwnode_handle *fn;
+-	struct irq_fwspec fwspec;
+-
+-	sc_dbg("apcie_create_irq_domain\n");
+-	if (x86_vector_domain == NULL)
+-		return NULL;
+-
+-	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+-	if (!ctx)
+-		return NULL;
+-
+-	ctx->controller = apcie_msi_controller_template;
+-	ctx->info = apcie_msi_domain_info_template;
+-	ctx->info.chip = &ctx->controller;
+-	ctx->info.chip_data = sc;
+-
+-	fn = irq_domain_alloc_named_id_fwnode(ctx->controller.name, pci_dev_id(sc->pdev));
+-	if (!fn) {
+-		kfree(ctx);
+-		return NULL;
+-	}
+-
+-	sc_dbg("devid = %d\n", pci_dev_id(sc->pdev));
+-
+-	fwspec.fwnode = fn;
+-	fwspec.param_count = 1;
+-
+-	// It should be correct to put the pci device id in here
+-	fwspec.param[0] = pci_dev_id(sc->pdev);
+-
+-	parent = irq_find_matching_fwspec(&fwspec, DOMAIN_BUS_ANY);
+-	if (!parent) {
+-		sc_dbg("no parent \n");
+-		parent = x86_vector_domain;
+-	} else if (parent == x86_vector_domain) {
+-		sc_dbg("no parent \n");
+-	} else {
+-		ctx->info.flags |= MSI_FLAG_MULTI_PCI_MSI;
+-		ctx->controller.name = "IR-Aeolia-MSI";
+-	}
+-
+-	domain = msi_create_irq_domain(fn, &ctx->info, parent);
+-	if (!domain) {
+-		irq_domain_free_fwnode(fn);
+-		kfree(ctx);
+-		pr_warn("Failed to initialize Aeolia-MSI irqdomain.\n");
+-		return NULL;
+-	}
+-
+-	sc->msi_domain_ctx = ctx;
+-	return domain;
+-}
+-
+-static int apcie_is_compatible_device(struct pci_dev *dev)
+-{
+-	if (!dev || dev->vendor != PCI_VENDOR_ID_SONY) {
+-		return 0;
+-	}
+-	return (dev->device == PCI_DEVICE_ID_SONY_AEOLIA_PCIE ||
+-		dev->device == PCI_DEVICE_ID_SONY_BELIZE_PCIE);
+-}
+-
+-int apcie_assign_irqs(struct pci_dev *dev, int nvec)
+-{
+-	int ret;
+-	unsigned int sc_devfn;
+-	struct pci_dev *sc_dev;
+-	struct apcie_dev *sc;
+-	struct device *bare_dev;
+-	struct msi_desc *desc;
+-	struct irq_alloc_info info;
+-	unsigned int desc_first;
+-
+-	sc_devfn = (dev->devfn & ~7) | AEOLIA_FUNC_ID_PCIE;
+-	sc_dev = pci_get_slot(dev->bus, sc_devfn);
+-
+-	if (!apcie_is_compatible_device(sc_dev)) {
+-		dev_err(&dev->dev, "apcie: this is not an Aeolia device\n");
+-		ret = -ENODEV;
+-		goto fail;
+-	}
+-	sc = pci_get_drvdata(sc_dev);
+-	if (!sc) {
+-		dev_err(&dev->dev, "apcie: not ready yet, cannot assign IRQs\n");
+-		ret = -ENODEV;
+-		goto fail;
+-	}
+-
+-	init_irq_alloc_info(&info, NULL);
+-	info.type = X86_IRQ_ALLOC_TYPE_PCI_MSI;
+-	/* IRQs "come from" function 4 as far as the IOMMU/system see */
+-	//info.msi_dev = sc->pdev;
+-	info.devid = pci_dev_id(sc->pdev);
+-	bare_dev = &sc->pdev->dev;
+-
+-	/* Our hwirq number is function << 8 plus subfunction.
+-	 * Subfunction is usually 0 and implicitly increments per hwirq,
+-	 * but can also be 0xff to indicate that this is a shared IRQ. */
+-	info.hwirq = PCI_FUNC(dev->devfn) << 8;
+-
+-#ifndef QEMU_HACK_NO_IOMMU
+-	if (!(sc->msi_domain_ctx->info.flags & MSI_FLAG_MULTI_PCI_MSI)) {
+-		nvec = 1;
+-		info.hwirq |= 0xff; /* Shared IRQ for all subfunctions */
+-	}
+-#endif
+-
+-	desc = msi_alloc_desc(bare_dev, nvec, NULL);
+-	if (!desc) {
+-		ret = -ENOMEM;
+-		goto fail;
+-	}
+-	desc_first = desc->msi_index;
+-
+-	info.desc = desc;
+-	info.data = sc;
+-
+-	dev_dbg(&dev->dev, "apcie_assign_irqs(%d) (%ld)\n", nvec, info.hwirq);
+-
+-	ret = irq_domain_alloc_irqs(sc->irqdomain, nvec, NUMA_NO_NODE, &info);
+-	if (ret >= 0) {
+-		dev_dbg(&dev->dev, "irq_domain_alloc_irqs = %x\n", ret);
+-		dev->irq = ret;
+-		desc->irq = ret;
+-		ret = nvec;
+-	} else {
+-		msi_free_msi_descs_range(bare_dev, desc_first,
+-					 desc_first + nvec - 1);
+-	}
+-
+-fail:
+-	dev_dbg(&dev->dev, "apcie_assign_irqs returning %d\n", ret);
+-	if (sc_dev)
+-		pci_dev_put(sc_dev);
+-	return ret;
+-}
+-EXPORT_SYMBOL(apcie_assign_irqs);
+-
+-void apcie_free_irqs(unsigned int virq, unsigned int nr_irqs)
+-{
+-	irq_domain_free_irqs(virq, nr_irqs);
+-}
+-EXPORT_SYMBOL(apcie_free_irqs);
+-
+-static void apcie_glue_remove(struct apcie_dev *sc);
+-
+-static int apcie_glue_init(struct apcie_dev *sc)
+-{
+-	int i;
+-
+-	sc_info("apcie glue probe\n");
+-
+-	if (!request_mem_region(pci_resource_start(sc->pdev, 4) +
+-				APCIE_RGN_PCIE_BASE, APCIE_RGN_PCIE_SIZE,
+-				"apcie.glue")) {
+-		sc_err("Failed to request pcie region\n");
+-		return -EBUSY;
+-
+-	}
+-
+-	if (!request_mem_region(pci_resource_start(sc->pdev, 2) +
+-				APCIE_RGN_CHIPID_BASE, APCIE_RGN_CHIPID_SIZE,
+-				"apcie.chipid")) {
+-		sc_err("Failed to request chipid region\n");
+-		release_mem_region(pci_resource_start(sc->pdev, 4) +
+-				   APCIE_RGN_PCIE_BASE, APCIE_RGN_PCIE_SIZE);
+-		return -EBUSY;
+-	}
+-
+-	glue_set_region(sc, AEOLIA_FUNC_ID_PCIE, 2, 0xbf018000, 0x7fff);
+-
+-	sc_info("Aeolia chip revision: %08x:%08x:%08x\n",
+-		ioread32(sc->bar2 + APCIE_REG_CHIPID_0),
+-		ioread32(sc->bar2 + APCIE_REG_CHIPID_1),
+-		ioread32(sc->bar2 + APCIE_REG_CHIPREV));
+-
+-	/* Mask all MSIs first, to avoid spurious IRQs */
+-	for (i = 0; i < AEOLIA_NUM_FUNCS; i++) {
+-		glue_write32(sc, APCIE_REG_MSI_MASK(i), 0);
+-		glue_write32(sc, APCIE_REG_MSI_ADDR(i), 0);
+-		glue_write32(sc, APCIE_REG_MSI_DATA_HI(i), 0);
+-	}
+-
+-	for (i = 0; i < 0xfc; i += 4)
+-		glue_write32(sc, APCIE_REG_MSI_DATA_LO(i), 0);
+-
+-	glue_set_region(sc, AEOLIA_FUNC_ID_GBE, 0, 0xbfa00000, 0x3fff);
+-	glue_set_region(sc, AEOLIA_FUNC_ID_AHCI, 5, 0xbfa04000, 0xfff);
+-	glue_set_region(sc, AEOLIA_FUNC_ID_SDHCI, 0, 0xbfa80000, 0xfff);
+-	glue_set_region(sc, AEOLIA_FUNC_ID_SDHCI, 1, 0, 0);
+-	glue_set_region(sc, AEOLIA_FUNC_ID_DMAC, 0, 0xbfa05000, 0xfff);
+-	glue_set_region(sc, AEOLIA_FUNC_ID_DMAC, 1, 0, 0);
+-	glue_set_region(sc, AEOLIA_FUNC_ID_DMAC, 2, 0xbfa06000, 0xfff);
+-	glue_set_region(sc, AEOLIA_FUNC_ID_DMAC, 3, 0, 0);
+-	glue_set_region(sc, AEOLIA_FUNC_ID_MEM, 2, 0xc0000000, 0x3fffffff);
+-	glue_set_region(sc, AEOLIA_FUNC_ID_MEM, 3, 0, 0);
+-	glue_set_region(sc, AEOLIA_FUNC_ID_XHCI, 0, 0xbf400000, 0x1fffff);
+-	glue_set_region(sc, AEOLIA_FUNC_ID_XHCI, 1, 0, 0);
+-	glue_set_region(sc, AEOLIA_FUNC_ID_XHCI, 2, 0xbf600000, 0x1fffff);
+-	glue_set_region(sc, AEOLIA_FUNC_ID_XHCI, 3, 0, 0);
+-	glue_set_region(sc, AEOLIA_FUNC_ID_XHCI, 4, 0xbf800000, 0x1fffff);
+-	glue_set_region(sc, AEOLIA_FUNC_ID_XHCI, 5, 0, 0);
+-
+-	sc->irqdomain = apcie_create_irq_domain(sc);
+-	if (!sc->irqdomain) {
+-		sc_err("Failed to create IRQ domain");
+-		apcie_glue_remove(sc);
+-		return -EIO;
+-	}
+-	sc->nvec = apcie_assign_irqs(sc->pdev, APCIE_NUM_SUBFUNC);
+-	if (sc->nvec <= 0) {
+-		sc_err("Failed to assign IRQs");
+-		apcie_glue_remove(sc);
+-		return -EIO;
+-	}
+-	sc_dbg("dev->irq=%d\n", sc->pdev->irq);
+-
+-	return 0;
+-}
+-
+-static void apcie_glue_remove(struct apcie_dev *sc) {
+-	sc_info("apcie glue remove\n");
+-
+-	if (sc->nvec > 0) {
+-		apcie_free_irqs(sc->pdev->irq, sc->nvec);
+-		sc->nvec = 0;
+-	}
+-	if (sc->irqdomain) {
+-		irq_domain_remove(sc->irqdomain);
+-		sc->irqdomain = NULL;
+-	}
+-	kfree(sc->msi_domain_ctx);
+-	sc->msi_domain_ctx = NULL;
+-	release_mem_region(pci_resource_start(sc->pdev, 2) +
+-			   APCIE_RGN_CHIPID_BASE, APCIE_RGN_CHIPID_SIZE);
+-	release_mem_region(pci_resource_start(sc->pdev, 4) +
+-			   APCIE_RGN_PCIE_BASE, APCIE_RGN_PCIE_SIZE);
+-}
+-
+-#ifdef CONFIG_PM
+-static int apcie_glue_suspend(struct apcie_dev *sc, pm_message_t state) {
+-	return 0;
+-}
+-
+-static int apcie_glue_resume(struct apcie_dev *sc) {
+-	return 0;
+-}
+-#endif
+-
+-
+-int ps4sb_uart_init(struct apcie_dev *sc);
+-int ps4sb_icc_init(struct apcie_dev *sc);
+-void ps4sb_uart_remove(struct apcie_dev *sc);
+-void ps4sb_icc_remove(struct apcie_dev *sc);
+-#ifdef CONFIG_PM
+-void ps4sb_uart_suspend(struct apcie_dev *sc, pm_message_t state);
+-void ps4sb_icc_suspend(struct apcie_dev *sc, pm_message_t state);
+-void ps4sb_uart_resume(struct apcie_dev *sc);
+-void ps4sb_icc_resume(struct apcie_dev *sc);
+-#endif
+-
+-/* From arch/x86/platform/ps4/ps4.c */
+-
+-static const struct ps4sb_family aeolia_family = {
+-	.name		= "Aeolia",
+-	.uart_bar	= 4,
+-	.uart_base	= APCIE_RGN_UART_BASE,
+-	.uart_clock	= 58500000,
+-	.uart_subfunc	= APCIE_SUBFUNC_UART0,
+-	.uart_count	= APCIE_NR_UARTS,
+-	.icc_bar	= 4,
+-	.icc_base	= APCIE_RGN_ICC_BASE,
+-	.icc_claim_regs	= true,
+-	.icc_boot_led	= true,
+-	.i2c_data_off	= 0x14,
+-	.i2c_err_off	= 0x0c,
+-	.rtc_bar	= 2,
+-	.rtc_reg	= 0x130,
+-	.rtc_byte_regs	= true,
+-	.rtc_epoch	= -1431543102LL,
+-};
+-
+-static int apcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+-	struct apcie_dev *sc;
+-	int ret;
+-
+-	dev_dbg(&dev->dev, "apcie_probe()\n");
+-
+-	ret = pci_enable_device(dev);
+-	if (ret) {
+-		dev_err(&dev->dev,
+-			"apcie_probe(): pci_enable_device failed: %d\n", ret);
+-		return ret;
+-	}
+-
+-	sc = kzalloc(sizeof(*sc), GFP_KERNEL);
+-	if (!sc) {
+-		dev_err(&dev->dev, "apcie_probe(): alloc sc failed\n");
+-		ret = -ENOMEM;
+-		goto disable_dev;
+-	}
+-	sc->pdev = dev;
+-	sc->family = &aeolia_family;
+-	memset(sc->irq_map, -1, sizeof(sc->irq_map));
+-	memset(sc->serial_line, -1, sizeof(sc->serial_line));
+-	pci_set_drvdata(dev, sc);
+-
+-	// eMMC ... unused?
+-	sc->bar0 = pci_ioremap_bar(dev, 0);
+-	// pervasive 0
+-	sc->bar2 = pci_ioremap_bar(dev, 2);
+-	// pervasive 1 - misc peripherals
+-	sc->bar4 = pci_ioremap_bar(dev, 4);
+-
+-	if (!sc->bar0 || !sc->bar2 || !sc->bar4) {
+-		sc_err("failed to map some BARs, bailing out\n");
+-		ret = -EIO;
+-		goto free_bars;
+-	}
+-
+-	if ((ret = apcie_glue_init(sc)) < 0)
+-		goto free_bars;
+-	if (ps4sb_rtc_init(sc) < 0)
+-		sc_err("rtc not registered\n");
+-	if ((ret = ps4sb_icc_init(sc)) < 0)
+-		goto remove_glue;
+-
+-	WRITE_ONCE(ps4sb_initialized, true);
+-	return 0;
+-
+-remove_glue:
+-	apcie_glue_remove(sc);
+-free_bars:
+-	if (sc->bar0)
+-		iounmap(sc->bar0);
+-	if (sc->bar2)
+-		iounmap(sc->bar2);
+-	if (sc->bar4)
+-		iounmap(sc->bar4);
+-	kfree(sc);
+-disable_dev:
+-	pci_disable_device(dev);
+-	return ret;
+-}
+-
+-static void apcie_remove(struct pci_dev *dev) {
+-	struct apcie_dev *sc;
+-	sc = pci_get_drvdata(dev);
+-
+-	WRITE_ONCE(ps4sb_initialized, false);
+-	ps4sb_icc_remove(sc);
+-	ps4sb_uart_remove(sc);
+-	apcie_glue_remove(sc);
+-
+-	if (sc->bar0)
+-		iounmap(sc->bar0);
+-	if (sc->bar2)
+-		iounmap(sc->bar2);
+-	if (sc->bar4)
+-		iounmap(sc->bar4);
+-	kfree(sc);
+-	pci_disable_device(dev);
+-}
+-
+-#ifdef CONFIG_PM
+-static int apcie_suspend(struct pci_dev *dev, pm_message_t state) {
+-	struct apcie_dev *sc;
+-	sc = pci_get_drvdata(dev);
+-
+-	ps4sb_icc_suspend(sc, state);
+-	ps4sb_uart_suspend(sc, state);
+-	apcie_glue_suspend(sc, state);
+-	return 0;
+-}
+-
+-static int apcie_resume(struct pci_dev *dev) {
+-	struct apcie_dev *sc;
+-	sc = pci_get_drvdata(dev);
+-
+-	ps4sb_icc_resume(sc);
+-	apcie_glue_resume(sc);
+-	ps4sb_uart_resume(sc);
+-	return 0;
+-}
+-#endif
+-
+-static const struct pci_device_id apcie_pci_tbl[] = {
+-	{ PCI_DEVICE(PCI_VENDOR_ID_SONY, PCI_DEVICE_ID_SONY_AEOLIA_PCIE), },
+-	{ PCI_DEVICE(PCI_VENDOR_ID_SONY, PCI_DEVICE_ID_SONY_BELIZE_PCIE), },
+-	{ }
+-};
+-MODULE_DEVICE_TABLE(pci, apcie_pci_tbl);
+-
+-static struct pci_driver apcie_driver = {
+-	.name		= "aeolia_pcie",
+-	.id_table	= apcie_pci_tbl,
+-	.probe		= apcie_probe,
+-	.remove		= apcie_remove,
+-#ifdef CONFIG_PM
+-	.suspend	= apcie_suspend,
+-	.resume		= apcie_resume,
+-#endif
+-};
+-module_pci_driver(apcie_driver);
+diff --git a/drivers/ps4/ps4-bpcie.c b/drivers/ps4/ps4-bpcie.c
+deleted file mode 100644
+index fa0bcc4fb39e1aaa5afecb925a20cc0ecaded183..0000000000000000000000000000000000000000
+--- a/drivers/ps4/ps4-bpcie.c
++++ /dev/null
+@@ -1,813 +0,0 @@
+-#include <linux/kernel.h>
+-#include <linux/module.h>
+-#include <linux/pci.h>
+-#include <linux/init.h>
+-#include <linux/irq.h>
+-#include <linux/irqchip.h>
+-#include <linux/irqdomain.h>
+-#include <linux/io.h>
+-#include <linux/iopoll.h>
+-#include <linux/msi.h>
+-#include <asm/irqdomain.h>
+-#include <asm/irq_remapping.h>
+-
+-#include <asm/msi.h>
+-#include <asm/ps4.h>
+-
+-#include "baikal.h"
+-
+-#define APCIE_REG_CHIPID_0		0x1104
+-#define APCIE_REG_CHIPID_1		0x1108
+-#define APCIE_REG_CHIPREV		0x110c
+-
+-static const int subfuncs_per_func[BAIKAL_NUM_FUNCS] = {
+-	2, 1, 1, 1, 31, 2, 3, 3
+-};
+-
+-static void bpcie_msi_domain_set_desc(msi_alloc_info_t *arg, struct msi_desc *desc);
+-
+-u32 glue_read32(struct bpcie_dev *sc, u32 offset) {
+-	return ioread32(sc->bar2 + offset);
+-}
+-
+-void glue_write32(struct bpcie_dev *sc, u32 offset, u32 value) {
+-	iowrite32(value, sc->bar2 + offset);
+-}
+-
+-static void bpcie_msi_write_msg(struct irq_data *data, struct msi_msg *msg)
+-{
+-	struct bpcie_dev *sc = data->chip_data;
+-	struct msi_desc *desc;
+-
+-	if (!msg->address_lo) {
+-		return;
+-	}
+-
+-	dev_dbg(&sc->pdev->dev, "bpcie_msi_write_msg(%08x, %08x) mask=0x%x irq=%d hwirq=0x%lx %p\n",
+-	       msg->address_lo, msg->data, data->mask, data->irq, data->hwirq, sc);
+-
+-	desc = irq_data_get_msi_desc(data);
+-	if (desc && desc->irq == data->irq)
+-		__pci_write_msi_msg(desc, msg);
+-}
+-
+-void pci_msi_update_mask(struct msi_desc *desc, u32 clear, u32 set);
+-
+-static bool bpcie_msi_is_xhci_shared(struct irq_data *data)
+-{
+-	struct msi_desc *desc = irq_data_get_msi_desc(data);
+-	struct pci_dev *pdev = msi_desc_to_pci_dev(desc);
+-
+-	return PCI_FUNC(pdev->devfn) == BAIKAL_FUNC_ID_XHCI &&
+-	       !desc->pci.msi_attrib.is_msix && desc->nvec_used == 1;
+-}
+-
+-static void bpcie_msi_unmask(struct irq_data *data)
+-{
+-	if (bpcie_msi_is_xhci_shared(data))
+-		pci_msi_update_mask(irq_data_get_msi_desc(data), 0x7, 0);
+-	else
+-		pci_msi_unmask_irq(data);
+-}
+-
+-static void bpcie_msi_mask(struct irq_data *data)
+-{
+-	if (bpcie_msi_is_xhci_shared(data))
+-		pci_msi_update_mask(irq_data_get_msi_desc(data), 0, 0x7);
+-	else
+-		pci_msi_mask_irq(data);
+-}
+-
+-static struct irq_chip bpcie_msi_controller = {
+-	.name = "Baikal-MSI",
+-	.irq_unmask = bpcie_msi_unmask,
+-	.irq_mask = bpcie_msi_mask,
+-	.irq_ack = irq_chip_ack_parent,
+-	.irq_set_affinity = msi_domain_set_affinity,
+-	.irq_retrigger = irq_chip_retrigger_hierarchy,
+-	.irq_compose_msi_msg = irq_msi_compose_msg,
+-	.irq_write_msi_msg = bpcie_msi_write_msg,
+-	.flags = IRQCHIP_SKIP_SET_WAKE,
+-};
+-
+-static irq_hw_number_t bpcie_msi_get_hwirq(struct msi_domain_info *info,
+-					   msi_alloc_info_t *arg)
+-{
+-	return arg->hwirq;
+-}
+-
+-static void bpcie_handle_edge_irq(struct irq_desc *desc)
+-{
+-	u32 func = (desc->irq_data.hwirq >> 5) & 7;
+-	u32 initial_hwirq = desc->irq_data.hwirq & ~0x1fLL;
+-	unsigned int vector_to_write;
+-	unsigned int mask;
+-	char shift;
+-
+-	if (func == 4)
+-	{
+-		vector_to_write = 2;
+-		mask = -1;
+-		shift = 0;
+-	}
+-	else if (func == 7)
+-	{
+-		vector_to_write = 3;
+-		mask = 7;
+-		shift = 0x10;
+-	}
+-	else if (func == 5)
+-	{
+-		mask = 3;
+-		vector_to_write = 3;
+-		shift = 0;
+-	} else {
+-		handle_edge_irq(desc);
+-		return;
+-	}
+-
+-	raw_spin_lock(&desc->lock);
+-	struct bpcie_dev *sc = desc->irq_data.chip_data;
+-	glue_write32(sc, BPCIE_ACK_WRITE, vector_to_write);
+-	u32 vector_read = glue_read32(sc, BPCIE_ACK_READ);
+-	raw_spin_unlock(&desc->lock);
+-
+-	unsigned int subfunc_mask = mask & ~(vector_read >> shift);
+-	bool run_self = !subfunc_mask;
+-	unsigned int i;
+-
+-	for (i = 0; i < 32; i++) {
+-		unsigned int virq;
+-		struct irq_desc *new_desc;
+-
+-		if (!(subfunc_mask & BIT(i)))
+-			continue;
+-
+-		virq = irq_find_mapping(desc->irq_data.domain, initial_hwirq + i);
+-		new_desc = virq ? irq_to_desc(virq) : NULL;
+-		if (!new_desc || new_desc == desc) {
+-			run_self = true;
+-			continue;
+-		}
+-		handle_edge_irq(new_desc);
+-	}
+-
+-	if (run_self)
+-		handle_edge_irq(desc);
+-}
+-
+-static int bpcie_msi_init(struct irq_domain *domain,
+-			 struct msi_domain_info *info, unsigned int virq,
+-			 irq_hw_number_t hwirq, msi_alloc_info_t *arg)
+-{
+-	struct bpcie_dev *sc = info->chip_data;
+-
+-	irq_domain_set_info(domain, virq, hwirq, info->chip, info->chip_data,
+-			bpcie_handle_edge_irq, NULL, "edge");
+-
+-	if (sc) {
+-		int i;
+-		for (i = 0; i < 100; i++) {
+-			if (sc->irq_map[i] == -1) {
+-				sc->irq_map[i] = virq;
+-				break;
+-			}
+-		}
+-	}
+-
+-	return 0;
+-}
+-
+-static void bpcie_msi_free(struct irq_domain *domain,
+-			  struct msi_domain_info *info, unsigned int virq)
+-{
+-	pr_devel("bpcie_msi_free(%d)\n", virq);
+-}
+-
+-static int bpcie_msi_prepare(struct irq_domain *domain, struct device *dev,
+-			     int nvec, msi_alloc_info_t *arg)
+-{
+-	arg->type = X86_IRQ_ALLOC_TYPE_PCI_MSI;
+-	return 0;
+-}
+-
+-static struct msi_domain_ops bpcie_msi_domain_ops = {
+-	.get_hwirq	= bpcie_msi_get_hwirq,
+-	.msi_init	= bpcie_msi_init,
+-	.msi_free	= bpcie_msi_free,
+-	.set_desc	= bpcie_msi_domain_set_desc,
+-	.msi_prepare = bpcie_msi_prepare,
+-};
+-
+-static struct msi_domain_info bpcie_msi_domain_info = {
+-	.flags		= MSI_FLAG_USE_DEF_DOM_OPS | MSI_FLAG_USE_DEF_CHIP_OPS | MSI_FLAG_ACTIVATE_EARLY | MSI_FLAG_MULTI_PCI_MSI,
+-	.ops		= &bpcie_msi_domain_ops,
+-	.chip		= &bpcie_msi_controller,
+-	.bus_token	= DOMAIN_BUS_PCI_DEVICE_MSI,
+-	.handler	= bpcie_handle_edge_irq,
+-};
+-
+-static void bpcie_msi_domain_set_desc(msi_alloc_info_t *arg,
+-				    struct msi_desc *desc)
+-{
+-	struct pci_dev *dev = msi_desc_to_pci_dev(desc);
+-	arg->type = X86_IRQ_ALLOC_TYPE_PCI_MSI;
+-	arg->desc = desc;
+-	arg->hwirq = (PCI_SLOT(dev->devfn) << 8) | (PCI_FUNC(dev->devfn) << 5);
+-
+-	#ifndef QEMU_HACK_NO_IOMMU
+-		if (!(bpcie_msi_domain_info.flags & MSI_FLAG_MULTI_PCI_MSI)) {
+-			arg->hwirq |= 0x1F;
+-		}
+-	#endif
+-}
+-
+-static struct irq_domain *bpcie_create_irq_domain(struct bpcie_dev *sc,
+-						  struct pci_dev *pdev)
+-{
+-	struct irq_domain *parent;
+-	struct irq_domain *d;
+-
+-	dev_info(&pdev->dev, "bpcie_create_irq_domain\n");
+-	if (x86_vector_domain == NULL) {
+-		dev_err(&pdev->dev, "bpcie: x86_vector_domain is NULL\n");
+-		return NULL;
+-	}
+-
+-	bpcie_msi_domain_info.chip_data = (void *)sc;
+-	bpcie_msi_controller.name = "Baikal-MSI";
+-
+-	parent = x86_vector_domain;
+-
+-	d = msi_create_irq_domain(NULL, &bpcie_msi_domain_info, parent);
+-	if (d)
+-		dev_set_msi_domain(&pdev->dev, d);
+-	else
+-		dev_err(&pdev->dev, "bpcie: failed to create irq domain\n");
+-
+-	return d;
+-}
+-
+-int bpcie_is_compatible_device(struct pci_dev *dev)
+-{
+-	if (!dev || dev->vendor != PCI_VENDOR_ID_SONY) {
+-		return 0;
+-	}
+-	return (dev->device == PCI_DEVICE_ID_SONY_BAIKAL_PCIE);
+-}
+-
+-int bpcie_assign_irqs(struct pci_dev *dev, int nvec)
+-{
+-	int ret;
+-	unsigned int sc_devfn;
+-	struct pci_dev *sc_dev;
+-	struct bpcie_dev *sc;
+-
+-	sc_devfn = (dev->devfn & ~7) | BAIKAL_FUNC_ID_PCIE;
+-	sc_dev = pci_get_slot(dev->bus, sc_devfn);
+-
+-	if (!bpcie_is_compatible_device(sc_dev)) {
+-		dev_err(&dev->dev, "bpcie: this is not a Baikal device\n");
+-		ret = -ENODEV;
+-		goto fail;
+-	}
+-	sc = pci_get_drvdata(sc_dev);
+-	if (!sc) {
+-		dev_err(&dev->dev, "bpcie: not ready yet, cannot assign IRQs\n");
+-		ret = -ENODEV;
+-		goto fail;
+-	}
+-
+-	dev_dbg(&dev->dev, "bpcie_assign_irqs(%d)\n", nvec);
+-
+-	if (PCI_FUNC(dev->devfn) != BAIKAL_FUNC_ID_PCIE)
+-		nvec = 1;
+-	if (dev->msi_enabled)
+-		ret = nvec;
+-	else
+-		ret = pci_alloc_irq_vectors(dev, 1, nvec, PCI_IRQ_MSI);
+-
+-fail:
+-	dev_dbg(&dev->dev, "bpcie_assign_irqs returning %d\n", ret);
+-	if (sc_dev)
+-		pci_dev_put(sc_dev);
+-	return ret;
+-}
+-EXPORT_SYMBOL(bpcie_assign_irqs);
+-
+-void bpcie_free_irqs(unsigned int virq, unsigned int nr_irqs)
+-{
+-	struct msi_desc *desc = irq_get_msi_desc(virq);
+-	struct pci_dev *pdev = desc ? msi_desc_to_pci_dev(desc) : NULL;
+-
+-	if (pdev) {
+-		pci_free_irq_vectors(pdev);
+-		return;
+-	}
+-
+-	irq_domain_free_irqs(virq, nr_irqs);
+-}
+-EXPORT_SYMBOL(bpcie_free_irqs);
+-
+-static void bpcie_glue_remove(struct bpcie_dev *sc);
+-
+-static struct pci_dev * get_bpcie_device(struct bpcie_dev *sc, u32 bcpie_func) {
+-	unsigned int devfn;
+-	struct pci_dev *sc_dev;
+-
+-	sc_dev = sc->pdev;
+-	devfn = (sc_dev->devfn & ~7) | bcpie_func;
+-	return pci_get_slot(sc_dev->bus, devfn);
+-}
+-
+-static void bpcie_create_irq_domains(struct bpcie_dev *sc) {
+-	int func;
+-	for (func = 0; func < BAIKAL_NUM_FUNCS; ++func) {
+-		struct pci_dev * bpcie_pdev = get_bpcie_device(sc, func);
+-		if (bpcie_pdev) {
+-			struct irq_domain * domain = bpcie_create_irq_domain(sc, bpcie_pdev);
+-			if (func == BAIKAL_FUNC_ID_PCIE) sc->irqdomain = domain;
+-			pci_dev_put(bpcie_pdev);
+-		} else
+-			sc_err("cannot find bpcie func %d device", func);
+-	}
+-}
+-
+-static int bpcie_glue_init(struct bpcie_dev *sc)
+-{
+-	sc_info("bpcie glue probe\n");
+-
+-	if (!request_mem_region(pci_resource_start(sc->pdev, 2), pci_resource_len(sc->pdev, 2),
+-				"bpcie.glue")) {
+-		sc_err("Failed to request pcie region\n");
+-		return -EBUSY;
+-
+-	}
+-
+-	if (!request_mem_region(pci_resource_start(sc->pdev, 4), pci_resource_len(sc->pdev, 4),
+-				"bpcie.chipid")) {
+-		sc_err("Failed to request chipid region\n");
+-
+-		release_mem_region(pci_resource_start(sc->pdev, 2), pci_resource_len(sc->pdev, 2));
+-
+-		return -EBUSY;
+-	}
+-
+-	sc_info("Baikal chip revision: %08x:%08x:%08x\n",
+-		ioread32(sc->bar4 + BPCIE_REG_CHIPID_0),
+-		ioread32(sc->bar4 + BPCIE_REG_CHIPID_1),
+-		ioread32(sc->bar4 + BPCIE_REG_CHIPREV));
+-
+-	bpcie_create_irq_domains(sc);
+-	if (!sc->irqdomain) {
+-		sc_err("Failed to create IRQ domain");
+-		bpcie_glue_remove(sc);
+-		return -EIO;
+-	}
+-
+-	sc->nvec = pci_alloc_irq_vectors(sc->pdev, BPCIE_SUBFUNC_ICC+1, BPCIE_NUM_SUBFUNCS, PCI_IRQ_MSI);
+-	if (sc->nvec <= 0) {
+-		sc_err("Failed to assign IRQs");
+-		bpcie_glue_remove(sc);
+-		return -EIO;
+-	}
+-	sc_dbg("dev->irq=%d nvec=%d\n", sc->pdev->irq, sc->nvec);
+-
+-	return 0;
+-}
+-
+-static void bpcie_glue_remove(struct bpcie_dev *sc) {
+-	sc_info("bpcie glue remove\n");
+-
+-	if (sc->nvec > 0) {
+-		bpcie_free_irqs(sc->pdev->irq, sc->nvec);
+-		sc->nvec = 0;
+-	}
+-
+-	if (sc->irqdomain) {
+-		irq_domain_remove(sc->irqdomain);
+-		sc->irqdomain = NULL;
+-	}
+-
+-	release_mem_region(pci_resource_start(sc->pdev, 4), pci_resource_len(sc->pdev, 4));
+-	release_mem_region(pci_resource_start(sc->pdev, 2), pci_resource_len(sc->pdev, 2));
+-}
+-
+-#ifdef CONFIG_PM
+-static int bpcie_glue_suspend(struct bpcie_dev *sc, pm_message_t state) {
+-	return 0;
+-}
+-
+-static int bpcie_glue_resume(struct bpcie_dev *sc) {
+-	return 0;
+-}
+-#endif
+-
+-#ifdef CONFIG_PM
+-#endif
+-
+-
+-static const struct ps4sb_family baikal_family = {
+-	.name			= "Baikal",
+-	.uart_bar		= 2,
+-	.uart_base		= BPCIE_RGN_UART_BASE,
+-	.uart_clock		= 25000000,
+-	.uart_subfunc		= BPCIE_SUBFUNC_UART0,
+-	.uart_count		= BPCIE_NR_UARTS,
+-	.icc_bar		= 2,
+-	.icc_base		= BPCIE_RGN_ICC_BASE,
+-	.icc_atomic_power	= true,
+-	.icc_usb_power		= true,
+-	.i2c_data_off		= 8,
+-	.i2c_err_off		= 0,
+-	.rtc_bar		= 4,
+-	.rtc_reg		= 0x50d0,
+-	.rtc_status		= 0x50cc,
+-	.rtc_epoch		= 1325376000LL,
+-};
+-
+-static int bpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+-	struct bpcie_dev *sc;
+-	int ret;
+-
+-	dev_dbg(&dev->dev, "bpcie_probe()\n");
+-
+-	ret = pci_enable_device(dev);
+-	if (ret) {
+-		dev_err(&dev->dev,
+-			"bpcie_probe(): pci_enable_device failed: %d\n", ret);
+-		return ret;
+-	}
+-
+-	sc = kzalloc(sizeof(*sc), GFP_KERNEL);
+-	if (!sc) {
+-		dev_err(&dev->dev, "bpcie_probe(): alloc sc failed\n");
+-		ret = -ENOMEM;
+-		goto disable_dev;
+-	}
+-	sc->pdev = dev;
+-	sc->family = &baikal_family;
+-	memset(sc->irq_map, -1, sizeof(sc->irq_map));
+-	pci_set_drvdata(dev, sc);
+-
+-	sc->bar0 = pci_ioremap_bar(dev, 0);
+-	sc->bar2 = pci_ioremap_bar(dev, 2);
+-	sc->bar4 = pci_ioremap_bar(dev, 4);
+-
+-	if (!sc->bar0 || !sc->bar2 || !sc->bar4) {
+-		sc_err("failed to map some BARs, bailing out\n");
+-		ret = -EIO;
+-		goto free_bars;
+-	}
+-
+-	if ((ret = bpcie_glue_init(sc)) < 0)
+-		goto free_bars;
+-	if (ps4sb_uart_init(sc) < 0)
+-		sc_err("uart not registered\n");
+-	if (ps4sb_rtc_init(sc) < 0)
+-		sc_err("rtc not registered\n");
+-	if ((ret = ps4sb_icc_init(sc)) < 0)
+-		goto remove_uart;
+-
+-	WRITE_ONCE(ps4sb_initialized, true);
+-	return 0;
+-
+-remove_uart:
+-	ps4sb_uart_remove(sc);
+-	bpcie_glue_remove(sc);
+-free_bars:
+-	if (sc->bar0)
+-		iounmap(sc->bar0);
+-	if (sc->bar2)
+-		iounmap(sc->bar2);
+-	if (sc->bar4)
+-		iounmap(sc->bar4);
+-	kfree(sc);
+-disable_dev:
+-	pci_disable_device(dev);
+-	return ret;
+-}
+-
+-static void bpcie_remove(struct pci_dev *dev) {
+-	struct bpcie_dev *sc;
+-	sc = pci_get_drvdata(dev);
+-
+-	WRITE_ONCE(ps4sb_initialized, false);
+-	ps4sb_icc_remove(sc);
+-	ps4sb_uart_remove(sc);
+-	bpcie_glue_remove(sc);
+-
+-	if (sc->bar0)
+-		iounmap(sc->bar0);
+-	if (sc->bar2)
+-		iounmap(sc->bar2);
+-	if (sc->bar4)
+-		iounmap(sc->bar4);
+-	kfree(sc);
+-	pci_disable_device(dev);
+-}
+-
+-#ifdef CONFIG_PM
+-static int bpcie_suspend(struct pci_dev *dev, pm_message_t state) {
+-	struct bpcie_dev *sc;
+-	sc = pci_get_drvdata(dev);
+-
+-	ps4sb_icc_suspend(sc, state);
+-	ps4sb_uart_suspend(sc, state);
+-	bpcie_glue_suspend(sc, state);
+-	return 0;
+-}
+-
+-static int bpcie_resume(struct pci_dev *dev) {
+-	struct bpcie_dev *sc;
+-	sc = pci_get_drvdata(dev);
+-
+-	ps4sb_icc_resume(sc);
+-	bpcie_glue_resume(sc);
+-	ps4sb_uart_resume(sc);
+-	return 0;
+-}
+-#endif
+-
+-static const struct pci_device_id bpcie_pci_tbl[] = {
+-	{ PCI_DEVICE(PCI_VENDOR_ID_SONY, PCI_DEVICE_ID_SONY_BAIKAL_PCIE), },
+-	{ }
+-};
+-MODULE_DEVICE_TABLE(pci, bpcie_pci_tbl);
+-
+-static struct pci_driver bpcie_driver = {
+-	.name		= "baikal_pcie",
+-	.id_table	= bpcie_pci_tbl,
+-	.probe		= bpcie_probe,
+-	.remove		= bpcie_remove,
+-#ifdef CONFIG_PM
+-	.suspend	= bpcie_suspend,
+-	.resume		= bpcie_resume,
+-#endif
+-};
+-module_pci_driver(bpcie_driver);
+-
+-static void bpcie_ahci_rmw(void __iomem *mmio, u32 offset, u32 mask, u32 set)
+-{
+-	u32 val = ioread32(mmio + offset);
+-
+-	iowrite32((val & mask) | set, mmio + offset);
+-}
+-
+-#define BAIKAL_BOOT_PAGE_PHYS		0x9b000
+-#define BAIKAL_BOOT_TRACE_HDD		0x386
+-#define BAIKAL_BOOT_TRACE_OTHER		0x385
+-#define BAIKAL_BOOT_REVISION		0x6e0
+-#define BAIKAL_REVISION_30100		0x30100
+-#define BAIKAL_SATA_TRACE_DEFAULT	6
+-
+-struct bpcie_sata_rmw {
+-	u16 reg;
+-	u32 keep;
+-	u32 set;
+-};
+-
+-static const struct bpcie_sata_rmw bpcie_sata_trace_0_2[] = {
+-	{ 0x204C, 0xFFFFC0FF, 0x1D00 },
+-	{ 0x2054, 0xFFFF9FFF, 0x4000 },
+-	{ 0x207C, 0xFFFFFFC0, 0x20 },
+-	{ 0x205C, 0xCFFFFFFF, 0x20000000 },
+-	{ 0x2080, 0xFFFFF03F, 0x880 },
+-	{ 0x2080, 0xFFFC0FFF, 0x3000 },
+-	{ 0x205C, 0x3FFFFFFF, 0x40000000 },
+-	{ 0x204C, 0xFFFFFFF0, 0x3 },
+-	{ 0x206C, 0xFFFFF0FF, 0x100 },
+-	{ 0x2084, 0xFFFFFF00, 0x32 },
+-};
+-
+-static const struct bpcie_sata_rmw bpcie_sata_trace_3_5[] = {
+-	{ 0x204C, 0xFFC0FFFF, 0x1E0000 },
+-	{ 0x204C, 0xC0FFFFFF, 0 },
+-	{ 0x2054, 0xFFFF9FFF, 0x2000 },
+-	{ 0x207C, 0xFFFFF03F, 0x840 },
+-	{ 0x207C, 0xFFFC0FFF, 0x2000 },
+-	{ 0x205C, 0xCFFFFFFF, 0x10000000 },
+-	{ 0x2080, 0xFFFFF03F, 0x8C0 },
+-	{ 0x2080, 0xFFFC0FFF, 0x7000 },
+-	{ 0x205C, 0x3FFFFFFF, 0x40000000 },
+-	{ 0x204C, 0xFFFFFFF0, 0x3 },
+-	{ 0x206C, 0xFFFFF0FF, 0x100 },
+-	{ 0x2084, 0xFFFFFF00, 0x43 },
+-};
+-
+-static const struct bpcie_sata_rmw bpcie_sata_trace_6_8[] = {
+-	{ 0x204C, 0xFFC0FFFF, 0x200000 },
+-	{ 0x204C, 0xC0FFFFFF, 0x1000000 },
+-	{ 0x2054, 0xFFFF9FFF, 0x2000 },
+-	{ 0x207C, 0xFFFFF03F, 0x880 },
+-	{ 0x207C, 0xFFFC0FFF, 0x6000 },
+-	{ 0x205C, 0xCFFFFFFF, 0x10000000 },
+-	{ 0x2080, 0xFFFFF03F, 0x900 },
+-	{ 0x2080, 0xFFFC0FFF, 0xF000 },
+-	{ 0x205C, 0x3FFFFFFF, 0x40000000 },
+-	{ 0x204C, 0xFFFFFFF0, 0x5 },
+-	{ 0x206C, 0xFFFFF0FF, 0x200 },
+-	{ 0x2084, 0xFFFFFF00, 0x55 },
+-};
+-
+-static const struct bpcie_sata_rmw bpcie_sata_trace_9_12[] = {
+-	{ 0x204C, 0xFFC0FFFF, 0x240000 },
+-	{ 0x204C, 0xC0FFFFFF, 0x4000000 },
+-	{ 0x2054, 0xFFFF9FFF, 0x2000 },
+-	{ 0x207C, 0xFFFFF03F, 0x880 },
+-	{ 0x207C, 0xFFFC0FFF, 0x6000 },
+-	{ 0x205C, 0xCFFFFFFF, 0x10000000 },
+-	{ 0x2080, 0xFFFFF03F, 0x900 },
+-	{ 0x2080, 0xFFFC0FFF, 0xF000 },
+-	{ 0x205C, 0x3FFFFFFF, 0x40000000 },
+-	{ 0x204C, 0xFFFFFFF0, 0x5 },
+-	{ 0x206C, 0xFFFFF0FF, 0x200 },
+-	{ 0x2084, 0xFFFFFF00, 0x55 },
+-};
+-
+-static const struct bpcie_sata_rmw bpcie_sata_trace_13_18[] = {
+-	{ 0x204C, 0xFFC0FFFF, 0x260000 },
+-	{ 0x204C, 0xC0FFFFFF, 0x7000000 },
+-	{ 0x2054, 0xFFFF9FFF, 0x2000 },
+-	{ 0x207C, 0xFFFFF03F, 0x880 },
+-	{ 0x207C, 0xFFFC0FFF, 0x6000 },
+-	{ 0x205C, 0xCFFFFFFF, 0x10000000 },
+-	{ 0x2080, 0xFFFFF03F, 0x900 },
+-	{ 0x2080, 0xFFFC0FFF, 0xF000 },
+-	{ 0x205C, 0x3FFFFFFF, 0x40000000 },
+-	{ 0x204C, 0xFFFFFFF0, 0x5 },
+-	{ 0x206C, 0xFFFFF0FF, 0x200 },
+-	{ 0x2084, 0xFFFFFF00, 0x55 },
+-};
+-
+-static const struct {
+-	u32 max_length;
+-	const struct bpcie_sata_rmw *rmw;
+-	size_t count;
+-} bpcie_sata_trace_sets[] = {
+-	{ 2, bpcie_sata_trace_0_2, ARRAY_SIZE(bpcie_sata_trace_0_2) },
+-	{ 5, bpcie_sata_trace_3_5, ARRAY_SIZE(bpcie_sata_trace_3_5) },
+-	{ 8, bpcie_sata_trace_6_8, ARRAY_SIZE(bpcie_sata_trace_6_8) },
+-	{ 12, bpcie_sata_trace_9_12, ARRAY_SIZE(bpcie_sata_trace_9_12) },
+-	{ 18, bpcie_sata_trace_13_18, ARRAY_SIZE(bpcie_sata_trace_13_18) },
+-};
+-
+-static bool bpcie_baikal_boot_info(bool hdd, u8 *trace, u32 *revision)
+-{
+-	u8 *page = memremap(BAIKAL_BOOT_PAGE_PHYS, PAGE_SIZE, MEMREMAP_WB);
+-
+-	*trace = 0;
+-	*revision = 0;
+-	if (!page)
+-		return false;
+-	*trace = page[hdd ? BAIKAL_BOOT_TRACE_HDD : BAIKAL_BOOT_TRACE_OTHER];
+-	*revision = *(u32 *)(page + BAIKAL_BOOT_REVISION);
+-	memunmap(page);
+-	return true;
+-}
+-
+-static u32 bpcie_sata_trace_length(u8 trace)
+-{
+-	u32 length = trace & 0x1f;
+-
+-	if (trace > 0x5f)
+-		length += (trace >> 5) - 2;
+-	if (!trace || length > 18)
+-		length = BAIKAL_SATA_TRACE_DEFAULT;
+-	return length;
+-}
+-
+-static void bpcie_sata_write_trace_set(void __iomem *mmio, u32 length)
+-{
+-	size_t i, j;
+-
+-	for (i = 0; i < ARRAY_SIZE(bpcie_sata_trace_sets); i++) {
+-		if (length > bpcie_sata_trace_sets[i].max_length)
+-			continue;
+-		for (j = 0; j < bpcie_sata_trace_sets[i].count; j++)
+-			bpcie_ahci_rmw(mmio, bpcie_sata_trace_sets[i].rmw[j].reg,
+-				       bpcie_sata_trace_sets[i].rmw[j].keep,
+-				       bpcie_sata_trace_sets[i].rmw[j].set);
+-		return;
+-	}
+-}
+-
+-int bpcie_baikal_sata_phy_init(struct pci_dev *pdev, void __iomem *ahci_mmio)
+-{
+-	struct pci_dev *glue_dev;
+-	struct bpcie_dev *sc;
+-	u32 efuse0, efuse1;
+-	u32 tune0 = 40;
+-	u32 tune1 = 16;
+-	u32 tune2 = 16;
+-	u32 pulse_offset;
+-	u32 hold_offset;
+-	u32 status;
+-	u32 revision;
+-	u32 length;
+-	u8 trace;
+-	bool have_boot;
+-	bool shared_path;
+-	int ret = 0;
+-
+-	if (!pdev || pdev->vendor != PCI_VENDOR_ID_SONY || !ahci_mmio)
+-		return 0;
+-
+-	if (pdev->device != PCI_DEVICE_ID_SONY_BAIKAL_AHCI &&
+-	    pdev->device != PCI_DEVICE_ID_SONY_BAIKAL_XHCI)
+-		return 0;
+-
+-	glue_dev = pci_get_slot(pdev->bus,
+-				(pdev->devfn & ~0x7) | BAIKAL_FUNC_ID_PCIE);
+-	if (!glue_dev)
+-		return -EPROBE_DEFER;
+-
+-	if (!bpcie_is_compatible_device(glue_dev)) {
+-		ret = -ENODEV;
+-		goto out_put;
+-	}
+-
+-	sc = pci_get_drvdata(glue_dev);
+-	if (!sc || !sc->bar2 || !sc->bar4) {
+-		ret = -EPROBE_DEFER;
+-		goto out_put;
+-	}
+-
+-	dev_info(&pdev->dev, "Baikal SATA PHY init\n");
+-
+-	shared_path = pdev->device == PCI_DEVICE_ID_SONY_BAIKAL_XHCI;
+-	if (shared_path) {
+-		pulse_offset = 112;
+-		hold_offset = 48;
+-	} else {
+-		pulse_offset = 108;
+-		hold_offset = 44;
+-	}
+-
+-	glue_write32(sc, BPCIE_USB_BASE + pulse_offset, 1);
+-	glue_write32(sc, BPCIE_USB_BASE + hold_offset, 1);
+-	glue_write32(sc, BPCIE_USB_BASE + pulse_offset, 0);
+-
+-	efuse0 = ioread32(sc->bar4 + 0xC000 + 72);
+-	efuse1 = ioread32(sc->bar4 + 0xC000 + 108);
+-
+-	if (shared_path) {
+-		if (efuse1 & BIT(26)) {
+-			tune0 = (efuse0 >> 16) & 0x3f;
+-			tune1 = (efuse0 >> 22) & 0x1f;
+-			tune2 = efuse0 >> 27;
+-		}
+-	} else if (efuse1 & BIT(18)) {
+-		tune0 = efuse0 & 0x3f;
+-		tune1 = (efuse0 >> 6) & 0x1f;
+-		tune2 = efuse0 >> 11;
+-	}
+-
+-	dev_info(&pdev->dev, "Baikal SATA EFUSE VALUE: 0x%02x:0x%02x:0x%02x\n",
+-		 tune0, tune1, tune2);
+-	have_boot = bpcie_baikal_boot_info(shared_path, &trace, &revision);
+-	length = bpcie_sata_trace_length(trace);
+-	if (have_boot)
+-		dev_info(&pdev->dev,
+-			 "Baikal SATA PHY trace byte 0x%02x, length %u, revision 0x%x\n",
+-			 trace, length, revision);
+-	else
+-		dev_warn(&pdev->dev,
+-			 "Baikal SATA PHY boot block not mapped, length %u\n",
+-			 length);
+-
+-	bpcie_ahci_rmw(ahci_mmio, 0x20A0, 0xFBFF03FF, (tune0 << 10) | 0x4000000);
+-	iowrite32(ioread32(ahci_mmio + 0x2014) | 0x100000, ahci_mmio + 0x2014);
+-	bpcie_ahci_rmw(ahci_mmio, 0x2054, 0xFFFFF07F, tune1 << 7);
+-	iowrite32(ioread32(ahci_mmio + 0x201C) | 0x4, ahci_mmio + 0x201C);
+-	bpcie_ahci_rmw(ahci_mmio, 0x2078, 0xFFFFFE0F, tune2 << 4);
+-
+-	bpcie_sata_write_trace_set(ahci_mmio, length);
+-
+-	bpcie_ahci_rmw(ahci_mmio, 0x2040, 0xFFFFFFE0, 0x12);
+-	bpcie_ahci_rmw(ahci_mmio, 0x2040, 0xFFFFC0FF, 0x3100);
+-	bpcie_ahci_rmw(ahci_mmio, 0x2040, 0xFFE0FFFF, 0xE0000);
+-	bpcie_ahci_rmw(ahci_mmio, 0x2040, 0xFFFFFF1F, 0x80);
+-	if (revision == BAIKAL_REVISION_30100) {
+-		iowrite32(ioread32(ahci_mmio + 0x2028) & ~BIT(25),
+-			  ahci_mmio + 0x2028);
+-		bpcie_ahci_rmw(ahci_mmio, 0x2044, 0xFFFFFF80, 0x1C);
+-	}
+-	bpcie_ahci_rmw(ahci_mmio, 0x201C, 0xFF0FFFFF, 0x200000);
+-	bpcie_ahci_rmw(ahci_mmio, 0x20DC, 0xFFFFE0FF, 0x400);
+-	iowrite32(ioread32(ahci_mmio + 0x2024) | 0x30, ahci_mmio + 0x2024);
+-
+-	glue_write32(sc, BPCIE_USB_BASE + hold_offset, 0);
+-	readl_poll_timeout_atomic(ahci_mmio + 0xDC, status, status & 0x1,
+-				  10, 1000);
+-
+-	bpcie_ahci_rmw(ahci_mmio, 0x0, 0xE7FFFFFF, 0);
+-	iowrite32(0x1, ahci_mmio + 0x0C);
+-	bpcie_ahci_rmw(ahci_mmio, 0x0B8, 0xFFFDFFFF, 0);
+-	bpcie_ahci_rmw(ahci_mmio, 0x118, 0xFFE3FFFF, 0x40000);
+-
+-out_put:
+-	pci_dev_put(glue_dev);
+-	return ret;
+-}
+-EXPORT_SYMBOL_GPL(bpcie_baikal_sata_phy_init);
+diff --git a/drivers/ps4/ps4-buzzer.c b/drivers/ps4/ps4-buzzer.c
+index 89c254b411cbc8d7dc9ef3fa5e3a37ef8355d8a0..a82ead761ef9280bc2ff22ed8bc0697d91fab0be 100644
+--- a/drivers/ps4/ps4-buzzer.c
++++ b/drivers/ps4/ps4-buzzer.c
+@@ -3,7 +3,7 @@
+ #include <linux/module.h>
+ #include <linux/platform_device.h>
+ #include <linux/mutex.h>
+-#include "aeolia.h"
++#include "ps4sb.h"
+ #include "ps4-buzzer.h"
+ 
+ static DEFINE_MUTEX(ps4_buzzer_lock);
+diff --git a/drivers/ps4/ps4-fan.c b/drivers/ps4/ps4-fan.c
+index 2b0ba6757ab3c2da13f6d7dd77b40757073aa1e5..7c127421e60cc15473eeabfab7370ef0185deb9e 100644
+--- a/drivers/ps4/ps4-fan.c
++++ b/drivers/ps4/ps4-fan.c
+@@ -7,7 +7,7 @@
+ #include <linux/mutex.h>
+ #include <linux/slab.h>
+ #include <linux/err.h>
+-#include "aeolia.h"
++#include "ps4sb.h"
+ #include "ps4-fan.h"
+ 
+ #define PS4_FAN_CACHE_JIFFIES HZ
+diff --git a/drivers/ps4/ps4-led.c b/drivers/ps4/ps4-led.c
+index 6259494545d98e3dc09be0617d9a6812bda92bb4..7e7d5c0f7d29339ca4d65585abe62c83462d3f68 100644
+--- a/drivers/ps4/ps4-led.c
++++ b/drivers/ps4/ps4-led.c
+@@ -5,7 +5,7 @@
+ #include <linux/platform_device.h>
+ #include <linux/string.h>
+ #include <asm/ps4.h>
+-#include "aeolia.h"
++#include "ps4sb.h"
+ #include "ps4-led.h"
+ 
+ static const u8 led_off[] = {
+diff --git a/drivers/ps4/ps4-sflash.c b/drivers/ps4/ps4-sflash.c
+deleted file mode 100644
+index c96d4d29b125b690115797a7210ba3397fe46ff0..0000000000000000000000000000000000000000
+--- a/drivers/ps4/ps4-sflash.c
++++ /dev/null
+@@ -1,546 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0-only
+-
+-#define pr_fmt(fmt) "ps4-sflash: " fmt
+-
+-#include <linux/module.h>
+-#include <linux/kernel.h>
+-#include <linux/init.h>
+-#include <linux/pci.h>
+-#include <linux/io.h>
+-#include <linux/delay.h>
+-#include <linux/iopoll.h>
+-#include <linux/sched.h>
+-#include <linux/fs.h>
+-#include <linux/miscdevice.h>
+-#include <linux/uaccess.h>
+-#include <linux/mutex.h>
+-#include <linux/dma-mapping.h>
+-#include <linux/slab.h>
+-
+-#include "ps4-sflash.h"
+-
+-struct ps4_sflash_dev;
+-
+-struct ps4_sflash_chip {
+-	const char *name;
+-	int (*setup)(struct ps4_sflash_dev *dev);
+-	u32 (*read_jedec)(struct ps4_sflash_dev *dev);
+-	u32 (*read_status)(struct ps4_sflash_dev *dev);
+-	ssize_t (*read_block)(struct ps4_sflash_dev *dev, u32 flash_addr,
+-			      u8 *out_buf, size_t flash_len);
+-};
+-
+-struct ps4_sflash_dev {
+-	struct pci_dev *pdev;
+-	const struct ps4_sflash_chip *chip;
+-	void __iomem *bar4;
+-	void __iomem *sflash_regs;
+-	void __iomem *clk_regs;
+-	struct miscdevice misc;
+-	struct mutex lock;
+-	u8 *dma_vaddr;
+-	dma_addr_t dma_paddr;
+-	u8 *dec_buf;
+-};
+-
+-static struct ps4_sflash_dev *g_ps4_sflash;
+-
+-static inline u32 sflash_read32(struct ps4_sflash_dev *dev, u32 reg)
+-{
+-	return ioread32(dev->sflash_regs + reg);
+-}
+-
+-static inline void sflash_write32(struct ps4_sflash_dev *dev, u32 reg, u32 val)
+-{
+-	iowrite32(val, dev->sflash_regs + reg);
+-}
+-
+-static inline u32 sflash_clk_read32(struct ps4_sflash_dev *dev, u32 reg)
+-{
+-	return ioread32(dev->clk_regs + reg);
+-}
+-
+-static inline void sflash_clk_write32(struct ps4_sflash_dev *dev, u32 reg, u32 val)
+-{
+-	iowrite32(val, dev->clk_regs + reg);
+-}
+-
+-static int ps4_sflash_clk_enable(struct ps4_sflash_dev *dev)
+-{
+-	int timeout = 1000;
+-
+-	sflash_clk_write32(dev, 0x4, 1);
+-	while (timeout--) {
+-		if ((sflash_clk_read32(dev, 0x0) & 7) == 4)
+-			return 0;
+-		usleep_range(50, 100);
+-	}
+-	return -ETIMEDOUT;
+-}
+-
+-static int ps4_sflash_wait_idle(struct ps4_sflash_dev *dev)
+-{
+-	int timeout = 10000;
+-
+-	while (timeout--) {
+-		if ((sflash_read32(dev, PS4_SFLASH_REG_STATUS) & 1) == 0)
+-			return 0;
+-		udelay(10);
+-	}
+-	return -ETIMEDOUT;
+-}
+-
+-static int ps4_sflash_wait_dma(struct ps4_sflash_dev *dev)
+-{
+-	int timeout = 10000;
+-
+-	while (timeout--) {
+-		if ((sflash_read32(dev, PS4_SFLASH_REG_CMD) & 0x80000000) == 0)
+-			return 0;
+-		udelay(10);
+-	}
+-	return -ETIMEDOUT;
+-}
+-
+-static u32 ps4_sflash_read_jedec(struct ps4_sflash_dev *dev)
+-{
+-	ps4_sflash_clk_enable(dev);
+-	sflash_write32(dev, PS4_SFLASH_REG_CMD, 0x8010009f);
+-	ps4_sflash_wait_idle(dev);
+-	return sflash_read32(dev, PS4_SFLASH_REG_RDID);
+-}
+-
+-static u32 ps4_sflash_read_status(struct ps4_sflash_dev *dev)
+-{
+-	ps4_sflash_clk_enable(dev);
+-	sflash_write32(dev, PS4_SFLASH_REG_CMD, 0x80000005);
+-	ps4_sflash_wait_idle(dev);
+-	return (sflash_read32(dev, PS4_SFLASH_REG_STATUS) >> 16) & 0xff;
+-}
+-
+-static void ps4_sflash_unpack_chunk(const u8 *raw, u8 *dec, size_t raw_len)
+-{
+-	size_t i;
+-
+-	for (i = 0; i < raw_len; i += 4) {
+-		u8 b0 = raw[i];
+-		u8 b1 = raw[i + 1];
+-		u8 b2 = raw[i + 2];
+-		u8 b3 = raw[i + 3];
+-
+-		dec[i / 4] = ((b0 & 0x20) << 2) |
+-			     ((b0 & 0x02) << 5) |
+-			     ((b1 & 0x20) << 0) |
+-			     ((b1 & 0x02) << 3) |
+-			     ((b2 & 0x20) >> 2) |
+-			     ((b2 & 0x02) << 1) |
+-			     ((b3 & 0x20) >> 4) |
+-			     ((b3 & 0x02) >> 1);
+-	}
+-}
+-
+-static ssize_t ps4_sflash_read_block(struct ps4_sflash_dev *dev, u32 flash_addr,
+-				     u8 *out_buf, size_t flash_len)
+-{
+-	size_t dma_len = flash_len * 4;
+-	u32 ctrl_addr = (flash_addr - 1) & 0xffffffff;
+-	int ret;
+-
+-	if (dma_len > PS4_SFLASH_CHUNK_DMA)
+-		return -EINVAL;
+-
+-	ret = ps4_sflash_clk_enable(dev);
+-	if (ret)
+-		return ret;
+-
+-	sflash_write32(dev, PS4_SFLASH_REG_TIMING, 0x007d0000);
+-	sflash_write32(dev, PS4_SFLASH_REG_OPCODES, 0x9f050300);
+-	sflash_write32(dev, PS4_SFLASH_REG_CS,
+-		       (sflash_read32(dev, PS4_SFLASH_REG_CS) & 0xffffff00) | 1);
+-
+-	sflash_write32(dev, PS4_SFLASH_REG_STATUS_CLR, 0);
+-	sflash_write32(dev, PS4_SFLASH_REG_OFFSET, ctrl_addr);
+-	sflash_write32(dev, PS4_SFLASH_REG_DMA_ADDR, (u32)dev->dma_paddr);
+-	sflash_write32(dev, PS4_SFLASH_REG_DMA_LEN, 0x80000000 | (u32)dma_len);
+-	sflash_write32(dev, PS4_SFLASH_REG_CMD, 0x82100103);
+-
+-	ret = ps4_sflash_wait_dma(dev);
+-	if (ret)
+-		return ret;
+-
+-	ps4_sflash_unpack_chunk(dev->dma_vaddr, out_buf, dma_len);
+-	return flash_len;
+-}
+-
+-static int ps4_sflash_aeolia_setup(struct ps4_sflash_dev *dev)
+-{
+-	dev->sflash_regs = dev->bar4 + 0xc2000;
+-	dev->clk_regs = dev->bar4 + 0xc3000;
+-
+-	dma_set_mask_and_coherent(&dev->pdev->dev, DMA_BIT_MASK(32));
+-	dev->dma_vaddr = dma_alloc_coherent(&dev->pdev->dev, PS4_SFLASH_CHUNK_DMA,
+-					    &dev->dma_paddr, GFP_KERNEL);
+-	if (!dev->dma_vaddr) {
+-		pr_err("failed to allocate DMA bounce buffer\n");
+-		return -ENOMEM;
+-	}
+-	return 0;
+-}
+-
+-static int ps4_sflash_baikal_claim(struct ps4_sflash_dev *dev)
+-{
+-	u32 val;
+-	int ret;
+-
+-	sflash_write32(dev, PS4_SFLASH_BK_CLAIM, 1);
+-	ret = read_poll_timeout(ioread32, val, (val & 7) == 4, 10,
+-				PS4_SFLASH_BK_TIMEOUT_US, false,
+-				dev->sflash_regs + PS4_SFLASH_BK_CLAIM_STATUS);
+-	if (ret) {
+-		sflash_write32(dev, PS4_SFLASH_BK_CLAIM, 0);
+-		return ret;
+-	}
+-	return 0;
+-}
+-
+-static void ps4_sflash_baikal_release(struct ps4_sflash_dev *dev)
+-{
+-	u32 val;
+-
+-	sflash_write32(dev, PS4_SFLASH_BK_CLAIM, 0);
+-	if (read_poll_timeout(ioread32, val, !(val & 4), 10,
+-			      PS4_SFLASH_BK_TIMEOUT_US, false,
+-			      dev->sflash_regs + PS4_SFLASH_BK_CLAIM_STATUS))
+-		pr_warn_ratelimited("release timed out, status %08x\n", val);
+-}
+-
+-static int ps4_sflash_baikal_xfer(struct ps4_sflash_dev *dev, u8 opcode,
+-				  u32 addr, unsigned int addr_len,
+-				  u8 *rx, unsigned int rx_len)
+-{
+-	unsigned int i;
+-	u32 val;
+-	int ret;
+-
+-	sflash_write32(dev, PS4_SFLASH_BK_OPCODE, opcode);
+-	for (i = 0; i < PS4_SFLASH_BK_ADDR_LEN; i++)
+-		sflash_write32(dev, PS4_SFLASH_BK_ADDR - i * 4,
+-			       addr_len ? (addr >> (24 - i * 8)) & 0xff : 0);
+-	sflash_write32(dev, PS4_SFLASH_BK_BITS, (1 + addr_len + rx_len) * 8);
+-	sflash_write32(dev, PS4_SFLASH_BK_CTRL, PS4_SFLASH_BK_CTRL_START);
+-
+-	ret = read_poll_timeout(ioread32, val, !(val & PS4_SFLASH_BK_CTRL_START),
+-				0, PS4_SFLASH_BK_TIMEOUT_US, false,
+-				dev->sflash_regs + PS4_SFLASH_BK_CTRL);
+-	if (!ret)
+-		for (i = 0; i < rx_len; i++)
+-			rx[i] = sflash_read32(dev, PS4_SFLASH_BK_RX + i * 4);
+-
+-	sflash_write32(dev, PS4_SFLASH_BK_CTRL, 0);
+-	return ret;
+-}
+-
+-static int ps4_sflash_baikal_command(struct ps4_sflash_dev *dev, u8 opcode,
+-				     u8 *rx, unsigned int rx_len)
+-{
+-	int ret;
+-
+-	ret = ps4_sflash_baikal_claim(dev);
+-	if (ret)
+-		return ret;
+-
+-	ret = ps4_sflash_baikal_xfer(dev, opcode, 0, 0, rx, rx_len);
+-	ps4_sflash_baikal_release(dev);
+-	return ret;
+-}
+-
+-static u32 ps4_sflash_baikal_read_jedec(struct ps4_sflash_dev *dev)
+-{
+-	u8 rx[3];
+-
+-	if (ps4_sflash_baikal_command(dev, PS4_SFLASH_BK_OP_RDID, rx, sizeof(rx)))
+-		return ~0u;
+-	return rx[0] | rx[1] << 8 | rx[2] << 16;
+-}
+-
+-static u32 ps4_sflash_baikal_read_status(struct ps4_sflash_dev *dev)
+-{
+-	u8 rx;
+-
+-	if (ps4_sflash_baikal_command(dev, PS4_SFLASH_BK_OP_RDSR, &rx, 1))
+-		return ~0u;
+-	return rx;
+-}
+-
+-static ssize_t ps4_sflash_baikal_read_block(struct ps4_sflash_dev *dev,
+-					    u32 flash_addr, u8 *out_buf,
+-					    size_t flash_len)
+-{
+-	size_t i;
+-	int ret;
+-
+-	ret = ps4_sflash_baikal_claim(dev);
+-	if (ret)
+-		return ret;
+-
+-	for (i = 0; i < flash_len; i++) {
+-		ret = ps4_sflash_baikal_xfer(dev, PS4_SFLASH_BK_OP_READ4B,
+-					     flash_addr + i, 4, &out_buf[i], 1);
+-		if (ret)
+-			break;
+-		cond_resched();
+-	}
+-
+-	ps4_sflash_baikal_release(dev);
+-	return ret ? ret : flash_len;
+-}
+-
+-static int ps4_sflash_baikal_setup(struct ps4_sflash_dev *dev)
+-{
+-	u32 val;
+-	int ret;
+-
+-	dev->sflash_regs = dev->bar4;
+-
+-	ret = ps4_sflash_baikal_claim(dev);
+-	if (ret) {
+-		pr_err("controller claim timed out\n");
+-		return ret;
+-	}
+-
+-	sflash_write32(dev, PS4_SFLASH_BK_UNLOCK, 1);
+-	val = sflash_read32(dev, PS4_SFLASH_BK_PINS);
+-	sflash_write32(dev, PS4_SFLASH_BK_PINS, val & ~PS4_SFLASH_BK_PINS_CLEAR);
+-	sflash_write32(dev, PS4_SFLASH_BK_UNLOCK, 0);
+-
+-	sflash_write32(dev, PS4_SFLASH_BK_IRQ_STATUS, 0xff);
+-	sflash_write32(dev, PS4_SFLASH_BK_DMA_IRQ_STATUS, 0);
+-	sflash_write32(dev, PS4_SFLASH_BK_IRQ_MASK, 0);
+-	sflash_write32(dev, PS4_SFLASH_BK_DMA_IRQ_MASK, 0);
+-	sflash_write32(dev, PS4_SFLASH_BK_TIMING, 0x30);
+-	sflash_write32(dev, PS4_SFLASH_BK_CFG,
+-		       sflash_read32(dev, PS4_SFLASH_BK_CFG) | PS4_SFLASH_BK_CFG_ENABLE);
+-
+-	ps4_sflash_baikal_release(dev);
+-	return 0;
+-}
+-
+-static const struct ps4_sflash_chip ps4_sflash_aeolia = {
+-	.name		= "Aeolia",
+-	.setup		= ps4_sflash_aeolia_setup,
+-	.read_jedec	= ps4_sflash_read_jedec,
+-	.read_status	= ps4_sflash_read_status,
+-	.read_block	= ps4_sflash_read_block,
+-};
+-
+-static const struct ps4_sflash_chip ps4_sflash_baikal = {
+-	.name		= "Baikal",
+-	.setup		= ps4_sflash_baikal_setup,
+-	.read_jedec	= ps4_sflash_baikal_read_jedec,
+-	.read_status	= ps4_sflash_baikal_read_status,
+-	.read_block	= ps4_sflash_baikal_read_block,
+-};
+-
+-static const struct {
+-	u16 device;
+-	const struct ps4_sflash_chip *chip;
+-} ps4_sflash_pci_ids[] = {
+-	{ 0x90a1, &ps4_sflash_aeolia },
+-	{ 0x90b8, &ps4_sflash_aeolia },
+-	{ 0x90c4, &ps4_sflash_aeolia },
+-	{ 0x90d4, &ps4_sflash_aeolia },
+-	{ PCI_DEVICE_ID_SONY_BAIKAL_PCIE, &ps4_sflash_baikal },
+-};
+-
+-static ssize_t ps4_sflash_read(struct file *file, char __user *buf,
+-			       size_t count, loff_t *ppos)
+-{
+-	struct ps4_sflash_dev *dev = g_ps4_sflash;
+-	size_t total_read = 0;
+-	ssize_t ret = 0;
+-
+-	if (!dev)
+-		return -ENODEV;
+-
+-	if (*ppos >= PS4_SFLASH_TOTAL_SIZE)
+-		return 0;
+-
+-	if (*ppos + count > PS4_SFLASH_TOTAL_SIZE)
+-		count = PS4_SFLASH_TOTAL_SIZE - *ppos;
+-
+-	if (mutex_lock_interruptible(&dev->lock))
+-		return -ERESTARTSYS;
+-
+-	while (count > 0) {
+-		u32 chunk_flash_off = (u32)(*ppos & ~(PS4_SFLASH_CHUNK_FLASH - 1));
+-		u32 offset_in_chunk = (u32)(*ppos & (PS4_SFLASH_CHUNK_FLASH - 1));
+-		size_t to_copy = PS4_SFLASH_CHUNK_FLASH - offset_in_chunk;
+-
+-		if (to_copy > count)
+-			to_copy = count;
+-
+-		ret = dev->chip->read_block(dev, chunk_flash_off, dev->dec_buf,
+-					    PS4_SFLASH_CHUNK_FLASH);
+-		if (ret < 0)
+-			break;
+-
+-		if (copy_to_user(buf + total_read, dev->dec_buf + offset_in_chunk, to_copy)) {
+-			ret = -EFAULT;
+-			break;
+-		}
+-
+-		*ppos += to_copy;
+-		total_read += to_copy;
+-		count -= to_copy;
+-	}
+-
+-	mutex_unlock(&dev->lock);
+-	return total_read ? (ssize_t)total_read : ret;
+-}
+-
+-static loff_t ps4_sflash_llseek(struct file *file, loff_t offset, int whence)
+-{
+-	return fixed_size_llseek(file, offset, whence, PS4_SFLASH_TOTAL_SIZE);
+-}
+-
+-static long ps4_sflash_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+-{
+-	struct ps4_sflash_dev *dev = g_ps4_sflash;
+-	u32 val;
+-	int ret = 0;
+-
+-	if (!dev)
+-		return -ENODEV;
+-
+-	if (mutex_lock_interruptible(&dev->lock))
+-		return -ERESTARTSYS;
+-
+-	switch (cmd) {
+-	case PS4_SFLASH_IOC_GET_SIZE:
+-		val = PS4_SFLASH_TOTAL_SIZE;
+-		if (copy_to_user((void __user *)arg, &val, sizeof(val)))
+-			ret = -EFAULT;
+-		break;
+-	case PS4_SFLASH_IOC_GET_JEDEC:
+-		val = dev->chip->read_jedec(dev);
+-		if (copy_to_user((void __user *)arg, &val, sizeof(val)))
+-			ret = -EFAULT;
+-		break;
+-	case PS4_SFLASH_IOC_GET_STATUS:
+-		val = dev->chip->read_status(dev);
+-		if (copy_to_user((void __user *)arg, &val, sizeof(val)))
+-			ret = -EFAULT;
+-		break;
+-	default:
+-		ret = -ENOTTY;
+-		break;
+-	}
+-
+-	mutex_unlock(&dev->lock);
+-	return ret;
+-}
+-
+-static const struct file_operations ps4_sflash_fops = {
+-	.owner          = THIS_MODULE,
+-	.read           = ps4_sflash_read,
+-	.llseek         = ps4_sflash_llseek,
+-	.unlocked_ioctl = ps4_sflash_ioctl,
+-};
+-
+-static int __init ps4_sflash_init(void)
+-{
+-	struct ps4_sflash_dev *dev;
+-	struct pci_dev *pdev = NULL;
+-	int i, ret;
+-	u32 jedec;
+-
+-	for (i = 0; i < ARRAY_SIZE(ps4_sflash_pci_ids); i++) {
+-		pdev = pci_get_device(PCI_VENDOR_ID_SONY,
+-				      ps4_sflash_pci_ids[i].device, NULL);
+-		if (pdev)
+-			break;
+-	}
+-
+-	if (!pdev)
+-		return -ENODEV;
+-
+-	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
+-	if (!dev) {
+-		pci_dev_put(pdev);
+-		return -ENOMEM;
+-	}
+-
+-	dev->pdev = pdev;
+-	dev->chip = ps4_sflash_pci_ids[i].chip;
+-	mutex_init(&dev->lock);
+-
+-	dev->bar4 = pci_iomap(pdev, 4, 0x200000);
+-	if (!dev->bar4) {
+-		pr_err("failed to map southbridge BAR4\n");
+-		ret = -ENOMEM;
+-		goto err_free;
+-	}
+-
+-	dev->dec_buf = kmalloc(PS4_SFLASH_CHUNK_FLASH, GFP_KERNEL);
+-	if (!dev->dec_buf) {
+-		ret = -ENOMEM;
+-		goto err_unmap;
+-	}
+-
+-	ret = dev->chip->setup(dev);
+-	if (ret)
+-		goto err_free_dec;
+-
+-	dev->misc.minor = MISC_DYNAMIC_MINOR;
+-	dev->misc.name  = "ps4sflash";
+-	dev->misc.fops  = &ps4_sflash_fops;
+-	ret = misc_register(&dev->misc);
+-	if (ret) {
+-		pr_err("failed to register misc device\n");
+-		goto err_free_dma;
+-	}
+-
+-	g_ps4_sflash = dev;
+-	jedec = dev->chip->read_jedec(dev);
+-
+-	pr_info("%s Southbridge SPI NOR flash driver initialized\n", dev->chip->name);
+-	pr_info("JEDEC ID: 0x%08x, Size: 32MB\n", jedec);
+-	pr_info("Userspace device registered (/dev/ps4sflash)\n");
+-	return 0;
+-
+-err_free_dma:
+-	if (dev->dma_vaddr)
+-		dma_free_coherent(&pdev->dev, PS4_SFLASH_CHUNK_DMA, dev->dma_vaddr, dev->dma_paddr);
+-err_free_dec:
+-	kfree(dev->dec_buf);
+-err_unmap:
+-	pci_iounmap(pdev, dev->bar4);
+-err_free:
+-	pci_dev_put(pdev);
+-	kfree(dev);
+-	return ret;
+-}
+-
+-static void __exit ps4_sflash_exit(void)
+-{
+-	struct ps4_sflash_dev *dev = g_ps4_sflash;
+-
+-	if (!dev)
+-		return;
+-
+-	misc_deregister(&dev->misc);
+-	if (dev->dma_vaddr)
+-		dma_free_coherent(&dev->pdev->dev, PS4_SFLASH_CHUNK_DMA, dev->dma_vaddr, dev->dma_paddr);
+-	kfree(dev->dec_buf);
+-	pci_iounmap(dev->pdev, dev->bar4);
+-	pci_dev_put(dev->pdev);
+-	kfree(dev);
+-	g_ps4_sflash = NULL;
+-}
+-
+-module_init(ps4_sflash_init);
+-module_exit(ps4_sflash_exit);
+-
+-MODULE_AUTHOR("Armandas Kvietkus <armandas.kvietkus@proton.me>");
+-MODULE_DESCRIPTION("PS4 Southbridge Hardware SPI NOR Flash Driver");
+-MODULE_LICENSE("GPL");
+diff --git a/drivers/ps4/ps4-sflash.h b/drivers/ps4/ps4-sflash.h
+deleted file mode 100644
+index cb511445a713327869fd7d4337071dc5d16ecc9d..0000000000000000000000000000000000000000
+--- a/drivers/ps4/ps4-sflash.h
++++ /dev/null
+@@ -1,59 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0-only
+-#ifndef _PS4_SFLASH_H
+-#define _PS4_SFLASH_H
+-
+-#include <linux/types.h>
+-#include <linux/ioctl.h>
+-
+-#define PS4_SFLASH_TOTAL_SIZE       (32 * 1024 * 1024)
+-#define PS4_SFLASH_CHUNK_FLASH      16384
+-#define PS4_SFLASH_CHUNK_DMA        (PS4_SFLASH_CHUNK_FLASH * 4)
+-
+-#define PS4_SFLASH_REG_OFFSET       0x00000
+-#define PS4_SFLASH_REG_DATA         0x00004
+-#define PS4_SFLASH_REG_CMD          0x00008
+-#define PS4_SFLASH_REG_MODE         0x0000c
+-#define PS4_SFLASH_REG_RDID         0x00020
+-#define PS4_SFLASH_REG_OPCODES      0x00028
+-#define PS4_SFLASH_REG_CMD_FLAGS    0x0002c
+-#define PS4_SFLASH_REG_CS           0x00030
+-#define PS4_SFLASH_REG_TIMING       0x00038
+-#define PS4_SFLASH_REG_STATUS_CLR   0x0003c
+-#define PS4_SFLASH_REG_STATUS       0x00040
+-#define PS4_SFLASH_REG_DMA_ADDR     0x00044
+-#define PS4_SFLASH_REG_DMA_LEN      0x00048
+-
+-#define PS4_SFLASH_REG_CLK_STATUS   0x01000
+-#define PS4_SFLASH_REG_CLK_CTRL     0x01004
+-
+-#define PS4_SFLASH_BK_CTRL          0x01000
+-#define PS4_SFLASH_BK_CTRL_START    0x4
+-#define PS4_SFLASH_BK_BITS          0x01004
+-#define PS4_SFLASH_BK_ADDR          0x01030
+-#define PS4_SFLASH_BK_ADDR_LEN      4
+-#define PS4_SFLASH_BK_OPCODE        0x01034
+-#define PS4_SFLASH_BK_RX            0x01038
+-#define PS4_SFLASH_BK_IRQ_STATUS    0x010a8
+-#define PS4_SFLASH_BK_IRQ_MASK      0x010ac
+-#define PS4_SFLASH_BK_CFG           0x010b0
+-#define PS4_SFLASH_BK_CFG_ENABLE    0x100
+-#define PS4_SFLASH_BK_TIMING        0x010c4
+-#define PS4_SFLASH_BK_DMA_IRQ_STATUS 0x01800
+-#define PS4_SFLASH_BK_DMA_IRQ_MASK  0x01804
+-#define PS4_SFLASH_BK_UNLOCK        0x04010
+-#define PS4_SFLASH_BK_CLAIM_STATUS  0x0b000
+-#define PS4_SFLASH_BK_CLAIM         0x0b004
+-#define PS4_SFLASH_BK_PINS          0xeb420
+-#define PS4_SFLASH_BK_PINS_CLEAR    0x11u
+-#define PS4_SFLASH_BK_TIMEOUT_US    200000
+-
+-#define PS4_SFLASH_BK_OP_RDSR       0x05
+-#define PS4_SFLASH_BK_OP_READ4B     0x13
+-#define PS4_SFLASH_BK_OP_RDID       0x9f
+-
+-#define PS4_SFLASH_IOC_MAGIC        'S'
+-#define PS4_SFLASH_IOC_GET_SIZE     _IOR(PS4_SFLASH_IOC_MAGIC, 1, __u32)
+-#define PS4_SFLASH_IOC_GET_JEDEC    _IOR(PS4_SFLASH_IOC_MAGIC, 2, __u32)
+-#define PS4_SFLASH_IOC_GET_STATUS   _IOR(PS4_SFLASH_IOC_MAGIC, 3, __u32)
+-
+-#endif
+diff --git a/drivers/ps4/ps4sb.h b/drivers/ps4/ps4sb.h
+index 605476847c81f2b9994509776cdc2f9e71384268..e3ecef8628312870dd2689b3d878af8a60f50348 100644
+--- a/drivers/ps4/ps4sb.h
++++ b/drivers/ps4/ps4sb.h
+@@ -6,7 +6,7 @@
+ #include <linux/i2c.h>
+ #include <asm/ps4.h>
+ 
+-struct apcie_msi_domain_ctx;
++struct ps4sb_msi_domain_ctx;
+ 
+ #define ICC_REPLY 0x4000
+ #define ICC_EVENT 0x8000
+@@ -91,7 +91,7 @@ struct ps4sb_dev {
+ 	struct pci_dev *pdev;
+ 	const struct ps4sb_family *family;
+ 	struct irq_domain *irqdomain;
+-	struct apcie_msi_domain_ctx *msi_domain_ctx;
++	struct ps4sb_msi_domain_ctx *msi_domain_ctx;
+ 	void __iomem *bar0;
+ 	void __iomem *bar2;
+ 	void __iomem *bar4;
+@@ -159,4 +159,242 @@ int icc_pwrbutton_init(struct ps4sb_dev *sc);
+ void icc_pwrbutton_remove(struct ps4sb_dev *sc);
+ void icc_pwrbutton_trigger(struct ps4sb_dev *sc, int state);
+ 
++enum aeolia_func_id {
++	AEOLIA_FUNC_ID_ACPI = 0,
++	AEOLIA_FUNC_ID_GBE,
++	AEOLIA_FUNC_ID_AHCI,
++	AEOLIA_FUNC_ID_SDHCI,
++	AEOLIA_FUNC_ID_PCIE,
++	AEOLIA_FUNC_ID_DMAC,
++	AEOLIA_FUNC_ID_MEM,
++	AEOLIA_FUNC_ID_XHCI,
++
++	AEOLIA_NUM_FUNCS
++};
++
++/* MSI registers for up to 31, but only 23 known. */
++#define AEOLIA_NUM_SUBFUNC		23
++
++/* Sub-functions, aka MSI vectors */
++enum aeolia_subfunc {
++	AEOLIA_SUBFUNC_GLUE	= 0,
++	AEOLIA_SUBFUNC_ICC	= 3,
++	AEOLIA_SUBFUNC_HPET	= 5,
++	AEOLIA_SUBFUNC_SFLASH	= 11,
++	AEOLIA_SUBFUNC_RTC	= 13,
++	AEOLIA_SUBFUNC_UART0	= 19,
++	AEOLIA_SUBFUNC_UART1	= 20,
++	AEOLIA_SUBFUNC_TWSI	= 21,
++
++	AEOLIA_NUM_SUBFUNCS	= 23
++};
++
++#define AEOLIA_NR_UARTS 2
++
++/* Relative to BAR2 */
++#define AEOLIA_RGN_RTC_BASE		0x0
++#define AEOLIA_RGN_RTC_SIZE		0x1000
++
++#define AEOLIA_RGN_CHIPID_BASE		0x1000
++#define AEOLIA_RGN_CHIPID_SIZE		0x1000
++
++#define AEOLIA_REG_CHIPID_0		0x1104
++#define AEOLIA_REG_CHIPID_1		0x1108
++#define AEOLIA_REG_CHIPREV		0x110c
++
++/* Relative to BAR4 */
++#define AEOLIA_RGN_UART_BASE		0x140000
++#define AEOLIA_RGN_UART_SIZE		0x1000
++
++#define AEOLIA_RGN_PCIE_BASE		0x1c8000
++#define AEOLIA_RGN_PCIE_SIZE		0x1000
++
++#define AEOLIA_RGN_ICC_BASE		0x184000
++#define AEOLIA_RGN_ICC_SIZE		0x1000
++
++#define AEOLIA_REG_BAR(x)		(AEOLIA_RGN_PCIE_BASE + (x))
++#define AEOLIA_REG_BAR_MASK(func, bar)	AEOLIA_REG_BAR(((func) * 0x30) + \
++						((bar) << 3))
++#define AEOLIA_REG_BAR_ADDR(func, bar)	AEOLIA_REG_BAR(((func) * 0x30) + \
++						((bar) << 3) + 0x4)
++
++#define AEOLIA_REG_MSI(x)		(AEOLIA_RGN_PCIE_BASE + 0x400 + (x))
++#define AEOLIA_REG_MSI_CONTROL		AEOLIA_REG_MSI(0x0)
++#define AEOLIA_REG_MSI_MASK(func)	AEOLIA_REG_MSI(0x4c + ((func) << 2))
++#define AEOLIA_REG_MSI_DATA_HI(func)	AEOLIA_REG_MSI(0x8c + ((func) << 2))
++#define AEOLIA_REG_MSI_ADDR(func)	AEOLIA_REG_MSI(0xac + ((func) << 2))
++/* This register has non-uniform structure per function, dealt with in code */
++#define AEOLIA_REG_MSI_DATA_LO(off)	AEOLIA_REG_MSI(0x100 + (off))
++
++/* Not sure what the two individual bits do */
++#define AEOLIA_REG_MSI_CONTROL_ENABLE	0x05
++
++/* Enable for the entire function, 4 is special */
++#define AEOLIA_REG_MSI_MASK_FUNC		0x01000000
++#define AEOLIA_REG_MSI_MASK_FUNC4	0x80000000
++
++#define AEOLIA_REG_ICC(x)		(AEOLIA_RGN_ICC_BASE + (x))
++#define AEOLIA_REG_ICC_DOORBELL		AEOLIA_REG_ICC(0x804)
++#define AEOLIA_REG_ICC_STATUS		AEOLIA_REG_ICC(0x814)
++#define AEOLIA_REG_ICC_IRQ_MASK		AEOLIA_REG_ICC(0x824)
++
++/* Apply to both DOORBELL and STATUS */
++#define AEOLIA_ICC_SEND			0x01
++#define AEOLIA_ICC_ACK			0x02
++
++/* Relative to func6 BAR5 */
++#define AEOLIA_SPM_ICC_BASE		0x2c000
++#define AEOLIA_SPM_ICC_SIZE		0x1000
++
++/* Boot params passed from southbridge */
++#define AEOLIA_SPM_BP_BASE		0x2f000
++#define AEOLIA_SPM_BP_SIZE		0x20
++
++#define AEOLIA_SPM_ICC_REQUEST		0x0
++#define AEOLIA_SPM_ICC_REPLY		0x800
++
++
++enum baikal_func_id {
++	BAIKAL_FUNC_ID_ACPI = 0,
++	BAIKAL_FUNC_ID_GBE,
++	BAIKAL_FUNC_ID_AHCI,
++	BAIKAL_FUNC_ID_SDHCI,
++	BAIKAL_FUNC_ID_PCIE,
++	BAIKAL_FUNC_ID_DMAC,
++	BAIKAL_FUNC_ID_MEM,
++	BAIKAL_FUNC_ID_XHCI,
++
++	BAIKAL_NUM_FUNCS
++};
++
++enum baikal_subfuncs_per_func {
++	SUBFUNCS_PER_FUNC4 = 31,
++	SUBFUNCS_PER_FUNC2 = 1,
++	SUBFUNCS_PER_FUNC7 = 3,
++	SUBFUNCS_PER_FUNC0 = 2,
++	SUBFUNCS_PER_FUNC1 = 1,
++	SUBFUNCS_PER_FUNC3 = 1,
++	SUBFUNCS_PER_FUNC5 = 2,
++	SUBFUNCS_PER_FUNC6 = 3,
++};
++
++enum baikal_subfunc {
++	BAIKAL_SUBFUNC_GLUE	= 0,
++	BAIKAL_SUBFUNC_ICC	= 3,
++	BAIKAL_SUBFUNC_HPET	= 22,
++	BAIKAL_SUBFUNC_SFLASH	= 19,
++	BAIKAL_SUBFUNC_RTC	= 21,
++	BAIKAL_SUBFUNC_UART0	= 26,
++	BAIKAL_SUBFUNC_UART1	= 27,
++
++	BAIKAL_SUBFUNC_USB0	= 0, BAIKAL_SUBFUNC_USB2 = 2,
++	BAIKAL_SUBFUNC_ACPI= 1,
++	BAIKAL_SUBFUNC_SPM = 1,
++	BAIKAL_SUBFUNC_DMAC1	= 0,
++	BAIKAL_SUBFUNC_DMAC2	= 1,
++	BAIKAL_NUM_SUBFUNCS	= 32
++};
++
++#define BAIKAL_NR_UARTS 1
++
++#define BAIKAL_RGN_CHIPID_BASE		0x4000
++#define BAIKAL_RGN_CHIPID_SIZE		0x9000
++
++#define BAIKAL_REG_CHIPID_0		0xC020
++#define BAIKAL_REG_CHIPID_1		0xC024
++#define BAIKAL_REG_CHIPREV		0x4084
++
++#define BAIKAL_HPET_BASE         0x109000
++#define BAIKAL_HPET_SIZE         0x400
++
++#define BAIKAL_RGN_UART_BASE		0x10E000
++#define BAIKAL_RGN_UART_SIZE		0x1000
++#define BAIKAL_RGN_ICC_BASE		(0x108000 - 0x800)
++#define BAIKAL_RGN_ICC_SIZE		0x1000
++
++#define BAIKAL_ACK_WRITE 		0x110084
++#define BAIKAL_ACK_READ  		0x110088
++
++#define BAIKAL_REG_ICC(x)		(BAIKAL_RGN_ICC_BASE + (x))
++#define BAIKAL_REG_ICC_DOORBELL		BAIKAL_REG_ICC(0x804)
++#define BAIKAL_REG_ICC_STATUS		BAIKAL_REG_ICC(0x814)
++#define BAIKAL_REG_ICC_IRQ_MASK		BAIKAL_REG_ICC(0x824)
++
++#define BAIKAL_ICC_SEND			0x01
++#define BAIKAL_ICC_ACK			0x02
++
++#define BAIKAL_USB_BASE			0x180000
++
++#define BAIKAL_SPM_ICC_BASE		0x2c000
++#define BAIKAL_SPM_ICC_SIZE		0x1000
++
++#define BAIKAL_SPM_BP_BASE		0x2f000
++#define BAIKAL_SPM_BP_SIZE		0x20
++
++#define BAIKAL_SPM_ICC_REQUEST		0x0
++#define BAIKAL_SPM_ICC_REPLY		0x800
++
++
++#define CHAR_BIT 8
++static inline u32 rol (u32 n, unsigned int c) {
++	const unsigned int mask = (CHAR_BIT*sizeof(n) - 1);
++
++	c &= mask;
++	return (n<<c) | (n>>( (-c)&mask ));
++}
++
++static inline u32 ror (u32 n, unsigned int c) {
++	const unsigned int mask = (CHAR_BIT*sizeof(n) - 1);
++
++	c &= mask;
++	return (n>>c) | (n<<( (-c)&mask ));
++}
++
++static inline void cpu_stop(void)
++{
++    for (;;)
++        asm volatile("cli; hlt;" : : : "memory");
++}
++
++static inline void stop_hpet_timers(struct ps4sb_dev *sc) {
++		*(volatile u64 *)(sc->bar2 + BAIKAL_HPET_BASE + 0x10) &= ~(1UL << 0);
++		u64 NUM_TIM_CAP;
++		NUM_TIM_CAP = *(volatile u64 *)(sc->bar2 + BAIKAL_HPET_BASE) & 0x1F00;
++		u64 N;
++		for (N = 0; N <= NUM_TIM_CAP; N++) {
++			*(volatile u64 *)(sc->bar2 + BAIKAL_HPET_BASE + (0x20*N) + 0x100) &= ~(1UL << 2);
++		}
++		cpu_stop();
++}
++
++static inline int pci_pm_stop(struct pci_dev *dev)
++{
++	u16 csr;
++
++	if (!dev->pm_cap)
++		return -ENOTTY;
++
++	pci_read_config_word(dev, dev->pm_cap + PCI_PM_CTRL, &csr);
++
++	csr &= ~PCI_PM_CTRL_STATE_MASK;
++	csr |= PCI_D3hot;
++	pci_write_config_word(dev, dev->pm_cap + PCI_PM_CTRL, csr);
++
++	return 0;
++}
++
++static inline void pci_pm_stop_all(struct pci_dev *dev)
++{
++	struct pci_dev *sc_dev;
++	unsigned int func;
++	for (func = 0; func < 8; ++func) {
++		sc_dev = pci_get_slot(pci_find_bus(pci_domain_nr(dev->bus), 0), PCI_DEVFN(20, func));
++		pci_pm_stop(sc_dev);
++	}
++	cpu_stop();
++}
++
++int baikal_is_compatible_device(struct pci_dev *dev);
++int baikal_sata_phy_init(struct pci_dev *pdev, void __iomem *ahci_mmio);
++
+ #endif
+diff --git a/drivers/ps4/sb-aeolia.c b/drivers/ps4/sb-aeolia.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..08cc71e3c6fdae1b7d6bc12baa2a979eeef45470
+--- /dev/null
++++ b/drivers/ps4/sb-aeolia.c
+@@ -0,0 +1,713 @@
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/pci.h>
++#include <linux/init.h>
++#include <linux/irq.h>
++#include <linux/irqchip.h>
++#include <linux/irqdomain.h>
++#include <linux/msi.h>
++#include <asm/apic.h>
++#include <asm/irqdomain.h>
++#include <asm/irq_remapping.h>
++
++#include <asm/msi.h>
++
++#include <asm/ps4.h>
++
++#include "ps4sb.h"
++
++
++#define     MSI_DATA_VECTOR_SHIFT	0
++#define	    MSI_DATA_VECTOR(v)		(((u8)v) << MSI_DATA_VECTOR_SHIFT)
++#define     MSI_DATA_VECTOR_MASK	0xffffff00
++
++/* #define QEMU_HACK_NO_IOMMU */
++
++/* Number of implemented MSI registers per function */
++static const int subfuncs_per_func[AEOLIA_NUM_FUNCS] = {
++	4, 4, 4, 4, 31, 2, 2, 4
++};
++
++struct aeolia_irq_data {
++	struct ps4sb_dev *sc;
++	u8 msi_data;
++};
++
++struct ps4sb_msi_domain_ctx {
++	struct irq_chip controller;
++	struct msi_domain_info info;
++};
++
++static inline u32 glue_read32(struct ps4sb_dev *sc, u32 offset) {
++	return ioread32(sc->bar4 + offset);
++}
++
++static inline void glue_write32(struct ps4sb_dev *sc, u32 offset, u32 value) {
++	iowrite32(value, sc->bar4 + offset);
++}
++
++static inline void glue_set_region(struct ps4sb_dev *sc, u32 func, u32 bar,
++			    u32 base, u32 mask) {
++	glue_write32(sc, AEOLIA_REG_BAR_MASK(func, bar), mask);
++	glue_write32(sc, AEOLIA_REG_BAR_ADDR(func, bar), base);
++}
++
++static inline void glue_set_mask(struct ps4sb_dev *sc, u32 offset, u32 mask) {
++	void __iomem *ptr = sc->bar4 + offset;
++	iowrite32(ioread32(ptr) | mask, ptr);
++}
++
++static inline void glue_clear_mask(struct ps4sb_dev *sc, u32 offset, u32 mask) {
++	void __iomem *ptr = sc->bar4 + offset;
++	iowrite32(ioread32(ptr) & ~mask, ptr);
++}
++
++static inline void glue_mask_and_set(struct ps4sb_dev *sc, u32 offset, u32 mask, u32 set) {
++	void __iomem *ptr = sc->bar4 + offset;
++	iowrite32((ioread32(ptr) & ~mask) | set, ptr);
++}
++
++static void aeolia_config_msi(struct ps4sb_dev *sc, u32 func, u32 subfunc,
++			     u32 addr, u32 data) {
++	u32 offset;
++
++	sc_dbg("aeolia_config_msi: func: %u, subfunc: %u, addr %08x data: 0x%08x (%u)\n",
++		func, subfunc, addr, data, data);
++
++	glue_clear_mask(sc, AEOLIA_REG_MSI_CONTROL, AEOLIA_REG_MSI_CONTROL_ENABLE);
++	/* Unknown */
++	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4, AEOLIA_REG_MSI(0x8), 0xffffffff);
++	glue_write32(sc, AEOLIA_REG_MSI(0x8), 0xffffffff);
++	/* Unknown */
++	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4, AEOLIA_REG_MSI(0xc + (func << 2)), 0xB7FFFF00 + func * 16);
++	glue_write32(sc, AEOLIA_REG_MSI(0xc + (func << 2)), 0xB7FFFF00 + func * 16);
++
++	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4, AEOLIA_REG_MSI_ADDR(func), addr);
++	glue_write32(sc, AEOLIA_REG_MSI_ADDR(func), addr);
++	/* Unknown */
++
++	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4, AEOLIA_REG_MSI(0xcc + (func << 2)), 0);
++	glue_write32(sc, AEOLIA_REG_MSI(0xcc + (func << 2)), 0);
++
++	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4, AEOLIA_REG_MSI_DATA_HI(func),  data & 0xffe0);
++	glue_write32(sc, AEOLIA_REG_MSI_DATA_HI(func), data & 0xffe0);
++
++	if (func < 4) {
++		/* First 4 functions have 4 IRQs/subfuncs each */
++		offset = (func << 4) | (subfunc << 2);
++	} else if (func == 4) {
++		/* Function 4 gets 24 consecutive slots,
++		 * then 7 more at the end. */
++		if (subfunc < 24)
++			offset = 0x40 + (subfunc << 2);
++		else
++			offset = 0xe0 + ((subfunc - 24) << 2);
++	} else {
++		offset = 0xa0 + ((func - 5) << 4) + (subfunc << 2);
++	}
++
++	sc_dbg("glue_write32 to offset, value (%px, %08x, %08x)\n", sc->bar4,  AEOLIA_REG_MSI_DATA_LO(offset), data & 0x1f);
++	glue_write32(sc, AEOLIA_REG_MSI_DATA_LO(offset), data & 0x1f);
++
++	if (func == AEOLIA_FUNC_ID_PCIE)
++		glue_set_mask(sc, AEOLIA_REG_MSI_MASK(func), AEOLIA_REG_MSI_MASK_FUNC4);
++	else
++		glue_set_mask(sc, AEOLIA_REG_MSI_MASK(func), AEOLIA_REG_MSI_MASK_FUNC);
++
++	glue_set_mask(sc, AEOLIA_REG_MSI_CONTROL, AEOLIA_REG_MSI_CONTROL_ENABLE);
++}
++
++static void aeolia_msi_write_msg(struct irq_data *data, struct msi_msg *msg)
++{
++	struct aeolia_irq_data *irq_data = data->chip_data;
++	struct ps4sb_dev *sc = irq_data->sc;
++	u32 func = data->hwirq >> 8;
++	u32 subfunc = data->hwirq & 0xff;
++
++	/* Linux likes to unconfigure MSIs like this, but since we share the
++	 * address between subfunctions, we can't do that. The IRQ should be
++	 * masked via aeolia_msi_mask anyway, so just do nothing. */
++	if (!msg->address_lo) {
++		return;
++	}
++
++	sc_dbg("aeolia_msi_write_msg(%08x, %08x) mask=0x%x irq=%d hwirq=0x%lx %p\n",
++	       msg->address_lo, msg->data, data->mask, data->irq, data->hwirq, sc);
++
++	if (subfunc == 0xff) {
++		int i;
++		for (i = 0; i < subfuncs_per_func[func]; i++)
++			aeolia_config_msi(sc, func, i, msg->address_lo, msg->data);
++	} else {
++		aeolia_config_msi(sc, func, subfunc, msg->address_lo, msg->data);
++	}
++}
++
++static void aeolia_msi_unmask(struct irq_data *data)
++{
++	struct aeolia_irq_data *irq_data = data->chip_data;
++	struct ps4sb_dev *sc = irq_data->sc;
++	u32 func = data->hwirq >> 8;
++
++	glue_set_mask(sc, AEOLIA_REG_MSI_MASK(func), data->mask);
++}
++
++static void aeolia_msi_mask(struct irq_data *data)
++{
++	struct aeolia_irq_data *irq_data = data->chip_data;
++	struct ps4sb_dev *sc = irq_data->sc;
++	u32 func = data->hwirq >> 8;
++
++	glue_clear_mask(sc, AEOLIA_REG_MSI_MASK(func), data->mask);
++}
++
++static void aeolia_msi_calc_mask(struct irq_data *data) {
++	u32 func = data->hwirq >> 8;
++	u32 subfunc = data->hwirq & 0xff;
++
++	if (subfunc == 0xff) {
++		data->mask = (1 << subfuncs_per_func[func]) - 1;
++	} else {
++		data->mask = 1 << subfunc;
++	}
++}
++
++static void aeolia_irq_msi_compose_msg(struct irq_data *data,
++				       struct msi_msg *msg)
++{
++	struct aeolia_irq_data *irq_data = data->chip_data;
++	struct irq_cfg *cfg __maybe_unused = irqd_cfg(data);
++
++	memset(msg, 0, sizeof(*msg));
++	msg->address_hi = X86_MSI_BASE_ADDRESS_HIGH;
++	msg->address_lo = 0xfee00000;// Just do it like this for now
++	msg->data = irq_data ? irq_data->msi_data : data->irq - 1;
++
++	pr_debug("aeolia_irq_msi_compose_msg\n");
++}
++
++static const struct irq_chip aeolia_msi_controller_template = {
++	.name = "Aeolia-MSI",
++	.irq_unmask = aeolia_msi_unmask,
++	.irq_mask = aeolia_msi_mask,
++	.irq_ack = irq_chip_ack_parent,
++	.irq_set_affinity = msi_domain_set_affinity,
++	.irq_retrigger = irq_chip_retrigger_hierarchy,
++	.irq_compose_msi_msg = aeolia_irq_msi_compose_msg,
++	.irq_write_msi_msg = aeolia_msi_write_msg,
++	.flags = IRQCHIP_SKIP_SET_WAKE | IRQCHIP_AFFINITY_PRE_STARTUP,
++};
++
++static irq_hw_number_t aeolia_msi_get_hwirq(struct msi_domain_info *info,
++					  msi_alloc_info_t *arg)
++{
++	return arg->hwirq;
++}
++
++static int aeolia_msi_init(struct irq_domain *domain,
++			 struct msi_domain_info *info, unsigned int virq,
++			 irq_hw_number_t hwirq, msi_alloc_info_t *arg)
++{
++	struct irq_data *data;
++	struct aeolia_irq_data *irq_data;
++	struct ps4sb_dev *sc = info->chip_data;
++	int i;
++	int slot = -1;
++
++	pr_debug("aeolia_msi_init(%p, %p, %d, 0x%lx, %p)\n",
++		 domain, info, virq, hwirq, arg);
++
++	if (sc) {
++		for (i = 0; i < ARRAY_SIZE(sc->irq_map); i++) {
++			if (sc->irq_map[i] == -1) {
++				slot = i;
++				break;
++			}
++		}
++
++		if (slot < 0) {
++			pr_err("aeolia_msi_init: no free irq_map entry for virq %u\n", virq);
++			return -ENOSPC;
++		}
++	}
++
++	irq_data = kzalloc(sizeof(*irq_data), GFP_KERNEL);
++	if (!irq_data)
++		return -ENOMEM;
++
++	irq_data->sc = sc;
++	irq_data->msi_data = slot >= 0 ? slot : virq - 1;
++
++	data = irq_domain_get_irq_data(domain, virq);
++	irq_domain_set_info(domain, virq, hwirq, info->chip, irq_data,
++			    handle_edge_irq, NULL, "edge");
++	aeolia_msi_calc_mask(data);
++
++	if (sc) {
++		sc->irq_map[slot] = virq;
++	}
++
++	return 0;
++}
++
++static void aeolia_msi_free(struct irq_domain *domain,
++			  struct msi_domain_info *info, unsigned int virq)
++{
++	struct irq_data *data;
++	struct aeolia_irq_data *irq_data;
++	struct ps4sb_dev *sc = info->chip_data;
++	int i;
++
++	data = irq_domain_get_irq_data(domain, virq);
++	irq_data = data ? data->chip_data : NULL;
++
++	if (sc) {
++		for (i = 0; i < ARRAY_SIZE(sc->irq_map); i++) {
++			if (sc->irq_map[i] == virq) {
++				sc->irq_map[i] = -1;
++				break;
++			}
++		}
++	}
++
++	pr_debug("aeolia_msi_free(%d)\n", virq);
++	kfree(irq_data);
++}
++
++
++static void aeolia_set_desc(msi_alloc_info_t *arg, struct msi_desc *desc)
++{
++	struct pci_dev *device;
++
++	arg->desc = desc;
++	device = msi_desc_to_pci_dev(desc);
++
++	arg->hwirq = PCI_FUNC(device->devfn) << 8;
++
++#ifndef QEMU_HACK_NO_IOMMU
++	arg->hwirq |= 0xFF;
++#endif
++}
++
++static struct msi_domain_ops aeolia_msi_domain_ops = {
++	.get_hwirq	= aeolia_msi_get_hwirq,
++	.set_desc       = aeolia_set_desc,
++	.msi_init	= aeolia_msi_init,
++	.msi_free	= aeolia_msi_free,
++};
++
++static const struct msi_domain_info aeolia_msi_domain_info_template = {
++	.flags		= MSI_FLAG_USE_DEF_DOM_OPS | MSI_FLAG_USE_DEF_CHIP_OPS,
++	.ops		= &aeolia_msi_domain_ops,
++	.handler	= handle_edge_irq,
++	.handler_name	= "edge"
++};
++
++static struct irq_domain *aeolia_create_irq_domain(struct ps4sb_dev *sc)
++{
++	struct ps4sb_msi_domain_ctx *ctx;
++	struct irq_domain *domain, *parent;
++	struct fwnode_handle *fn;
++	struct irq_fwspec fwspec;
++
++	sc_dbg("aeolia_create_irq_domain\n");
++	if (x86_vector_domain == NULL)
++		return NULL;
++
++	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
++	if (!ctx)
++		return NULL;
++
++	ctx->controller = aeolia_msi_controller_template;
++	ctx->info = aeolia_msi_domain_info_template;
++	ctx->info.chip = &ctx->controller;
++	ctx->info.chip_data = sc;
++
++	fn = irq_domain_alloc_named_id_fwnode(ctx->controller.name, pci_dev_id(sc->pdev));
++	if (!fn) {
++		kfree(ctx);
++		return NULL;
++	}
++
++	sc_dbg("devid = %d\n", pci_dev_id(sc->pdev));
++
++	fwspec.fwnode = fn;
++	fwspec.param_count = 1;
++
++	// It should be correct to put the pci device id in here
++	fwspec.param[0] = pci_dev_id(sc->pdev);
++
++	parent = irq_find_matching_fwspec(&fwspec, DOMAIN_BUS_ANY);
++	if (!parent) {
++		sc_dbg("no parent \n");
++		parent = x86_vector_domain;
++	} else if (parent == x86_vector_domain) {
++		sc_dbg("no parent \n");
++	} else {
++		ctx->info.flags |= MSI_FLAG_MULTI_PCI_MSI;
++		ctx->controller.name = "IR-Aeolia-MSI";
++	}
++
++	domain = msi_create_irq_domain(fn, &ctx->info, parent);
++	if (!domain) {
++		irq_domain_free_fwnode(fn);
++		kfree(ctx);
++		pr_warn("Failed to initialize Aeolia-MSI irqdomain.\n");
++		return NULL;
++	}
++
++	sc->msi_domain_ctx = ctx;
++	return domain;
++}
++
++static int aeolia_is_compatible_device(struct pci_dev *dev)
++{
++	if (!dev || dev->vendor != PCI_VENDOR_ID_SONY) {
++		return 0;
++	}
++	return (dev->device == PCI_DEVICE_ID_SONY_AEOLIA_PCIE ||
++		dev->device == PCI_DEVICE_ID_SONY_BELIZE_PCIE);
++}
++
++int aeolia_assign_irqs(struct pci_dev *dev, int nvec)
++{
++	int ret;
++	unsigned int sc_devfn;
++	struct pci_dev *sc_dev;
++	struct ps4sb_dev *sc;
++	struct device *bare_dev;
++	struct msi_desc *desc;
++	struct irq_alloc_info info;
++	unsigned int desc_first;
++
++	sc_devfn = (dev->devfn & ~7) | AEOLIA_FUNC_ID_PCIE;
++	sc_dev = pci_get_slot(dev->bus, sc_devfn);
++
++	if (!aeolia_is_compatible_device(sc_dev)) {
++		dev_err(&dev->dev, "aeolia: this is not an Aeolia device\n");
++		ret = -ENODEV;
++		goto fail;
++	}
++	sc = pci_get_drvdata(sc_dev);
++	if (!sc) {
++		dev_err(&dev->dev, "aeolia: not ready yet, cannot assign IRQs\n");
++		ret = -ENODEV;
++		goto fail;
++	}
++
++	init_irq_alloc_info(&info, NULL);
++	info.type = X86_IRQ_ALLOC_TYPE_PCI_MSI;
++	/* IRQs "come from" function 4 as far as the IOMMU/system see */
++	//info.msi_dev = sc->pdev;
++	info.devid = pci_dev_id(sc->pdev);
++	bare_dev = &sc->pdev->dev;
++
++	/* Our hwirq number is function << 8 plus subfunction.
++	 * Subfunction is usually 0 and implicitly increments per hwirq,
++	 * but can also be 0xff to indicate that this is a shared IRQ. */
++	info.hwirq = PCI_FUNC(dev->devfn) << 8;
++
++#ifndef QEMU_HACK_NO_IOMMU
++	if (!(sc->msi_domain_ctx->info.flags & MSI_FLAG_MULTI_PCI_MSI)) {
++		nvec = 1;
++		info.hwirq |= 0xff; /* Shared IRQ for all subfunctions */
++	}
++#endif
++
++	desc = msi_alloc_desc(bare_dev, nvec, NULL);
++	if (!desc) {
++		ret = -ENOMEM;
++		goto fail;
++	}
++	desc_first = desc->msi_index;
++
++	info.desc = desc;
++	info.data = sc;
++
++	dev_dbg(&dev->dev, "aeolia_assign_irqs(%d) (%ld)\n", nvec, info.hwirq);
++
++	ret = irq_domain_alloc_irqs(sc->irqdomain, nvec, NUMA_NO_NODE, &info);
++	if (ret >= 0) {
++		dev_dbg(&dev->dev, "irq_domain_alloc_irqs = %x\n", ret);
++		dev->irq = ret;
++		desc->irq = ret;
++		ret = nvec;
++	} else {
++		msi_free_msi_descs_range(bare_dev, desc_first,
++					 desc_first + nvec - 1);
++	}
++
++fail:
++	dev_dbg(&dev->dev, "aeolia_assign_irqs returning %d\n", ret);
++	if (sc_dev)
++		pci_dev_put(sc_dev);
++	return ret;
++}
++EXPORT_SYMBOL(aeolia_assign_irqs);
++
++void aeolia_free_irqs(unsigned int virq, unsigned int nr_irqs)
++{
++	irq_domain_free_irqs(virq, nr_irqs);
++}
++EXPORT_SYMBOL(aeolia_free_irqs);
++
++static void aeolia_glue_remove(struct ps4sb_dev *sc);
++
++static int aeolia_glue_init(struct ps4sb_dev *sc)
++{
++	int i;
++
++	sc_info("aeolia glue probe\n");
++
++	if (!request_mem_region(pci_resource_start(sc->pdev, 4) +
++				AEOLIA_RGN_PCIE_BASE, AEOLIA_RGN_PCIE_SIZE,
++				"aeolia.glue")) {
++		sc_err("Failed to request pcie region\n");
++		return -EBUSY;
++
++	}
++
++	if (!request_mem_region(pci_resource_start(sc->pdev, 2) +
++				AEOLIA_RGN_CHIPID_BASE, AEOLIA_RGN_CHIPID_SIZE,
++				"aeolia.chipid")) {
++		sc_err("Failed to request chipid region\n");
++		release_mem_region(pci_resource_start(sc->pdev, 4) +
++				   AEOLIA_RGN_PCIE_BASE, AEOLIA_RGN_PCIE_SIZE);
++		return -EBUSY;
++	}
++
++	glue_set_region(sc, AEOLIA_FUNC_ID_PCIE, 2, 0xbf018000, 0x7fff);
++
++	sc_info("Aeolia chip revision: %08x:%08x:%08x\n",
++		ioread32(sc->bar2 + AEOLIA_REG_CHIPID_0),
++		ioread32(sc->bar2 + AEOLIA_REG_CHIPID_1),
++		ioread32(sc->bar2 + AEOLIA_REG_CHIPREV));
++
++	/* Mask all MSIs first, to avoid spurious IRQs */
++	for (i = 0; i < AEOLIA_NUM_FUNCS; i++) {
++		glue_write32(sc, AEOLIA_REG_MSI_MASK(i), 0);
++		glue_write32(sc, AEOLIA_REG_MSI_ADDR(i), 0);
++		glue_write32(sc, AEOLIA_REG_MSI_DATA_HI(i), 0);
++	}
++
++	for (i = 0; i < 0xfc; i += 4)
++		glue_write32(sc, AEOLIA_REG_MSI_DATA_LO(i), 0);
++
++	glue_set_region(sc, AEOLIA_FUNC_ID_GBE, 0, 0xbfa00000, 0x3fff);
++	glue_set_region(sc, AEOLIA_FUNC_ID_AHCI, 5, 0xbfa04000, 0xfff);
++	glue_set_region(sc, AEOLIA_FUNC_ID_SDHCI, 0, 0xbfa80000, 0xfff);
++	glue_set_region(sc, AEOLIA_FUNC_ID_SDHCI, 1, 0, 0);
++	glue_set_region(sc, AEOLIA_FUNC_ID_DMAC, 0, 0xbfa05000, 0xfff);
++	glue_set_region(sc, AEOLIA_FUNC_ID_DMAC, 1, 0, 0);
++	glue_set_region(sc, AEOLIA_FUNC_ID_DMAC, 2, 0xbfa06000, 0xfff);
++	glue_set_region(sc, AEOLIA_FUNC_ID_DMAC, 3, 0, 0);
++	glue_set_region(sc, AEOLIA_FUNC_ID_MEM, 2, 0xc0000000, 0x3fffffff);
++	glue_set_region(sc, AEOLIA_FUNC_ID_MEM, 3, 0, 0);
++	glue_set_region(sc, AEOLIA_FUNC_ID_XHCI, 0, 0xbf400000, 0x1fffff);
++	glue_set_region(sc, AEOLIA_FUNC_ID_XHCI, 1, 0, 0);
++	glue_set_region(sc, AEOLIA_FUNC_ID_XHCI, 2, 0xbf600000, 0x1fffff);
++	glue_set_region(sc, AEOLIA_FUNC_ID_XHCI, 3, 0, 0);
++	glue_set_region(sc, AEOLIA_FUNC_ID_XHCI, 4, 0xbf800000, 0x1fffff);
++	glue_set_region(sc, AEOLIA_FUNC_ID_XHCI, 5, 0, 0);
++
++	sc->irqdomain = aeolia_create_irq_domain(sc);
++	if (!sc->irqdomain) {
++		sc_err("Failed to create IRQ domain");
++		aeolia_glue_remove(sc);
++		return -EIO;
++	}
++	sc->nvec = aeolia_assign_irqs(sc->pdev, AEOLIA_NUM_SUBFUNC);
++	if (sc->nvec <= 0) {
++		sc_err("Failed to assign IRQs");
++		aeolia_glue_remove(sc);
++		return -EIO;
++	}
++	sc_dbg("dev->irq=%d\n", sc->pdev->irq);
++
++	return 0;
++}
++
++static void aeolia_glue_remove(struct ps4sb_dev *sc) {
++	sc_info("aeolia glue remove\n");
++
++	if (sc->nvec > 0) {
++		aeolia_free_irqs(sc->pdev->irq, sc->nvec);
++		sc->nvec = 0;
++	}
++	if (sc->irqdomain) {
++		irq_domain_remove(sc->irqdomain);
++		sc->irqdomain = NULL;
++	}
++	kfree(sc->msi_domain_ctx);
++	sc->msi_domain_ctx = NULL;
++	release_mem_region(pci_resource_start(sc->pdev, 2) +
++			   AEOLIA_RGN_CHIPID_BASE, AEOLIA_RGN_CHIPID_SIZE);
++	release_mem_region(pci_resource_start(sc->pdev, 4) +
++			   AEOLIA_RGN_PCIE_BASE, AEOLIA_RGN_PCIE_SIZE);
++}
++
++#ifdef CONFIG_PM
++static int aeolia_glue_suspend(struct ps4sb_dev *sc, pm_message_t state) {
++	return 0;
++}
++
++static int aeolia_glue_resume(struct ps4sb_dev *sc) {
++	return 0;
++}
++#endif
++
++
++int ps4sb_uart_init(struct ps4sb_dev *sc);
++int ps4sb_icc_init(struct ps4sb_dev *sc);
++void ps4sb_uart_remove(struct ps4sb_dev *sc);
++void ps4sb_icc_remove(struct ps4sb_dev *sc);
++#ifdef CONFIG_PM
++void ps4sb_uart_suspend(struct ps4sb_dev *sc, pm_message_t state);
++void ps4sb_icc_suspend(struct ps4sb_dev *sc, pm_message_t state);
++void ps4sb_uart_resume(struct ps4sb_dev *sc);
++void ps4sb_icc_resume(struct ps4sb_dev *sc);
++#endif
++
++/* From arch/x86/platform/ps4/ps4.c */
++
++static const struct ps4sb_family aeolia_family = {
++	.name		= "Aeolia",
++	.uart_bar	= 4,
++	.uart_base	= AEOLIA_RGN_UART_BASE,
++	.uart_clock	= 58500000,
++	.uart_subfunc	= AEOLIA_SUBFUNC_UART0,
++	.uart_count	= AEOLIA_NR_UARTS,
++	.icc_bar	= 4,
++	.icc_base	= AEOLIA_RGN_ICC_BASE,
++	.icc_claim_regs	= true,
++	.icc_boot_led	= true,
++	.i2c_data_off	= 0x14,
++	.i2c_err_off	= 0x0c,
++	.rtc_bar	= 2,
++	.rtc_reg	= 0x130,
++	.rtc_byte_regs	= true,
++	.rtc_epoch	= -1431543102LL,
++};
++
++static int aeolia_probe(struct pci_dev *dev, const struct pci_device_id *id) {
++	struct ps4sb_dev *sc;
++	int ret;
++
++	dev_dbg(&dev->dev, "aeolia_probe()\n");
++
++	ret = pci_enable_device(dev);
++	if (ret) {
++		dev_err(&dev->dev,
++			"aeolia_probe(): pci_enable_device failed: %d\n", ret);
++		return ret;
++	}
++
++	sc = kzalloc(sizeof(*sc), GFP_KERNEL);
++	if (!sc) {
++		dev_err(&dev->dev, "aeolia_probe(): alloc sc failed\n");
++		ret = -ENOMEM;
++		goto disable_dev;
++	}
++	sc->pdev = dev;
++	sc->family = &aeolia_family;
++	memset(sc->irq_map, -1, sizeof(sc->irq_map));
++	memset(sc->serial_line, -1, sizeof(sc->serial_line));
++	pci_set_drvdata(dev, sc);
++
++	// eMMC ... unused?
++	sc->bar0 = pci_ioremap_bar(dev, 0);
++	// pervasive 0
++	sc->bar2 = pci_ioremap_bar(dev, 2);
++	// pervasive 1 - misc peripherals
++	sc->bar4 = pci_ioremap_bar(dev, 4);
++
++	if (!sc->bar0 || !sc->bar2 || !sc->bar4) {
++		sc_err("failed to map some BARs, bailing out\n");
++		ret = -EIO;
++		goto free_bars;
++	}
++
++	if ((ret = aeolia_glue_init(sc)) < 0)
++		goto free_bars;
++	if (ps4sb_rtc_init(sc) < 0)
++		sc_err("rtc not registered\n");
++	if ((ret = ps4sb_icc_init(sc)) < 0)
++		goto remove_glue;
++
++	WRITE_ONCE(ps4sb_initialized, true);
++	return 0;
++
++remove_glue:
++	aeolia_glue_remove(sc);
++free_bars:
++	if (sc->bar0)
++		iounmap(sc->bar0);
++	if (sc->bar2)
++		iounmap(sc->bar2);
++	if (sc->bar4)
++		iounmap(sc->bar4);
++	kfree(sc);
++disable_dev:
++	pci_disable_device(dev);
++	return ret;
++}
++
++static void aeolia_remove(struct pci_dev *dev) {
++	struct ps4sb_dev *sc;
++	sc = pci_get_drvdata(dev);
++
++	WRITE_ONCE(ps4sb_initialized, false);
++	ps4sb_icc_remove(sc);
++	ps4sb_uart_remove(sc);
++	aeolia_glue_remove(sc);
++
++	if (sc->bar0)
++		iounmap(sc->bar0);
++	if (sc->bar2)
++		iounmap(sc->bar2);
++	if (sc->bar4)
++		iounmap(sc->bar4);
++	kfree(sc);
++	pci_disable_device(dev);
++}
++
++#ifdef CONFIG_PM
++static int aeolia_suspend(struct pci_dev *dev, pm_message_t state) {
++	struct ps4sb_dev *sc;
++	sc = pci_get_drvdata(dev);
++
++	ps4sb_icc_suspend(sc, state);
++	ps4sb_uart_suspend(sc, state);
++	aeolia_glue_suspend(sc, state);
++	return 0;
++}
++
++static int aeolia_resume(struct pci_dev *dev) {
++	struct ps4sb_dev *sc;
++	sc = pci_get_drvdata(dev);
++
++	ps4sb_icc_resume(sc);
++	aeolia_glue_resume(sc);
++	ps4sb_uart_resume(sc);
++	return 0;
++}
++#endif
++
++static const struct pci_device_id aeolia_pci_tbl[] = {
++	{ PCI_DEVICE(PCI_VENDOR_ID_SONY, PCI_DEVICE_ID_SONY_AEOLIA_PCIE), },
++	{ PCI_DEVICE(PCI_VENDOR_ID_SONY, PCI_DEVICE_ID_SONY_BELIZE_PCIE), },
++	{ }
++};
++MODULE_DEVICE_TABLE(pci, aeolia_pci_tbl);
++
++static struct pci_driver aeolia_driver = {
++	.name		= "aeolia_pcie",
++	.id_table	= aeolia_pci_tbl,
++	.probe		= aeolia_probe,
++	.remove		= aeolia_remove,
++#ifdef CONFIG_PM
++	.suspend	= aeolia_suspend,
++	.resume		= aeolia_resume,
++#endif
++};
++module_pci_driver(aeolia_driver);
+diff --git a/drivers/ps4/sb-baikal.c b/drivers/ps4/sb-baikal.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..f6ed1844cb4d7a842e2bf205c00edd329602e9eb
+--- /dev/null
++++ b/drivers/ps4/sb-baikal.c
+@@ -0,0 +1,813 @@
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/pci.h>
++#include <linux/init.h>
++#include <linux/irq.h>
++#include <linux/irqchip.h>
++#include <linux/irqdomain.h>
++#include <linux/io.h>
++#include <linux/iopoll.h>
++#include <linux/msi.h>
++#include <asm/irqdomain.h>
++#include <asm/irq_remapping.h>
++
++#include <asm/msi.h>
++#include <asm/ps4.h>
++
++#include "ps4sb.h"
++
++#define AEOLIA_REG_CHIPID_0		0x1104
++#define AEOLIA_REG_CHIPID_1		0x1108
++#define AEOLIA_REG_CHIPREV		0x110c
++
++static const int subfuncs_per_func[BAIKAL_NUM_FUNCS] = {
++	2, 1, 1, 1, 31, 2, 3, 3
++};
++
++static void baikal_msi_domain_set_desc(msi_alloc_info_t *arg, struct msi_desc *desc);
++
++static u32 glue_read32(struct ps4sb_dev *sc, u32 offset) {
++	return ioread32(sc->bar2 + offset);
++}
++
++static void glue_write32(struct ps4sb_dev *sc, u32 offset, u32 value) {
++	iowrite32(value, sc->bar2 + offset);
++}
++
++static void baikal_msi_write_msg(struct irq_data *data, struct msi_msg *msg)
++{
++	struct ps4sb_dev *sc = data->chip_data;
++	struct msi_desc *desc;
++
++	if (!msg->address_lo) {
++		return;
++	}
++
++	dev_dbg(&sc->pdev->dev, "baikal_msi_write_msg(%08x, %08x) mask=0x%x irq=%d hwirq=0x%lx %p\n",
++	       msg->address_lo, msg->data, data->mask, data->irq, data->hwirq, sc);
++
++	desc = irq_data_get_msi_desc(data);
++	if (desc && desc->irq == data->irq)
++		__pci_write_msi_msg(desc, msg);
++}
++
++void pci_msi_update_mask(struct msi_desc *desc, u32 clear, u32 set);
++
++static bool baikal_msi_is_xhci_shared(struct irq_data *data)
++{
++	struct msi_desc *desc = irq_data_get_msi_desc(data);
++	struct pci_dev *pdev = msi_desc_to_pci_dev(desc);
++
++	return PCI_FUNC(pdev->devfn) == BAIKAL_FUNC_ID_XHCI &&
++	       !desc->pci.msi_attrib.is_msix && desc->nvec_used == 1;
++}
++
++static void baikal_msi_unmask(struct irq_data *data)
++{
++	if (baikal_msi_is_xhci_shared(data))
++		pci_msi_update_mask(irq_data_get_msi_desc(data), 0x7, 0);
++	else
++		pci_msi_unmask_irq(data);
++}
++
++static void baikal_msi_mask(struct irq_data *data)
++{
++	if (baikal_msi_is_xhci_shared(data))
++		pci_msi_update_mask(irq_data_get_msi_desc(data), 0, 0x7);
++	else
++		pci_msi_mask_irq(data);
++}
++
++static struct irq_chip baikal_msi_controller = {
++	.name = "Baikal-MSI",
++	.irq_unmask = baikal_msi_unmask,
++	.irq_mask = baikal_msi_mask,
++	.irq_ack = irq_chip_ack_parent,
++	.irq_set_affinity = msi_domain_set_affinity,
++	.irq_retrigger = irq_chip_retrigger_hierarchy,
++	.irq_compose_msi_msg = irq_msi_compose_msg,
++	.irq_write_msi_msg = baikal_msi_write_msg,
++	.flags = IRQCHIP_SKIP_SET_WAKE,
++};
++
++static irq_hw_number_t baikal_msi_get_hwirq(struct msi_domain_info *info,
++					   msi_alloc_info_t *arg)
++{
++	return arg->hwirq;
++}
++
++static void baikal_handle_edge_irq(struct irq_desc *desc)
++{
++	u32 func = (desc->irq_data.hwirq >> 5) & 7;
++	u32 initial_hwirq = desc->irq_data.hwirq & ~0x1fLL;
++	unsigned int vector_to_write;
++	unsigned int mask;
++	char shift;
++
++	if (func == 4)
++	{
++		vector_to_write = 2;
++		mask = -1;
++		shift = 0;
++	}
++	else if (func == 7)
++	{
++		vector_to_write = 3;
++		mask = 7;
++		shift = 0x10;
++	}
++	else if (func == 5)
++	{
++		mask = 3;
++		vector_to_write = 3;
++		shift = 0;
++	} else {
++		handle_edge_irq(desc);
++		return;
++	}
++
++	raw_spin_lock(&desc->lock);
++	struct ps4sb_dev *sc = desc->irq_data.chip_data;
++	glue_write32(sc, BAIKAL_ACK_WRITE, vector_to_write);
++	u32 vector_read = glue_read32(sc, BAIKAL_ACK_READ);
++	raw_spin_unlock(&desc->lock);
++
++	unsigned int subfunc_mask = mask & ~(vector_read >> shift);
++	bool run_self = !subfunc_mask;
++	unsigned int i;
++
++	for (i = 0; i < 32; i++) {
++		unsigned int virq;
++		struct irq_desc *new_desc;
++
++		if (!(subfunc_mask & BIT(i)))
++			continue;
++
++		virq = irq_find_mapping(desc->irq_data.domain, initial_hwirq + i);
++		new_desc = virq ? irq_to_desc(virq) : NULL;
++		if (!new_desc || new_desc == desc) {
++			run_self = true;
++			continue;
++		}
++		handle_edge_irq(new_desc);
++	}
++
++	if (run_self)
++		handle_edge_irq(desc);
++}
++
++static int baikal_msi_init(struct irq_domain *domain,
++			 struct msi_domain_info *info, unsigned int virq,
++			 irq_hw_number_t hwirq, msi_alloc_info_t *arg)
++{
++	struct ps4sb_dev *sc = info->chip_data;
++
++	irq_domain_set_info(domain, virq, hwirq, info->chip, info->chip_data,
++			baikal_handle_edge_irq, NULL, "edge");
++
++	if (sc) {
++		int i;
++		for (i = 0; i < 100; i++) {
++			if (sc->irq_map[i] == -1) {
++				sc->irq_map[i] = virq;
++				break;
++			}
++		}
++	}
++
++	return 0;
++}
++
++static void baikal_msi_free(struct irq_domain *domain,
++			  struct msi_domain_info *info, unsigned int virq)
++{
++	pr_devel("baikal_msi_free(%d)\n", virq);
++}
++
++static int baikal_msi_prepare(struct irq_domain *domain, struct device *dev,
++			     int nvec, msi_alloc_info_t *arg)
++{
++	arg->type = X86_IRQ_ALLOC_TYPE_PCI_MSI;
++	return 0;
++}
++
++static struct msi_domain_ops baikal_msi_domain_ops = {
++	.get_hwirq	= baikal_msi_get_hwirq,
++	.msi_init	= baikal_msi_init,
++	.msi_free	= baikal_msi_free,
++	.set_desc	= baikal_msi_domain_set_desc,
++	.msi_prepare = baikal_msi_prepare,
++};
++
++static struct msi_domain_info baikal_msi_domain_info = {
++	.flags		= MSI_FLAG_USE_DEF_DOM_OPS | MSI_FLAG_USE_DEF_CHIP_OPS | MSI_FLAG_ACTIVATE_EARLY | MSI_FLAG_MULTI_PCI_MSI,
++	.ops		= &baikal_msi_domain_ops,
++	.chip		= &baikal_msi_controller,
++	.bus_token	= DOMAIN_BUS_PCI_DEVICE_MSI,
++	.handler	= baikal_handle_edge_irq,
++};
++
++static void baikal_msi_domain_set_desc(msi_alloc_info_t *arg,
++				    struct msi_desc *desc)
++{
++	struct pci_dev *dev = msi_desc_to_pci_dev(desc);
++	arg->type = X86_IRQ_ALLOC_TYPE_PCI_MSI;
++	arg->desc = desc;
++	arg->hwirq = (PCI_SLOT(dev->devfn) << 8) | (PCI_FUNC(dev->devfn) << 5);
++
++	#ifndef QEMU_HACK_NO_IOMMU
++		if (!(baikal_msi_domain_info.flags & MSI_FLAG_MULTI_PCI_MSI)) {
++			arg->hwirq |= 0x1F;
++		}
++	#endif
++}
++
++static struct irq_domain *baikal_create_irq_domain(struct ps4sb_dev *sc,
++						  struct pci_dev *pdev)
++{
++	struct irq_domain *parent;
++	struct irq_domain *d;
++
++	dev_info(&pdev->dev, "baikal_create_irq_domain\n");
++	if (x86_vector_domain == NULL) {
++		dev_err(&pdev->dev, "baikal: x86_vector_domain is NULL\n");
++		return NULL;
++	}
++
++	baikal_msi_domain_info.chip_data = (void *)sc;
++	baikal_msi_controller.name = "Baikal-MSI";
++
++	parent = x86_vector_domain;
++
++	d = msi_create_irq_domain(NULL, &baikal_msi_domain_info, parent);
++	if (d)
++		dev_set_msi_domain(&pdev->dev, d);
++	else
++		dev_err(&pdev->dev, "baikal: failed to create irq domain\n");
++
++	return d;
++}
++
++int baikal_is_compatible_device(struct pci_dev *dev)
++{
++	if (!dev || dev->vendor != PCI_VENDOR_ID_SONY) {
++		return 0;
++	}
++	return (dev->device == PCI_DEVICE_ID_SONY_BAIKAL_PCIE);
++}
++
++int baikal_assign_irqs(struct pci_dev *dev, int nvec)
++{
++	int ret;
++	unsigned int sc_devfn;
++	struct pci_dev *sc_dev;
++	struct ps4sb_dev *sc;
++
++	sc_devfn = (dev->devfn & ~7) | BAIKAL_FUNC_ID_PCIE;
++	sc_dev = pci_get_slot(dev->bus, sc_devfn);
++
++	if (!baikal_is_compatible_device(sc_dev)) {
++		dev_err(&dev->dev, "baikal: this is not a Baikal device\n");
++		ret = -ENODEV;
++		goto fail;
++	}
++	sc = pci_get_drvdata(sc_dev);
++	if (!sc) {
++		dev_err(&dev->dev, "baikal: not ready yet, cannot assign IRQs\n");
++		ret = -ENODEV;
++		goto fail;
++	}
++
++	dev_dbg(&dev->dev, "baikal_assign_irqs(%d)\n", nvec);
++
++	if (PCI_FUNC(dev->devfn) != BAIKAL_FUNC_ID_PCIE)
++		nvec = 1;
++	if (dev->msi_enabled)
++		ret = nvec;
++	else
++		ret = pci_alloc_irq_vectors(dev, 1, nvec, PCI_IRQ_MSI);
++
++fail:
++	dev_dbg(&dev->dev, "baikal_assign_irqs returning %d\n", ret);
++	if (sc_dev)
++		pci_dev_put(sc_dev);
++	return ret;
++}
++EXPORT_SYMBOL(baikal_assign_irqs);
++
++void baikal_free_irqs(unsigned int virq, unsigned int nr_irqs)
++{
++	struct msi_desc *desc = irq_get_msi_desc(virq);
++	struct pci_dev *pdev = desc ? msi_desc_to_pci_dev(desc) : NULL;
++
++	if (pdev) {
++		pci_free_irq_vectors(pdev);
++		return;
++	}
++
++	irq_domain_free_irqs(virq, nr_irqs);
++}
++EXPORT_SYMBOL(baikal_free_irqs);
++
++static void baikal_glue_remove(struct ps4sb_dev *sc);
++
++static struct pci_dev * get_baikal_device(struct ps4sb_dev *sc, u32 baikal_func) {
++	unsigned int devfn;
++	struct pci_dev *sc_dev;
++
++	sc_dev = sc->pdev;
++	devfn = (sc_dev->devfn & ~7) | baikal_func;
++	return pci_get_slot(sc_dev->bus, devfn);
++}
++
++static void baikal_create_irq_domains(struct ps4sb_dev *sc) {
++	int func;
++	for (func = 0; func < BAIKAL_NUM_FUNCS; ++func) {
++		struct pci_dev * baikal_pdev = get_baikal_device(sc, func);
++		if (baikal_pdev) {
++			struct irq_domain * domain = baikal_create_irq_domain(sc, baikal_pdev);
++			if (func == BAIKAL_FUNC_ID_PCIE) sc->irqdomain = domain;
++			pci_dev_put(baikal_pdev);
++		} else
++			sc_err("cannot find baikal func %d device", func);
++	}
++}
++
++static int baikal_glue_init(struct ps4sb_dev *sc)
++{
++	sc_info("baikal glue probe\n");
++
++	if (!request_mem_region(pci_resource_start(sc->pdev, 2), pci_resource_len(sc->pdev, 2),
++				"baikal.glue")) {
++		sc_err("Failed to request pcie region\n");
++		return -EBUSY;
++
++	}
++
++	if (!request_mem_region(pci_resource_start(sc->pdev, 4), pci_resource_len(sc->pdev, 4),
++				"baikal.chipid")) {
++		sc_err("Failed to request chipid region\n");
++
++		release_mem_region(pci_resource_start(sc->pdev, 2), pci_resource_len(sc->pdev, 2));
++
++		return -EBUSY;
++	}
++
++	sc_info("Baikal chip revision: %08x:%08x:%08x\n",
++		ioread32(sc->bar4 + BAIKAL_REG_CHIPID_0),
++		ioread32(sc->bar4 + BAIKAL_REG_CHIPID_1),
++		ioread32(sc->bar4 + BAIKAL_REG_CHIPREV));
++
++	baikal_create_irq_domains(sc);
++	if (!sc->irqdomain) {
++		sc_err("Failed to create IRQ domain");
++		baikal_glue_remove(sc);
++		return -EIO;
++	}
++
++	sc->nvec = pci_alloc_irq_vectors(sc->pdev, BAIKAL_SUBFUNC_ICC+1, BAIKAL_NUM_SUBFUNCS, PCI_IRQ_MSI);
++	if (sc->nvec <= 0) {
++		sc_err("Failed to assign IRQs");
++		baikal_glue_remove(sc);
++		return -EIO;
++	}
++	sc_dbg("dev->irq=%d nvec=%d\n", sc->pdev->irq, sc->nvec);
++
++	return 0;
++}
++
++static void baikal_glue_remove(struct ps4sb_dev *sc) {
++	sc_info("baikal glue remove\n");
++
++	if (sc->nvec > 0) {
++		baikal_free_irqs(sc->pdev->irq, sc->nvec);
++		sc->nvec = 0;
++	}
++
++	if (sc->irqdomain) {
++		irq_domain_remove(sc->irqdomain);
++		sc->irqdomain = NULL;
++	}
++
++	release_mem_region(pci_resource_start(sc->pdev, 4), pci_resource_len(sc->pdev, 4));
++	release_mem_region(pci_resource_start(sc->pdev, 2), pci_resource_len(sc->pdev, 2));
++}
++
++#ifdef CONFIG_PM
++static int baikal_glue_suspend(struct ps4sb_dev *sc, pm_message_t state) {
++	return 0;
++}
++
++static int baikal_glue_resume(struct ps4sb_dev *sc) {
++	return 0;
++}
++#endif
++
++#ifdef CONFIG_PM
++#endif
++
++
++static const struct ps4sb_family baikal_family = {
++	.name			= "Baikal",
++	.uart_bar		= 2,
++	.uart_base		= BAIKAL_RGN_UART_BASE,
++	.uart_clock		= 25000000,
++	.uart_subfunc		= BAIKAL_SUBFUNC_UART0,
++	.uart_count		= BAIKAL_NR_UARTS,
++	.icc_bar		= 2,
++	.icc_base		= BAIKAL_RGN_ICC_BASE,
++	.icc_atomic_power	= true,
++	.icc_usb_power		= true,
++	.i2c_data_off		= 8,
++	.i2c_err_off		= 0,
++	.rtc_bar		= 4,
++	.rtc_reg		= 0x50d0,
++	.rtc_status		= 0x50cc,
++	.rtc_epoch		= 1325376000LL,
++};
++
++static int baikal_probe(struct pci_dev *dev, const struct pci_device_id *id) {
++	struct ps4sb_dev *sc;
++	int ret;
++
++	dev_dbg(&dev->dev, "baikal_probe()\n");
++
++	ret = pci_enable_device(dev);
++	if (ret) {
++		dev_err(&dev->dev,
++			"baikal_probe(): pci_enable_device failed: %d\n", ret);
++		return ret;
++	}
++
++	sc = kzalloc(sizeof(*sc), GFP_KERNEL);
++	if (!sc) {
++		dev_err(&dev->dev, "baikal_probe(): alloc sc failed\n");
++		ret = -ENOMEM;
++		goto disable_dev;
++	}
++	sc->pdev = dev;
++	sc->family = &baikal_family;
++	memset(sc->irq_map, -1, sizeof(sc->irq_map));
++	pci_set_drvdata(dev, sc);
++
++	sc->bar0 = pci_ioremap_bar(dev, 0);
++	sc->bar2 = pci_ioremap_bar(dev, 2);
++	sc->bar4 = pci_ioremap_bar(dev, 4);
++
++	if (!sc->bar0 || !sc->bar2 || !sc->bar4) {
++		sc_err("failed to map some BARs, bailing out\n");
++		ret = -EIO;
++		goto free_bars;
++	}
++
++	if ((ret = baikal_glue_init(sc)) < 0)
++		goto free_bars;
++	if (ps4sb_uart_init(sc) < 0)
++		sc_err("uart not registered\n");
++	if (ps4sb_rtc_init(sc) < 0)
++		sc_err("rtc not registered\n");
++	if ((ret = ps4sb_icc_init(sc)) < 0)
++		goto remove_uart;
++
++	WRITE_ONCE(ps4sb_initialized, true);
++	return 0;
++
++remove_uart:
++	ps4sb_uart_remove(sc);
++	baikal_glue_remove(sc);
++free_bars:
++	if (sc->bar0)
++		iounmap(sc->bar0);
++	if (sc->bar2)
++		iounmap(sc->bar2);
++	if (sc->bar4)
++		iounmap(sc->bar4);
++	kfree(sc);
++disable_dev:
++	pci_disable_device(dev);
++	return ret;
++}
++
++static void baikal_remove(struct pci_dev *dev) {
++	struct ps4sb_dev *sc;
++	sc = pci_get_drvdata(dev);
++
++	WRITE_ONCE(ps4sb_initialized, false);
++	ps4sb_icc_remove(sc);
++	ps4sb_uart_remove(sc);
++	baikal_glue_remove(sc);
++
++	if (sc->bar0)
++		iounmap(sc->bar0);
++	if (sc->bar2)
++		iounmap(sc->bar2);
++	if (sc->bar4)
++		iounmap(sc->bar4);
++	kfree(sc);
++	pci_disable_device(dev);
++}
++
++#ifdef CONFIG_PM
++static int baikal_suspend(struct pci_dev *dev, pm_message_t state) {
++	struct ps4sb_dev *sc;
++	sc = pci_get_drvdata(dev);
++
++	ps4sb_icc_suspend(sc, state);
++	ps4sb_uart_suspend(sc, state);
++	baikal_glue_suspend(sc, state);
++	return 0;
++}
++
++static int baikal_resume(struct pci_dev *dev) {
++	struct ps4sb_dev *sc;
++	sc = pci_get_drvdata(dev);
++
++	ps4sb_icc_resume(sc);
++	baikal_glue_resume(sc);
++	ps4sb_uart_resume(sc);
++	return 0;
++}
++#endif
++
++static const struct pci_device_id baikal_pci_tbl[] = {
++	{ PCI_DEVICE(PCI_VENDOR_ID_SONY, PCI_DEVICE_ID_SONY_BAIKAL_PCIE), },
++	{ }
++};
++MODULE_DEVICE_TABLE(pci, baikal_pci_tbl);
++
++static struct pci_driver baikal_driver = {
++	.name		= "baikal_pcie",
++	.id_table	= baikal_pci_tbl,
++	.probe		= baikal_probe,
++	.remove		= baikal_remove,
++#ifdef CONFIG_PM
++	.suspend	= baikal_suspend,
++	.resume		= baikal_resume,
++#endif
++};
++module_pci_driver(baikal_driver);
++
++static void baikal_ahci_rmw(void __iomem *mmio, u32 offset, u32 mask, u32 set)
++{
++	u32 val = ioread32(mmio + offset);
++
++	iowrite32((val & mask) | set, mmio + offset);
++}
++
++#define BAIKAL_BOOT_PAGE_PHYS		0x9b000
++#define BAIKAL_BOOT_TRACE_HDD		0x386
++#define BAIKAL_BOOT_TRACE_OTHER		0x385
++#define BAIKAL_BOOT_REVISION		0x6e0
++#define BAIKAL_REVISION_30100		0x30100
++#define BAIKAL_SATA_TRACE_DEFAULT	6
++
++struct baikal_sata_rmw {
++	u16 reg;
++	u32 keep;
++	u32 set;
++};
++
++static const struct baikal_sata_rmw baikal_sata_trace_0_2[] = {
++	{ 0x204C, 0xFFFFC0FF, 0x1D00 },
++	{ 0x2054, 0xFFFF9FFF, 0x4000 },
++	{ 0x207C, 0xFFFFFFC0, 0x20 },
++	{ 0x205C, 0xCFFFFFFF, 0x20000000 },
++	{ 0x2080, 0xFFFFF03F, 0x880 },
++	{ 0x2080, 0xFFFC0FFF, 0x3000 },
++	{ 0x205C, 0x3FFFFFFF, 0x40000000 },
++	{ 0x204C, 0xFFFFFFF0, 0x3 },
++	{ 0x206C, 0xFFFFF0FF, 0x100 },
++	{ 0x2084, 0xFFFFFF00, 0x32 },
++};
++
++static const struct baikal_sata_rmw baikal_sata_trace_3_5[] = {
++	{ 0x204C, 0xFFC0FFFF, 0x1E0000 },
++	{ 0x204C, 0xC0FFFFFF, 0 },
++	{ 0x2054, 0xFFFF9FFF, 0x2000 },
++	{ 0x207C, 0xFFFFF03F, 0x840 },
++	{ 0x207C, 0xFFFC0FFF, 0x2000 },
++	{ 0x205C, 0xCFFFFFFF, 0x10000000 },
++	{ 0x2080, 0xFFFFF03F, 0x8C0 },
++	{ 0x2080, 0xFFFC0FFF, 0x7000 },
++	{ 0x205C, 0x3FFFFFFF, 0x40000000 },
++	{ 0x204C, 0xFFFFFFF0, 0x3 },
++	{ 0x206C, 0xFFFFF0FF, 0x100 },
++	{ 0x2084, 0xFFFFFF00, 0x43 },
++};
++
++static const struct baikal_sata_rmw baikal_sata_trace_6_8[] = {
++	{ 0x204C, 0xFFC0FFFF, 0x200000 },
++	{ 0x204C, 0xC0FFFFFF, 0x1000000 },
++	{ 0x2054, 0xFFFF9FFF, 0x2000 },
++	{ 0x207C, 0xFFFFF03F, 0x880 },
++	{ 0x207C, 0xFFFC0FFF, 0x6000 },
++	{ 0x205C, 0xCFFFFFFF, 0x10000000 },
++	{ 0x2080, 0xFFFFF03F, 0x900 },
++	{ 0x2080, 0xFFFC0FFF, 0xF000 },
++	{ 0x205C, 0x3FFFFFFF, 0x40000000 },
++	{ 0x204C, 0xFFFFFFF0, 0x5 },
++	{ 0x206C, 0xFFFFF0FF, 0x200 },
++	{ 0x2084, 0xFFFFFF00, 0x55 },
++};
++
++static const struct baikal_sata_rmw baikal_sata_trace_9_12[] = {
++	{ 0x204C, 0xFFC0FFFF, 0x240000 },
++	{ 0x204C, 0xC0FFFFFF, 0x4000000 },
++	{ 0x2054, 0xFFFF9FFF, 0x2000 },
++	{ 0x207C, 0xFFFFF03F, 0x880 },
++	{ 0x207C, 0xFFFC0FFF, 0x6000 },
++	{ 0x205C, 0xCFFFFFFF, 0x10000000 },
++	{ 0x2080, 0xFFFFF03F, 0x900 },
++	{ 0x2080, 0xFFFC0FFF, 0xF000 },
++	{ 0x205C, 0x3FFFFFFF, 0x40000000 },
++	{ 0x204C, 0xFFFFFFF0, 0x5 },
++	{ 0x206C, 0xFFFFF0FF, 0x200 },
++	{ 0x2084, 0xFFFFFF00, 0x55 },
++};
++
++static const struct baikal_sata_rmw baikal_sata_trace_13_18[] = {
++	{ 0x204C, 0xFFC0FFFF, 0x260000 },
++	{ 0x204C, 0xC0FFFFFF, 0x7000000 },
++	{ 0x2054, 0xFFFF9FFF, 0x2000 },
++	{ 0x207C, 0xFFFFF03F, 0x880 },
++	{ 0x207C, 0xFFFC0FFF, 0x6000 },
++	{ 0x205C, 0xCFFFFFFF, 0x10000000 },
++	{ 0x2080, 0xFFFFF03F, 0x900 },
++	{ 0x2080, 0xFFFC0FFF, 0xF000 },
++	{ 0x205C, 0x3FFFFFFF, 0x40000000 },
++	{ 0x204C, 0xFFFFFFF0, 0x5 },
++	{ 0x206C, 0xFFFFF0FF, 0x200 },
++	{ 0x2084, 0xFFFFFF00, 0x55 },
++};
++
++static const struct {
++	u32 max_length;
++	const struct baikal_sata_rmw *rmw;
++	size_t count;
++} baikal_sata_trace_sets[] = {
++	{ 2, baikal_sata_trace_0_2, ARRAY_SIZE(baikal_sata_trace_0_2) },
++	{ 5, baikal_sata_trace_3_5, ARRAY_SIZE(baikal_sata_trace_3_5) },
++	{ 8, baikal_sata_trace_6_8, ARRAY_SIZE(baikal_sata_trace_6_8) },
++	{ 12, baikal_sata_trace_9_12, ARRAY_SIZE(baikal_sata_trace_9_12) },
++	{ 18, baikal_sata_trace_13_18, ARRAY_SIZE(baikal_sata_trace_13_18) },
++};
++
++static bool baikal_baikal_boot_info(bool hdd, u8 *trace, u32 *revision)
++{
++	u8 *page = memremap(BAIKAL_BOOT_PAGE_PHYS, PAGE_SIZE, MEMREMAP_WB);
++
++	*trace = 0;
++	*revision = 0;
++	if (!page)
++		return false;
++	*trace = page[hdd ? BAIKAL_BOOT_TRACE_HDD : BAIKAL_BOOT_TRACE_OTHER];
++	*revision = *(u32 *)(page + BAIKAL_BOOT_REVISION);
++	memunmap(page);
++	return true;
++}
++
++static u32 baikal_sata_trace_length(u8 trace)
++{
++	u32 length = trace & 0x1f;
++
++	if (trace > 0x5f)
++		length += (trace >> 5) - 2;
++	if (!trace || length > 18)
++		length = BAIKAL_SATA_TRACE_DEFAULT;
++	return length;
++}
++
++static void baikal_sata_write_trace_set(void __iomem *mmio, u32 length)
++{
++	size_t i, j;
++
++	for (i = 0; i < ARRAY_SIZE(baikal_sata_trace_sets); i++) {
++		if (length > baikal_sata_trace_sets[i].max_length)
++			continue;
++		for (j = 0; j < baikal_sata_trace_sets[i].count; j++)
++			baikal_ahci_rmw(mmio, baikal_sata_trace_sets[i].rmw[j].reg,
++				       baikal_sata_trace_sets[i].rmw[j].keep,
++				       baikal_sata_trace_sets[i].rmw[j].set);
++		return;
++	}
++}
++
++int baikal_sata_phy_init(struct pci_dev *pdev, void __iomem *ahci_mmio)
++{
++	struct pci_dev *glue_dev;
++	struct ps4sb_dev *sc;
++	u32 efuse0, efuse1;
++	u32 tune0 = 40;
++	u32 tune1 = 16;
++	u32 tune2 = 16;
++	u32 pulse_offset;
++	u32 hold_offset;
++	u32 status;
++	u32 revision;
++	u32 length;
++	u8 trace;
++	bool have_boot;
++	bool shared_path;
++	int ret = 0;
++
++	if (!pdev || pdev->vendor != PCI_VENDOR_ID_SONY || !ahci_mmio)
++		return 0;
++
++	if (pdev->device != PCI_DEVICE_ID_SONY_BAIKAL_AHCI &&
++	    pdev->device != PCI_DEVICE_ID_SONY_BAIKAL_XHCI)
++		return 0;
++
++	glue_dev = pci_get_slot(pdev->bus,
++				(pdev->devfn & ~0x7) | BAIKAL_FUNC_ID_PCIE);
++	if (!glue_dev)
++		return -EPROBE_DEFER;
++
++	if (!baikal_is_compatible_device(glue_dev)) {
++		ret = -ENODEV;
++		goto out_put;
++	}
++
++	sc = pci_get_drvdata(glue_dev);
++	if (!sc || !sc->bar2 || !sc->bar4) {
++		ret = -EPROBE_DEFER;
++		goto out_put;
++	}
++
++	dev_info(&pdev->dev, "Baikal SATA PHY init\n");
++
++	shared_path = pdev->device == PCI_DEVICE_ID_SONY_BAIKAL_XHCI;
++	if (shared_path) {
++		pulse_offset = 112;
++		hold_offset = 48;
++	} else {
++		pulse_offset = 108;
++		hold_offset = 44;
++	}
++
++	glue_write32(sc, BAIKAL_USB_BASE + pulse_offset, 1);
++	glue_write32(sc, BAIKAL_USB_BASE + hold_offset, 1);
++	glue_write32(sc, BAIKAL_USB_BASE + pulse_offset, 0);
++
++	efuse0 = ioread32(sc->bar4 + 0xC000 + 72);
++	efuse1 = ioread32(sc->bar4 + 0xC000 + 108);
++
++	if (shared_path) {
++		if (efuse1 & BIT(26)) {
++			tune0 = (efuse0 >> 16) & 0x3f;
++			tune1 = (efuse0 >> 22) & 0x1f;
++			tune2 = efuse0 >> 27;
++		}
++	} else if (efuse1 & BIT(18)) {
++		tune0 = efuse0 & 0x3f;
++		tune1 = (efuse0 >> 6) & 0x1f;
++		tune2 = efuse0 >> 11;
++	}
++
++	dev_info(&pdev->dev, "Baikal SATA EFUSE VALUE: 0x%02x:0x%02x:0x%02x\n",
++		 tune0, tune1, tune2);
++	have_boot = baikal_baikal_boot_info(shared_path, &trace, &revision);
++	length = baikal_sata_trace_length(trace);
++	if (have_boot)
++		dev_info(&pdev->dev,
++			 "Baikal SATA PHY trace byte 0x%02x, length %u, revision 0x%x\n",
++			 trace, length, revision);
++	else
++		dev_warn(&pdev->dev,
++			 "Baikal SATA PHY boot block not mapped, length %u\n",
++			 length);
++
++	baikal_ahci_rmw(ahci_mmio, 0x20A0, 0xFBFF03FF, (tune0 << 10) | 0x4000000);
++	iowrite32(ioread32(ahci_mmio + 0x2014) | 0x100000, ahci_mmio + 0x2014);
++	baikal_ahci_rmw(ahci_mmio, 0x2054, 0xFFFFF07F, tune1 << 7);
++	iowrite32(ioread32(ahci_mmio + 0x201C) | 0x4, ahci_mmio + 0x201C);
++	baikal_ahci_rmw(ahci_mmio, 0x2078, 0xFFFFFE0F, tune2 << 4);
++
++	baikal_sata_write_trace_set(ahci_mmio, length);
++
++	baikal_ahci_rmw(ahci_mmio, 0x2040, 0xFFFFFFE0, 0x12);
++	baikal_ahci_rmw(ahci_mmio, 0x2040, 0xFFFFC0FF, 0x3100);
++	baikal_ahci_rmw(ahci_mmio, 0x2040, 0xFFE0FFFF, 0xE0000);
++	baikal_ahci_rmw(ahci_mmio, 0x2040, 0xFFFFFF1F, 0x80);
++	if (revision == BAIKAL_REVISION_30100) {
++		iowrite32(ioread32(ahci_mmio + 0x2028) & ~BIT(25),
++			  ahci_mmio + 0x2028);
++		baikal_ahci_rmw(ahci_mmio, 0x2044, 0xFFFFFF80, 0x1C);
++	}
++	baikal_ahci_rmw(ahci_mmio, 0x201C, 0xFF0FFFFF, 0x200000);
++	baikal_ahci_rmw(ahci_mmio, 0x20DC, 0xFFFFE0FF, 0x400);
++	iowrite32(ioread32(ahci_mmio + 0x2024) | 0x30, ahci_mmio + 0x2024);
++
++	glue_write32(sc, BAIKAL_USB_BASE + hold_offset, 0);
++	readl_poll_timeout_atomic(ahci_mmio + 0xDC, status, status & 0x1,
++				  10, 1000);
++
++	baikal_ahci_rmw(ahci_mmio, 0x0, 0xE7FFFFFF, 0);
++	iowrite32(0x1, ahci_mmio + 0x0C);
++	baikal_ahci_rmw(ahci_mmio, 0x0B8, 0xFFFDFFFF, 0);
++	baikal_ahci_rmw(ahci_mmio, 0x118, 0xFFE3FFFF, 0x40000);
++
++out_put:
++	pci_dev_put(glue_dev);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(baikal_sata_phy_init);
+diff --git a/drivers/ps4/sb-icc-i2c.c b/drivers/ps4/sb-icc-i2c.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..1463945cc14f2af1f0818d84e455cbab815308e9
+--- /dev/null
++++ b/drivers/ps4/sb-icc-i2c.c
+@@ -0,0 +1,166 @@
++#include <linux/serial_8250.h>
++#include <linux/serial_core.h>
++#include <linux/serial_reg.h>
++
++#include <asm/ps4.h>
++
++#include "ps4sb.h"
++
++#define ICC_MAX_READ_DATA 0xff
++#define ICC_MAX_WRITE_DATA 0xf8
++#define ICC_REPLY_HEADER_SIZE 0x14
++
++u32 icc_i2c_functionality(struct i2c_adapter *adap);
++int icc_i2c_init(struct ps4sb_dev *sc);
++void icc_i2c_remove(struct ps4sb_dev *sc);
++
++
++/* This is actually multiple nested variable length structures, but since we
++ * currently only support one op per transaction, we hardcode it. */
++struct icc_i2c_msg {
++	/* Header */
++	u8 code;
++	u16 length;
++	u8 count;
++	struct {
++		u8 major;
++		u8 length;
++		u8 minor;
++		u8 count;
++		struct {
++			u8 length;
++			u8 slave_addr;
++			u8 reg_addr;
++			u8 data[ICC_MAX_WRITE_DATA];
++		} xfer;
++	} cmd;
++} __packed;
++
++static int icc_i2c_smbus_xfer(struct i2c_adapter *adapter, u16 addr,
++			  unsigned short flags,
++			  char read_write, u8 command, int size,
++			  union i2c_smbus_data *data)
++{
++	struct ps4sb_dev *sc = i2c_get_adapdata(adapter);
++	int ret;
++	struct icc_i2c_msg msg;
++	u8 resultbuf[ICC_REPLY_HEADER_SIZE + ICC_MAX_READ_DATA];
++	int data_off = sc->family->i2c_data_off;
++	int err_off = sc->family->i2c_err_off;
++
++	msg.code = 4; /* Don't really know what this is */
++	msg.count = 1;
++	msg.cmd.count = 1;
++	msg.cmd.xfer.slave_addr = addr << 1;
++	msg.cmd.xfer.reg_addr = command;
++	if (read_write == I2C_SMBUS_READ) {
++		msg.cmd.major = 1;
++		msg.cmd.minor = 1;
++		msg.cmd.length = 8;
++		msg.cmd.xfer.data[0] = 0; /* unknown */
++	} else {
++		msg.cmd.major = 2;
++		msg.cmd.minor = 2;
++	}
++
++	switch (size) {
++	case I2C_SMBUS_BYTE_DATA:
++		msg.cmd.xfer.length = 1;
++		if (read_write == I2C_SMBUS_WRITE) {
++			msg.cmd.length = 8;
++			msg.cmd.xfer.data[0] = data->byte;
++		}
++		break;
++	case I2C_SMBUS_WORD_DATA:
++		msg.cmd.xfer.length = 2;
++		if (read_write == I2C_SMBUS_WRITE) {
++			msg.cmd.length = 9;
++			msg.cmd.xfer.data[0] = data->word & 0xff;
++			msg.cmd.xfer.data[1] = data->word >> 8;
++		}
++		break;
++	case I2C_SMBUS_I2C_BLOCK_DATA:
++		msg.cmd.xfer.length = data->block[0];
++		if (read_write == I2C_SMBUS_WRITE) {
++			if (data->block[0] > ICC_MAX_WRITE_DATA) {
++				sc_err("icc-i2c: transaction too large: %d\n",
++				       data->block[0]);
++				return -E2BIG;
++			}
++			msg.cmd.length = 7 + data->block[0];
++			memcpy(msg.cmd.xfer.data, &data->block[1],
++			       data->block[0]);
++		}
++		break;
++	default:
++		sc_err("icc-i2c: unsupported transaction %d\n", size);
++		return -ENOTSUPP;
++	}
++
++	msg.length = msg.cmd.length + 4;
++	ret = ps4sb_icc_cmd(0x10, 0x0, &msg, msg.length, resultbuf,
++		      sizeof(resultbuf));
++	if (ret < err_off + 2 || ret > sizeof(resultbuf)) {
++		sc_err("icc-i2c: icc command failed: %d\n", ret);
++		return -EIO;
++	}
++	if (resultbuf[err_off] != 0 || resultbuf[err_off + 1] != 0) {
++		sc_err("icc-i2c: i2c command failed: %d, %d\n",
++		       resultbuf[err_off], resultbuf[err_off + 1]);
++		return -EIO;
++	}
++
++	if (read_write == I2C_SMBUS_READ)
++		switch (size) {
++		case I2C_SMBUS_BYTE_DATA:
++			data->byte = resultbuf[data_off];
++			break;
++		case I2C_SMBUS_WORD_DATA:
++			data->word = resultbuf[data_off] | (resultbuf[data_off + 1] << 8);
++			break;
++		case I2C_SMBUS_I2C_BLOCK_DATA:
++			memcpy(&data->block[1], &resultbuf[data_off],
++			       data->block[0]);
++			break;
++		}
++
++	return 0;
++}
++
++u32 icc_i2c_functionality(struct i2c_adapter *adap)
++{
++	return I2C_FUNC_SMBUS_BYTE_DATA |
++		I2C_FUNC_SMBUS_WORD_DATA |
++		I2C_FUNC_SMBUS_I2C_BLOCK;
++}
++
++static const struct i2c_algorithm icc_i2c_algo = {
++	.smbus_xfer   = &icc_i2c_smbus_xfer,
++	.functionality = &icc_i2c_functionality,
++};
++
++
++int icc_i2c_init(struct ps4sb_dev *sc)
++{
++	struct i2c_adapter *i2c;
++	int ret;
++
++	i2c = &sc->icc.i2c;
++	i2c->owner = THIS_MODULE;
++	i2c->algo = &icc_i2c_algo;
++	i2c->algo_data = NULL;
++	i2c->dev.parent = &sc->pdev->dev;
++	strncpy(i2c->name, "icc", sizeof(i2c->name));
++	i2c_set_adapdata(i2c, sc);
++	ret = i2c_add_adapter(i2c);
++	if (ret < 0) {
++		sc_err("failed to add i2c adapter\n");
++		return ret;
++	}
++	return 0;
++}
++
++void icc_i2c_remove(struct ps4sb_dev *sc)
++{
++	i2c_del_adapter(&sc->icc.i2c);
++}
+diff --git a/drivers/ps4/sb-icc-pwrbutton.c b/drivers/ps4/sb-icc-pwrbutton.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..d98c71eac4553afc371628b5670127df0c13f1d6
+--- /dev/null
++++ b/drivers/ps4/sb-icc-pwrbutton.c
+@@ -0,0 +1,76 @@
++#include <linux/input.h>
++#include <asm/ps4.h>
++#include "ps4sb.h"
++
++/* Prototype declarations */
++void icc_pwrbutton_trigger(struct ps4sb_dev *sc, int state);
++int icc_pwrbutton_init(struct ps4sb_dev *sc);
++void icc_pwrbutton_remove(struct ps4sb_dev *sc);
++/* ---------------------- */ //this file just felt very empty at the top hence the comments
++
++void icc_pwrbutton_trigger(struct ps4sb_dev *sc, int state)
++{
++	if (sc->icc.pwrbutton_dev) {
++		input_report_key(sc->icc.pwrbutton_dev, KEY_POWER, state ? 1 : 0);
++		input_sync(sc->icc.pwrbutton_dev);
++	}
++}
++
++int icc_pwrbutton_init(struct ps4sb_dev *sc)
++{
++	int ret = 0;
++	u16 button;
++	struct input_dev *dev;
++
++	dev = input_allocate_device();
++	if (!dev) {
++		sc_err("%s: Not enough memory.\n", __func__);
++		return -ENOMEM;
++	}
++
++	set_bit(EV_KEY, dev->evbit);
++	set_bit(KEY_POWER, dev->keybit);
++
++	dev->name = "Power Button";
++	dev->id.bustype = BUS_HOST;
++
++	/* this makes the button look like an acpi power button
++	 * no clue whether anyone relies on that though */
++	dev->id.product = 0x02;
++	dev->phys = "LNXPWRBN/button/input0";
++
++	dev->dev.parent = &sc->pdev->dev;
++	ret = input_register_device(dev);
++	if (ret) {
++		sc_err("%s: Failed to register device\n", __func__);
++		input_free_device(dev);
++		return ret;
++	}
++
++	sc->icc.pwrbutton_dev = dev;
++
++	// enable power button notifications
++	button = 0x100;
++	ret = ps4sb_icc_cmd(8, 1, &button, sizeof(button), NULL, 0);
++	if (ret < 0) {
++		sc_info("%s: Failed to enable power notifications (%d)\n",
++			__func__, ret);
++	}
++
++	// enable reset button notifications (?)
++	button = 0x102;
++	ret = ps4sb_icc_cmd(8, 1, &button, sizeof(button), NULL, 0);
++	if (ret < 0) {
++		sc_info("%s: Failed to enable reset notifications (%d)\n",
++		        __func__, ret);
++	}
++
++	return 0;
++}
++
++void icc_pwrbutton_remove(struct ps4sb_dev *sc)
++{
++	if (sc->icc.pwrbutton_dev)
++		input_unregister_device(sc->icc.pwrbutton_dev);
++	sc->icc.pwrbutton_dev = NULL;
++}
+diff --git a/drivers/ps4/sb-sflash.c b/drivers/ps4/sb-sflash.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..1983770fed4c689f8a78a163386e250b7915b0a7
+--- /dev/null
++++ b/drivers/ps4/sb-sflash.c
+@@ -0,0 +1,546 @@
++// SPDX-License-Identifier: GPL-2.0-only
++
++#define pr_fmt(fmt) "ps4-sflash: " fmt
++
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/pci.h>
++#include <linux/io.h>
++#include <linux/delay.h>
++#include <linux/iopoll.h>
++#include <linux/sched.h>
++#include <linux/fs.h>
++#include <linux/miscdevice.h>
++#include <linux/uaccess.h>
++#include <linux/mutex.h>
++#include <linux/dma-mapping.h>
++#include <linux/slab.h>
++
++#include "sb-sflash.h"
++
++struct ps4_sflash_dev;
++
++struct ps4_sflash_chip {
++	const char *name;
++	int (*setup)(struct ps4_sflash_dev *dev);
++	u32 (*read_jedec)(struct ps4_sflash_dev *dev);
++	u32 (*read_status)(struct ps4_sflash_dev *dev);
++	ssize_t (*read_block)(struct ps4_sflash_dev *dev, u32 flash_addr,
++			      u8 *out_buf, size_t flash_len);
++};
++
++struct ps4_sflash_dev {
++	struct pci_dev *pdev;
++	const struct ps4_sflash_chip *chip;
++	void __iomem *bar4;
++	void __iomem *sflash_regs;
++	void __iomem *clk_regs;
++	struct miscdevice misc;
++	struct mutex lock;
++	u8 *dma_vaddr;
++	dma_addr_t dma_paddr;
++	u8 *dec_buf;
++};
++
++static struct ps4_sflash_dev *g_ps4_sflash;
++
++static inline u32 sflash_read32(struct ps4_sflash_dev *dev, u32 reg)
++{
++	return ioread32(dev->sflash_regs + reg);
++}
++
++static inline void sflash_write32(struct ps4_sflash_dev *dev, u32 reg, u32 val)
++{
++	iowrite32(val, dev->sflash_regs + reg);
++}
++
++static inline u32 sflash_clk_read32(struct ps4_sflash_dev *dev, u32 reg)
++{
++	return ioread32(dev->clk_regs + reg);
++}
++
++static inline void sflash_clk_write32(struct ps4_sflash_dev *dev, u32 reg, u32 val)
++{
++	iowrite32(val, dev->clk_regs + reg);
++}
++
++static int ps4_sflash_clk_enable(struct ps4_sflash_dev *dev)
++{
++	int timeout = 1000;
++
++	sflash_clk_write32(dev, 0x4, 1);
++	while (timeout--) {
++		if ((sflash_clk_read32(dev, 0x0) & 7) == 4)
++			return 0;
++		usleep_range(50, 100);
++	}
++	return -ETIMEDOUT;
++}
++
++static int ps4_sflash_wait_idle(struct ps4_sflash_dev *dev)
++{
++	int timeout = 10000;
++
++	while (timeout--) {
++		if ((sflash_read32(dev, PS4_SFLASH_REG_STATUS) & 1) == 0)
++			return 0;
++		udelay(10);
++	}
++	return -ETIMEDOUT;
++}
++
++static int ps4_sflash_wait_dma(struct ps4_sflash_dev *dev)
++{
++	int timeout = 10000;
++
++	while (timeout--) {
++		if ((sflash_read32(dev, PS4_SFLASH_REG_CMD) & 0x80000000) == 0)
++			return 0;
++		udelay(10);
++	}
++	return -ETIMEDOUT;
++}
++
++static u32 ps4_sflash_read_jedec(struct ps4_sflash_dev *dev)
++{
++	ps4_sflash_clk_enable(dev);
++	sflash_write32(dev, PS4_SFLASH_REG_CMD, 0x8010009f);
++	ps4_sflash_wait_idle(dev);
++	return sflash_read32(dev, PS4_SFLASH_REG_RDID);
++}
++
++static u32 ps4_sflash_read_status(struct ps4_sflash_dev *dev)
++{
++	ps4_sflash_clk_enable(dev);
++	sflash_write32(dev, PS4_SFLASH_REG_CMD, 0x80000005);
++	ps4_sflash_wait_idle(dev);
++	return (sflash_read32(dev, PS4_SFLASH_REG_STATUS) >> 16) & 0xff;
++}
++
++static void ps4_sflash_unpack_chunk(const u8 *raw, u8 *dec, size_t raw_len)
++{
++	size_t i;
++
++	for (i = 0; i < raw_len; i += 4) {
++		u8 b0 = raw[i];
++		u8 b1 = raw[i + 1];
++		u8 b2 = raw[i + 2];
++		u8 b3 = raw[i + 3];
++
++		dec[i / 4] = ((b0 & 0x20) << 2) |
++			     ((b0 & 0x02) << 5) |
++			     ((b1 & 0x20) << 0) |
++			     ((b1 & 0x02) << 3) |
++			     ((b2 & 0x20) >> 2) |
++			     ((b2 & 0x02) << 1) |
++			     ((b3 & 0x20) >> 4) |
++			     ((b3 & 0x02) >> 1);
++	}
++}
++
++static ssize_t ps4_sflash_read_block(struct ps4_sflash_dev *dev, u32 flash_addr,
++				     u8 *out_buf, size_t flash_len)
++{
++	size_t dma_len = flash_len * 4;
++	u32 ctrl_addr = (flash_addr - 1) & 0xffffffff;
++	int ret;
++
++	if (dma_len > PS4_SFLASH_CHUNK_DMA)
++		return -EINVAL;
++
++	ret = ps4_sflash_clk_enable(dev);
++	if (ret)
++		return ret;
++
++	sflash_write32(dev, PS4_SFLASH_REG_TIMING, 0x007d0000);
++	sflash_write32(dev, PS4_SFLASH_REG_OPCODES, 0x9f050300);
++	sflash_write32(dev, PS4_SFLASH_REG_CS,
++		       (sflash_read32(dev, PS4_SFLASH_REG_CS) & 0xffffff00) | 1);
++
++	sflash_write32(dev, PS4_SFLASH_REG_STATUS_CLR, 0);
++	sflash_write32(dev, PS4_SFLASH_REG_OFFSET, ctrl_addr);
++	sflash_write32(dev, PS4_SFLASH_REG_DMA_ADDR, (u32)dev->dma_paddr);
++	sflash_write32(dev, PS4_SFLASH_REG_DMA_LEN, 0x80000000 | (u32)dma_len);
++	sflash_write32(dev, PS4_SFLASH_REG_CMD, 0x82100103);
++
++	ret = ps4_sflash_wait_dma(dev);
++	if (ret)
++		return ret;
++
++	ps4_sflash_unpack_chunk(dev->dma_vaddr, out_buf, dma_len);
++	return flash_len;
++}
++
++static int ps4_sflash_aeolia_setup(struct ps4_sflash_dev *dev)
++{
++	dev->sflash_regs = dev->bar4 + 0xc2000;
++	dev->clk_regs = dev->bar4 + 0xc3000;
++
++	dma_set_mask_and_coherent(&dev->pdev->dev, DMA_BIT_MASK(32));
++	dev->dma_vaddr = dma_alloc_coherent(&dev->pdev->dev, PS4_SFLASH_CHUNK_DMA,
++					    &dev->dma_paddr, GFP_KERNEL);
++	if (!dev->dma_vaddr) {
++		pr_err("failed to allocate DMA bounce buffer\n");
++		return -ENOMEM;
++	}
++	return 0;
++}
++
++static int ps4_sflash_baikal_claim(struct ps4_sflash_dev *dev)
++{
++	u32 val;
++	int ret;
++
++	sflash_write32(dev, PS4_SFLASH_BK_CLAIM, 1);
++	ret = read_poll_timeout(ioread32, val, (val & 7) == 4, 10,
++				PS4_SFLASH_BK_TIMEOUT_US, false,
++				dev->sflash_regs + PS4_SFLASH_BK_CLAIM_STATUS);
++	if (ret) {
++		sflash_write32(dev, PS4_SFLASH_BK_CLAIM, 0);
++		return ret;
++	}
++	return 0;
++}
++
++static void ps4_sflash_baikal_release(struct ps4_sflash_dev *dev)
++{
++	u32 val;
++
++	sflash_write32(dev, PS4_SFLASH_BK_CLAIM, 0);
++	if (read_poll_timeout(ioread32, val, !(val & 4), 10,
++			      PS4_SFLASH_BK_TIMEOUT_US, false,
++			      dev->sflash_regs + PS4_SFLASH_BK_CLAIM_STATUS))
++		pr_warn_ratelimited("release timed out, status %08x\n", val);
++}
++
++static int ps4_sflash_baikal_xfer(struct ps4_sflash_dev *dev, u8 opcode,
++				  u32 addr, unsigned int addr_len,
++				  u8 *rx, unsigned int rx_len)
++{
++	unsigned int i;
++	u32 val;
++	int ret;
++
++	sflash_write32(dev, PS4_SFLASH_BK_OPCODE, opcode);
++	for (i = 0; i < PS4_SFLASH_BK_ADDR_LEN; i++)
++		sflash_write32(dev, PS4_SFLASH_BK_ADDR - i * 4,
++			       addr_len ? (addr >> (24 - i * 8)) & 0xff : 0);
++	sflash_write32(dev, PS4_SFLASH_BK_BITS, (1 + addr_len + rx_len) * 8);
++	sflash_write32(dev, PS4_SFLASH_BK_CTRL, PS4_SFLASH_BK_CTRL_START);
++
++	ret = read_poll_timeout(ioread32, val, !(val & PS4_SFLASH_BK_CTRL_START),
++				0, PS4_SFLASH_BK_TIMEOUT_US, false,
++				dev->sflash_regs + PS4_SFLASH_BK_CTRL);
++	if (!ret)
++		for (i = 0; i < rx_len; i++)
++			rx[i] = sflash_read32(dev, PS4_SFLASH_BK_RX + i * 4);
++
++	sflash_write32(dev, PS4_SFLASH_BK_CTRL, 0);
++	return ret;
++}
++
++static int ps4_sflash_baikal_command(struct ps4_sflash_dev *dev, u8 opcode,
++				     u8 *rx, unsigned int rx_len)
++{
++	int ret;
++
++	ret = ps4_sflash_baikal_claim(dev);
++	if (ret)
++		return ret;
++
++	ret = ps4_sflash_baikal_xfer(dev, opcode, 0, 0, rx, rx_len);
++	ps4_sflash_baikal_release(dev);
++	return ret;
++}
++
++static u32 ps4_sflash_baikal_read_jedec(struct ps4_sflash_dev *dev)
++{
++	u8 rx[3];
++
++	if (ps4_sflash_baikal_command(dev, PS4_SFLASH_BK_OP_RDID, rx, sizeof(rx)))
++		return ~0u;
++	return rx[0] | rx[1] << 8 | rx[2] << 16;
++}
++
++static u32 ps4_sflash_baikal_read_status(struct ps4_sflash_dev *dev)
++{
++	u8 rx;
++
++	if (ps4_sflash_baikal_command(dev, PS4_SFLASH_BK_OP_RDSR, &rx, 1))
++		return ~0u;
++	return rx;
++}
++
++static ssize_t ps4_sflash_baikal_read_block(struct ps4_sflash_dev *dev,
++					    u32 flash_addr, u8 *out_buf,
++					    size_t flash_len)
++{
++	size_t i;
++	int ret;
++
++	ret = ps4_sflash_baikal_claim(dev);
++	if (ret)
++		return ret;
++
++	for (i = 0; i < flash_len; i++) {
++		ret = ps4_sflash_baikal_xfer(dev, PS4_SFLASH_BK_OP_READ4B,
++					     flash_addr + i, 4, &out_buf[i], 1);
++		if (ret)
++			break;
++		cond_resched();
++	}
++
++	ps4_sflash_baikal_release(dev);
++	return ret ? ret : flash_len;
++}
++
++static int ps4_sflash_baikal_setup(struct ps4_sflash_dev *dev)
++{
++	u32 val;
++	int ret;
++
++	dev->sflash_regs = dev->bar4;
++
++	ret = ps4_sflash_baikal_claim(dev);
++	if (ret) {
++		pr_err("controller claim timed out\n");
++		return ret;
++	}
++
++	sflash_write32(dev, PS4_SFLASH_BK_UNLOCK, 1);
++	val = sflash_read32(dev, PS4_SFLASH_BK_PINS);
++	sflash_write32(dev, PS4_SFLASH_BK_PINS, val & ~PS4_SFLASH_BK_PINS_CLEAR);
++	sflash_write32(dev, PS4_SFLASH_BK_UNLOCK, 0);
++
++	sflash_write32(dev, PS4_SFLASH_BK_IRQ_STATUS, 0xff);
++	sflash_write32(dev, PS4_SFLASH_BK_DMA_IRQ_STATUS, 0);
++	sflash_write32(dev, PS4_SFLASH_BK_IRQ_MASK, 0);
++	sflash_write32(dev, PS4_SFLASH_BK_DMA_IRQ_MASK, 0);
++	sflash_write32(dev, PS4_SFLASH_BK_TIMING, 0x30);
++	sflash_write32(dev, PS4_SFLASH_BK_CFG,
++		       sflash_read32(dev, PS4_SFLASH_BK_CFG) | PS4_SFLASH_BK_CFG_ENABLE);
++
++	ps4_sflash_baikal_release(dev);
++	return 0;
++}
++
++static const struct ps4_sflash_chip ps4_sflash_aeolia = {
++	.name		= "Aeolia",
++	.setup		= ps4_sflash_aeolia_setup,
++	.read_jedec	= ps4_sflash_read_jedec,
++	.read_status	= ps4_sflash_read_status,
++	.read_block	= ps4_sflash_read_block,
++};
++
++static const struct ps4_sflash_chip ps4_sflash_baikal = {
++	.name		= "Baikal",
++	.setup		= ps4_sflash_baikal_setup,
++	.read_jedec	= ps4_sflash_baikal_read_jedec,
++	.read_status	= ps4_sflash_baikal_read_status,
++	.read_block	= ps4_sflash_baikal_read_block,
++};
++
++static const struct {
++	u16 device;
++	const struct ps4_sflash_chip *chip;
++} ps4_sflash_pci_ids[] = {
++	{ 0x90a1, &ps4_sflash_aeolia },
++	{ 0x90b8, &ps4_sflash_aeolia },
++	{ 0x90c4, &ps4_sflash_aeolia },
++	{ 0x90d4, &ps4_sflash_aeolia },
++	{ PCI_DEVICE_ID_SONY_BAIKAL_PCIE, &ps4_sflash_baikal },
++};
++
++static ssize_t ps4_sflash_read(struct file *file, char __user *buf,
++			       size_t count, loff_t *ppos)
++{
++	struct ps4_sflash_dev *dev = g_ps4_sflash;
++	size_t total_read = 0;
++	ssize_t ret = 0;
++
++	if (!dev)
++		return -ENODEV;
++
++	if (*ppos >= PS4_SFLASH_TOTAL_SIZE)
++		return 0;
++
++	if (*ppos + count > PS4_SFLASH_TOTAL_SIZE)
++		count = PS4_SFLASH_TOTAL_SIZE - *ppos;
++
++	if (mutex_lock_interruptible(&dev->lock))
++		return -ERESTARTSYS;
++
++	while (count > 0) {
++		u32 chunk_flash_off = (u32)(*ppos & ~(PS4_SFLASH_CHUNK_FLASH - 1));
++		u32 offset_in_chunk = (u32)(*ppos & (PS4_SFLASH_CHUNK_FLASH - 1));
++		size_t to_copy = PS4_SFLASH_CHUNK_FLASH - offset_in_chunk;
++
++		if (to_copy > count)
++			to_copy = count;
++
++		ret = dev->chip->read_block(dev, chunk_flash_off, dev->dec_buf,
++					    PS4_SFLASH_CHUNK_FLASH);
++		if (ret < 0)
++			break;
++
++		if (copy_to_user(buf + total_read, dev->dec_buf + offset_in_chunk, to_copy)) {
++			ret = -EFAULT;
++			break;
++		}
++
++		*ppos += to_copy;
++		total_read += to_copy;
++		count -= to_copy;
++	}
++
++	mutex_unlock(&dev->lock);
++	return total_read ? (ssize_t)total_read : ret;
++}
++
++static loff_t ps4_sflash_llseek(struct file *file, loff_t offset, int whence)
++{
++	return fixed_size_llseek(file, offset, whence, PS4_SFLASH_TOTAL_SIZE);
++}
++
++static long ps4_sflash_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
++{
++	struct ps4_sflash_dev *dev = g_ps4_sflash;
++	u32 val;
++	int ret = 0;
++
++	if (!dev)
++		return -ENODEV;
++
++	if (mutex_lock_interruptible(&dev->lock))
++		return -ERESTARTSYS;
++
++	switch (cmd) {
++	case PS4_SFLASH_IOC_GET_SIZE:
++		val = PS4_SFLASH_TOTAL_SIZE;
++		if (copy_to_user((void __user *)arg, &val, sizeof(val)))
++			ret = -EFAULT;
++		break;
++	case PS4_SFLASH_IOC_GET_JEDEC:
++		val = dev->chip->read_jedec(dev);
++		if (copy_to_user((void __user *)arg, &val, sizeof(val)))
++			ret = -EFAULT;
++		break;
++	case PS4_SFLASH_IOC_GET_STATUS:
++		val = dev->chip->read_status(dev);
++		if (copy_to_user((void __user *)arg, &val, sizeof(val)))
++			ret = -EFAULT;
++		break;
++	default:
++		ret = -ENOTTY;
++		break;
++	}
++
++	mutex_unlock(&dev->lock);
++	return ret;
++}
++
++static const struct file_operations ps4_sflash_fops = {
++	.owner          = THIS_MODULE,
++	.read           = ps4_sflash_read,
++	.llseek         = ps4_sflash_llseek,
++	.unlocked_ioctl = ps4_sflash_ioctl,
++};
++
++static int __init ps4_sflash_init(void)
++{
++	struct ps4_sflash_dev *dev;
++	struct pci_dev *pdev = NULL;
++	int i, ret;
++	u32 jedec;
++
++	for (i = 0; i < ARRAY_SIZE(ps4_sflash_pci_ids); i++) {
++		pdev = pci_get_device(PCI_VENDOR_ID_SONY,
++				      ps4_sflash_pci_ids[i].device, NULL);
++		if (pdev)
++			break;
++	}
++
++	if (!pdev)
++		return -ENODEV;
++
++	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
++	if (!dev) {
++		pci_dev_put(pdev);
++		return -ENOMEM;
++	}
++
++	dev->pdev = pdev;
++	dev->chip = ps4_sflash_pci_ids[i].chip;
++	mutex_init(&dev->lock);
++
++	dev->bar4 = pci_iomap(pdev, 4, 0x200000);
++	if (!dev->bar4) {
++		pr_err("failed to map southbridge BAR4\n");
++		ret = -ENOMEM;
++		goto err_free;
++	}
++
++	dev->dec_buf = kmalloc(PS4_SFLASH_CHUNK_FLASH, GFP_KERNEL);
++	if (!dev->dec_buf) {
++		ret = -ENOMEM;
++		goto err_unmap;
++	}
++
++	ret = dev->chip->setup(dev);
++	if (ret)
++		goto err_free_dec;
++
++	dev->misc.minor = MISC_DYNAMIC_MINOR;
++	dev->misc.name  = "ps4sflash";
++	dev->misc.fops  = &ps4_sflash_fops;
++	ret = misc_register(&dev->misc);
++	if (ret) {
++		pr_err("failed to register misc device\n");
++		goto err_free_dma;
++	}
++
++	g_ps4_sflash = dev;
++	jedec = dev->chip->read_jedec(dev);
++
++	pr_info("%s Southbridge SPI NOR flash driver initialized\n", dev->chip->name);
++	pr_info("JEDEC ID: 0x%08x, Size: 32MB\n", jedec);
++	pr_info("Userspace device registered (/dev/ps4sflash)\n");
++	return 0;
++
++err_free_dma:
++	if (dev->dma_vaddr)
++		dma_free_coherent(&pdev->dev, PS4_SFLASH_CHUNK_DMA, dev->dma_vaddr, dev->dma_paddr);
++err_free_dec:
++	kfree(dev->dec_buf);
++err_unmap:
++	pci_iounmap(pdev, dev->bar4);
++err_free:
++	pci_dev_put(pdev);
++	kfree(dev);
++	return ret;
++}
++
++static void __exit ps4_sflash_exit(void)
++{
++	struct ps4_sflash_dev *dev = g_ps4_sflash;
++
++	if (!dev)
++		return;
++
++	misc_deregister(&dev->misc);
++	if (dev->dma_vaddr)
++		dma_free_coherent(&dev->pdev->dev, PS4_SFLASH_CHUNK_DMA, dev->dma_vaddr, dev->dma_paddr);
++	kfree(dev->dec_buf);
++	pci_iounmap(dev->pdev, dev->bar4);
++	pci_dev_put(dev->pdev);
++	kfree(dev);
++	g_ps4_sflash = NULL;
++}
++
++module_init(ps4_sflash_init);
++module_exit(ps4_sflash_exit);
++
++MODULE_AUTHOR("Armandas Kvietkus <armandas.kvietkus@proton.me>");
++MODULE_DESCRIPTION("PS4 Southbridge Hardware SPI NOR Flash Driver");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/ps4/sb-sflash.h b/drivers/ps4/sb-sflash.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..cb511445a713327869fd7d4337071dc5d16ecc9d
+--- /dev/null
++++ b/drivers/ps4/sb-sflash.h
+@@ -0,0 +1,59 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#ifndef _PS4_SFLASH_H
++#define _PS4_SFLASH_H
++
++#include <linux/types.h>
++#include <linux/ioctl.h>
++
++#define PS4_SFLASH_TOTAL_SIZE       (32 * 1024 * 1024)
++#define PS4_SFLASH_CHUNK_FLASH      16384
++#define PS4_SFLASH_CHUNK_DMA        (PS4_SFLASH_CHUNK_FLASH * 4)
++
++#define PS4_SFLASH_REG_OFFSET       0x00000
++#define PS4_SFLASH_REG_DATA         0x00004
++#define PS4_SFLASH_REG_CMD          0x00008
++#define PS4_SFLASH_REG_MODE         0x0000c
++#define PS4_SFLASH_REG_RDID         0x00020
++#define PS4_SFLASH_REG_OPCODES      0x00028
++#define PS4_SFLASH_REG_CMD_FLAGS    0x0002c
++#define PS4_SFLASH_REG_CS           0x00030
++#define PS4_SFLASH_REG_TIMING       0x00038
++#define PS4_SFLASH_REG_STATUS_CLR   0x0003c
++#define PS4_SFLASH_REG_STATUS       0x00040
++#define PS4_SFLASH_REG_DMA_ADDR     0x00044
++#define PS4_SFLASH_REG_DMA_LEN      0x00048
++
++#define PS4_SFLASH_REG_CLK_STATUS   0x01000
++#define PS4_SFLASH_REG_CLK_CTRL     0x01004
++
++#define PS4_SFLASH_BK_CTRL          0x01000
++#define PS4_SFLASH_BK_CTRL_START    0x4
++#define PS4_SFLASH_BK_BITS          0x01004
++#define PS4_SFLASH_BK_ADDR          0x01030
++#define PS4_SFLASH_BK_ADDR_LEN      4
++#define PS4_SFLASH_BK_OPCODE        0x01034
++#define PS4_SFLASH_BK_RX            0x01038
++#define PS4_SFLASH_BK_IRQ_STATUS    0x010a8
++#define PS4_SFLASH_BK_IRQ_MASK      0x010ac
++#define PS4_SFLASH_BK_CFG           0x010b0
++#define PS4_SFLASH_BK_CFG_ENABLE    0x100
++#define PS4_SFLASH_BK_TIMING        0x010c4
++#define PS4_SFLASH_BK_DMA_IRQ_STATUS 0x01800
++#define PS4_SFLASH_BK_DMA_IRQ_MASK  0x01804
++#define PS4_SFLASH_BK_UNLOCK        0x04010
++#define PS4_SFLASH_BK_CLAIM_STATUS  0x0b000
++#define PS4_SFLASH_BK_CLAIM         0x0b004
++#define PS4_SFLASH_BK_PINS          0xeb420
++#define PS4_SFLASH_BK_PINS_CLEAR    0x11u
++#define PS4_SFLASH_BK_TIMEOUT_US    200000
++
++#define PS4_SFLASH_BK_OP_RDSR       0x05
++#define PS4_SFLASH_BK_OP_READ4B     0x13
++#define PS4_SFLASH_BK_OP_RDID       0x9f
++
++#define PS4_SFLASH_IOC_MAGIC        'S'
++#define PS4_SFLASH_IOC_GET_SIZE     _IOR(PS4_SFLASH_IOC_MAGIC, 1, __u32)
++#define PS4_SFLASH_IOC_GET_JEDEC    _IOR(PS4_SFLASH_IOC_MAGIC, 2, __u32)
++#define PS4_SFLASH_IOC_GET_STATUS   _IOR(PS4_SFLASH_IOC_MAGIC, 3, __u32)
++
++#endif
+diff --git a/drivers/usb/host/xhci-aeolia.c b/drivers/usb/host/xhci-aeolia.c
+index 5f0f2826039a2148006a46a28b3496beda688d33..07b87e4691803da309b7d1d144353fd9ef8cc214 100644
+--- a/drivers/usb/host/xhci-aeolia.c
++++ b/drivers/usb/host/xhci-aeolia.c
+@@ -15,7 +15,7 @@
+ #include <linux/delay.h>
+ #include <asm/ps4.h>
+ #include "xhci-aeolia.h"
+-#include "../../ps4/aeolia.h"
++#include "../../ps4/ps4sb.h"
+ 
+ #include "xhci.h"
+ 
+@@ -259,7 +259,7 @@ static int ahci_init_one(struct pci_dev *pdev)
+ 	}
+ 
+ 	if (baikal) {
+-		rc = bpcie_baikal_sata_phy_init(pdev, hpriv->mmio);
++		rc = baikal_sata_phy_init(pdev, hpriv->mmio);
+ 		if (rc)
+ 			goto unmap_registers;
+ 	} else {
+@@ -273,7 +273,7 @@ static int ahci_init_one(struct pci_dev *pdev)
+ 				ctlr->r_mem = r_mem;
+ 				ctlr->dev_id = 0;
+ 				ctlr->trace_len = 6;
+-				bpcie_sata_phy_init(&pdev->dev, ctlr);
++				ps4sb_sata_phy_init(&pdev->dev, ctlr);
+ 				kfree(ctlr);
+ 			}
+ 			kfree(r_mem);

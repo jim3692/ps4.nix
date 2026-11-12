@@ -1,0 +1,390 @@
+From 7503e90baae6989bdd00102b238412e44c646e9b Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Thu, 5 Nov 2026 10:46:03 +0100
+Subject: [PATCH 050/124] ps4: bpcie-icc: add power off, reboot and event
+ delivery
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ arch/x86/include/asm/ps4.h  |  26 +++++
+ arch/x86/platform/ps4/ps4.c |  10 +-
+ drivers/ps4/ps4-bpcie-icc.c | 194 +++++++++++++++++++++++++++++++++---
+ 3 files changed, 217 insertions(+), 13 deletions(-)
+
+diff --git a/arch/x86/include/asm/ps4.h b/arch/x86/include/asm/ps4.h
+index 6d0f5177c6debdb3c10f90759523101ef1e63ea6..02faa09ae797200112b77193f3679bc90ae53983 100644
+--- a/arch/x86/include/asm/ps4.h
++++ b/arch/x86/include/asm/ps4.h
+@@ -34,15 +34,21 @@ extern unsigned long ps4_calibrate_tsc(void);
+ extern int apcie_assign_irqs(struct pci_dev *dev, int nvec);
+ extern void apcie_free_irqs(unsigned int virq, unsigned int nr_irqs);
+ 
++typedef void (*bpcie_icc_event_fn)(void *ctx, u16 minor, const u8 *data,
++				   u16 length);
+ extern int apcie_status(void);
+ extern int apcie_icc_cmd(u8 major, u16 minor, const void *data,
+ 			 u16 length, void *reply, u16 reply_length);
+ #ifdef CONFIG_X86_PS4_BAIKAL
+ extern int bpcie_assign_irqs(struct pci_dev *dev, int nvec);
+ extern void bpcie_free_irqs(unsigned int virq, unsigned int nr_irqs);
++extern void bpcie_icc_reboot(void);
+ extern int bpcie_status(void);
+ extern int bpcie_icc_cmd(u8 major, u16 minor, const void *data,
+ 			 u16 length, void *reply, u16 reply_length);
++extern int bpcie_icc_register_event_handler(u8 major, bpcie_icc_event_fn fn,
++					    void *ctx);
++extern void bpcie_icc_unregister_event_handler(u8 major);
+ #else
+ static inline int bpcie_assign_irqs(struct pci_dev *dev, int nvec)
+ {
+@@ -60,11 +66,22 @@ static inline int bpcie_icc_cmd(u8 major, u16 minor, const void *data,
+ {
+ 	return -ENODEV;
+ }
++static inline int bpcie_icc_register_event_handler(u8 major,
++						   bpcie_icc_event_fn fn,
++						   void *ctx)
++{
++	return -ENODEV;
++}
++static inline void bpcie_icc_unregister_event_handler(u8 major)
++{
++}
+ #endif
+ 
+ 
+ #else
+ 
++typedef void (*bpcie_icc_event_fn)(void *ctx, u16 minor, const u8 *data,
++				   u16 length);
+ static inline int apcie_assign_irqs(struct pci_dev *dev, int nvec)
+ {
+ 	return -ENODEV;
+@@ -97,6 +114,15 @@ static inline int bpcie_icc_cmd(u8 major, u16 minor, const void *data,
+ {
+ 	return -ENODEV;
+ }
++static inline int bpcie_icc_register_event_handler(u8 major,
++						   bpcie_icc_event_fn fn,
++						   void *ctx)
++{
++	return -ENODEV;
++}
++static inline void bpcie_icc_unregister_event_handler(u8 major)
++{
++}
+ 
+ #endif
+ #endif
+diff --git a/arch/x86/platform/ps4/ps4.c b/arch/x86/platform/ps4/ps4.c
+index 9ba94b69eefcac854f7ebb2cc294a28cb2836c1f..9e8c093cd0029cd290af9f738d5f521066f243d9 100644
+--- a/arch/x86/platform/ps4/ps4.c
++++ b/arch/x86/platform/ps4/ps4.c
+@@ -75,6 +75,14 @@ EXPORT_SYMBOL_GPL(bpcie_status);
+ 
+ void icc_reboot(void);
+ 
++static void ps4_emergency_restart(void)
++{
++	icc_reboot();
++#ifdef CONFIG_X86_PS4_BAIKAL
++	bpcie_icc_reboot();
++#endif
++}
++
+ /*
+  * PS4 specific x86_init function overrides and early setup calls.
+  */
+@@ -87,5 +95,5 @@ void __init x86_ps4_early_setup(void)
+ 	x86_platform.set_wallclock = dummy_set_wallclock;
+ 
+ 	legacy_pic = &null_legacy_pic;
+-	machine_ops.emergency_restart = icc_reboot;
++	machine_ops.emergency_restart = ps4_emergency_restart;
+ }
+diff --git a/drivers/ps4/ps4-bpcie-icc.c b/drivers/ps4/ps4-bpcie-icc.c
+index daf4a82b3c7f6fa19d680b4169a38fa41a7227b7..08c9a7da34acb5a76a3f6eb3aaae1a327d907199 100644
+--- a/drivers/ps4/ps4-bpcie-icc.c
++++ b/drivers/ps4/ps4-bpcie-icc.c
+@@ -6,6 +6,9 @@
+ #include <linux/delay.h>
+ #include <linux/fs.h>
+ #include <linux/uaccess.h>
++#include <linux/reboot.h>
++#include <linux/spinlock.h>
++#include <linux/workqueue.h>
+ #include <asm/ps4.h>
+ #include "baikal.h"
+ 
+@@ -46,6 +49,111 @@ static void dump_message(struct bpcie_dev *sc, int offset)
+ 	}
+ }
+ 
++#define ICC_EVENT_RING 8
++
++struct icc_event {
++	u16 minor;
++	u16 length;
++	u8 data[ICC_MAX_PAYLOAD];
++};
++
++static void icc_event_work_fn(struct work_struct *work);
++
++static DEFINE_SPINLOCK(icc_event_lock);
++static DECLARE_WORK(icc_event_work, icc_event_work_fn);
++static struct icc_event icc_event_ring[ICC_EVENT_RING];
++static struct icc_event icc_event_current;
++static unsigned int icc_event_head;
++static unsigned int icc_event_tail;
++static u8 icc_event_major;
++static bpcie_icc_event_fn icc_event_handler;
++static void *icc_event_ctx;
++
++static bool icc_event_queue(struct bpcie_dev *sc, struct icc_message_hdr *msg)
++{
++	struct icc_event *event;
++	unsigned long flags;
++	bool queued = false;
++	u16 length;
++
++	spin_lock_irqsave(&icc_event_lock, flags);
++	if (icc_event_handler && msg->major == icc_event_major &&
++	    icc_event_head - icc_event_tail < ICC_EVENT_RING) {
++		length = msg->length > ICC_HDR_SIZE ? msg->length - ICC_HDR_SIZE : 0;
++		length = min_t(u16, length, ICC_MAX_PAYLOAD);
++		event = &icc_event_ring[icc_event_head % ICC_EVENT_RING];
++		event->minor = msg->minor;
++		event->length = length;
++		memcpy_fromio(event->data, sc->icc.spm + BPCIE_SPM_ICC_REPLY +
++			      ICC_HDR_SIZE, length);
++		icc_event_head++;
++		queued = true;
++	}
++	spin_unlock_irqrestore(&icc_event_lock, flags);
++
++	if (queued)
++		schedule_work(&icc_event_work);
++	return queued;
++}
++
++static void icc_event_work_fn(struct work_struct *work)
++{
++	bpcie_icc_event_fn handler;
++	unsigned long flags;
++	void *ctx;
++
++	for (;;) {
++		spin_lock_irqsave(&icc_event_lock, flags);
++		if (icc_event_head == icc_event_tail) {
++			spin_unlock_irqrestore(&icc_event_lock, flags);
++			return;
++		}
++		icc_event_current = icc_event_ring[icc_event_tail % ICC_EVENT_RING];
++		icc_event_tail++;
++		handler = icc_event_handler;
++		ctx = icc_event_ctx;
++		spin_unlock_irqrestore(&icc_event_lock, flags);
++
++		if (handler)
++			handler(ctx, icc_event_current.minor,
++				icc_event_current.data, icc_event_current.length);
++	}
++}
++
++int bpcie_icc_register_event_handler(u8 major, bpcie_icc_event_fn fn, void *ctx)
++{
++	unsigned long flags;
++	int ret = 0;
++
++	spin_lock_irqsave(&icc_event_lock, flags);
++	if (icc_event_handler) {
++		ret = -EBUSY;
++	} else {
++		icc_event_major = major;
++		icc_event_ctx = ctx;
++		icc_event_tail = icc_event_head;
++		icc_event_handler = fn;
++	}
++	spin_unlock_irqrestore(&icc_event_lock, flags);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(bpcie_icc_register_event_handler);
++
++void bpcie_icc_unregister_event_handler(u8 major)
++{
++	unsigned long flags;
++
++	spin_lock_irqsave(&icc_event_lock, flags);
++	if (icc_event_handler && icc_event_major == major) {
++		icc_event_handler = NULL;
++		icc_event_ctx = NULL;
++		icc_event_tail = icc_event_head;
++	}
++	spin_unlock_irqrestore(&icc_event_lock, flags);
++	flush_work(&icc_event_work);
++}
++EXPORT_SYMBOL_GPL(bpcie_icc_unregister_event_handler);
++
+ static void handle_event(struct bpcie_dev *sc, struct icc_message_hdr *msg)
+ {
+ 	switch ((msg->major << 16) | msg->minor) {
+@@ -56,6 +164,8 @@ static void handle_event(struct bpcie_dev *sc, struct icc_message_hdr *msg)
+ 			icc_pwrbutton_trigger(sc, 0);
+ 			break;
+ 		default:
++			if (icc_event_queue(sc, msg))
++				break;
+ 			sc_err("icc: event arrived, not yet supported.\n");
+ 			dump_message(sc, BPCIE_SPM_ICC_REPLY);
+ 			break;
+@@ -160,12 +270,10 @@ static irqreturn_t icc_interrupt(int irq, void *arg)
+ 	return ret;
+ }
+ 
+-static int _bpcie_icc_cmd(struct bpcie_dev *sc, u8 major, u16 minor, const void *data,
+-		    u16 length, void *reply, u16 reply_length, bool intr)
++static int icc_post_request(struct bpcie_dev *sc, u8 major, u16 minor,
++			    const void *data, u16 length)
+ {
+-	int ret;
+ 	u32 req_empty, req_full;
+-	u16 rep_checksum;
+ 
+ 	if (length > ICC_MAX_PAYLOAD)
+ 		return -E2BIG;
+@@ -181,8 +289,6 @@ static int _bpcie_icc_cmd(struct bpcie_dev *sc, u8 major, u16 minor, const void
+ 
+ 	sc->icc.request.checksum = checksum(&sc->icc.request, ICC_HDR_SIZE);
+ 	sc->icc.request.checksum += checksum(data, length);
+-	sc->icc.reply_buffer = reply;
+-	sc->icc.reply_length = reply_length;
+ 
+ 	req_empty = ioread32(REQUEST + BUF_EMPTY);
+ 	req_full = ioread32(REQUEST + BUF_FULL);
+@@ -202,6 +308,21 @@ static int _bpcie_icc_cmd(struct bpcie_dev *sc, u8 major, u16 minor, const void
+ 			  ICC_MIN_PAYLOAD - length);
+ 
+ 	iowrite32(1, REQUEST + BUF_FULL);
++	return 0;
++}
++
++static int _bpcie_icc_cmd(struct bpcie_dev *sc, u8 major, u16 minor, const void *data,
++		    u16 length, void *reply, u16 reply_length, bool intr)
++{
++	int ret;
++	u16 rep_checksum;
++
++	sc->icc.reply_buffer = reply;
++	sc->icc.reply_length = reply_length;
++
++	ret = icc_post_request(sc, major, minor, data, length);
++	if (ret)
++		return ret;
+ 
+ 	spin_lock_irq(&sc->icc.reply_lock);
+ 	sc->icc.reply_pending = true;
+@@ -268,6 +389,27 @@ out_unlock:
+ }
+ EXPORT_SYMBOL_GPL(bpcie_icc_cmd);
+ 
++static int bpcie_icc_post_atomic(u8 major, u16 minor, const void *data, u16 length)
++{
++	struct bpcie_dev *sc = READ_ONCE(icc_sc);
++	int ret;
++
++	if (!sc)
++		return -ENODEV;
++	if (reboot_force || READ_ONCE(sc->icc.reply_pending))
++		return -EBUSY;
++
++	sc->icc.reply_buffer = NULL;
++	sc->icc.reply_length = 0;
++	ret = icc_post_request(sc, major, minor, data, length);
++	if (ret)
++		return ret;
++
++	iowrite32(BPCIE_ICC_SEND | BPCIE_ICC_ACK, sc->bar2 + BPCIE_REG_ICC_STATUS);
++	iowrite32(BPCIE_ICC_SEND, sc->bar2 + BPCIE_REG_ICC_DOORBELL);
++	return 0;
++}
++
+ static void __maybe_unused bpcie_init_usb(struct bpcie_dev *sc, int usb_no)
+ {
+ 	u32 value_to_write;
+@@ -289,7 +431,7 @@ static void __maybe_unused bpcie_init_usb(struct bpcie_dev *sc, int usb_no)
+ 	offset = usb_no ? 0x68 : 0x64;
+ 
+ 	addr = sc->bar2 + BPCIE_USB_BASE + offset;
+-	value_to_write = ioread32(addr) | ~1;
++	value_to_write = ioread32(addr) & ~1U;
+ 	iowrite32(value_to_write, addr);
+ }
+ 
+@@ -364,18 +506,37 @@ static void do_icc_init(void) {
+ 		reply[4], reply[5], reply[6], reply[7]);
+ }
+ 
+-static void icc_shutdown(void)
++static void icc_power_request(u8 restart)
+ {
+ 	uint8_t command[] = {
+-		0, 0, 2, 0, 1, 0
++		0, restart, 2, 0, 1, 0
+ 	};
+ 	if (bpcie_status() != 1)
+ 		return;
+-	bpcie_icc_cmd(4, 1, command, sizeof(command), NULL, 0);
++	if (bpcie_icc_post_atomic(4, 1, command, sizeof(command)))
++		return;
+ 	mdelay(3000);
+ 	WARN_ON(1);
+ }
+ 
++static void icc_shutdown(void)
++{
++	icc_power_request(0);
++}
++
++void bpcie_icc_reboot(void)
++{
++	icc_power_request(1);
++}
++
++static struct sys_off_handler *icc_sys_off;
++
++static int icc_sys_off_cb(struct sys_off_data *data)
++{
++	icc_shutdown();
++	return NOTIFY_DONE;
++}
++
+ static void *ioctl_tmp_buf = NULL;
+ static bool icc_chrdev_registered;
+ 
+@@ -492,7 +653,13 @@ int bpcie_icc_init(struct bpcie_dev *sc)
+ 		sc_err("icc: pwrbutton init failed: %d\n", ret);
+ 
+ 	do_icc_init();
+-	pm_power_off = &icc_shutdown;
++	icc_sys_off = register_sys_off_handler(SYS_OFF_MODE_POWER_OFF,
++					       SYS_OFF_PRIO_FIRMWARE + 1,
++					       icc_sys_off_cb, NULL);
++	if (IS_ERR(icc_sys_off)) {
++		sc_err("icc: power-off handler failed: %ld\n", PTR_ERR(icc_sys_off));
++		icc_sys_off = NULL;
++	}
+ 
+ 	ioctl_tmp_buf = kzalloc(1 << 16, GFP_KERNEL);
+  	if (!ioctl_tmp_buf) {
+@@ -537,7 +704,10 @@ void bpcie_icc_remove(struct bpcie_dev *sc)
+ 	}
+ 	kfree(ioctl_tmp_buf);
+ 	ioctl_tmp_buf = NULL;
+-	pm_power_off = NULL;
++	if (icc_sys_off) {
++		unregister_sys_off_handler(icc_sys_off);
++		icc_sys_off = NULL;
++	}
+ 	icc_pwrbutton_remove(sc);
+ 	icc_i2c_remove(sc);
+ 	mutex_lock(&bcpie_icc_mutex);

@@ -1,0 +1,66 @@
+From 5181b19d192813210a67dae4624660d4657b38b3 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Tue, 10 Nov 2026 21:02:28 +0100
+Subject: [PATCH 112/124] amdgpu: ps4 bridge: add the gameos waits and skip the
+ dp retrain on pro
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/ps4_bridge.c | 14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+index 4d95ac4866fd2f2fd2adcd7cfe7a126613e525f6..9edf32b36aca7ae23c6b3627a3012d7449766a37 100644
+--- a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
++++ b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+@@ -470,8 +470,10 @@ static void ps4_bridge_retrain_dp(struct ps4_bridge *mn_bridge)
+ 	if (ret)
+ 		return;
+ 
+-	DRM_DEBUG_KMS("ps4_bridge: retraining DP link after bridge enable\n");
+-	amdgpu_atombios_dp_link_train(encoder, connector);
++	if (to_pci_dev(connector->dev->dev)->device != PCI_DEVICE_ID_CUH_7XXX) {
++		DRM_DEBUG_KMS("ps4_bridge: retraining DP link after bridge enable\n");
++		amdgpu_atombios_dp_link_train(encoder, connector);
++	}
+ }
+ 
+ void ps4_bridge_mode_set(struct drm_bridge *bridge,
+@@ -573,7 +575,9 @@ static int ps4_bridge_enable_mn864729_video(struct ps4_bridge *mn_bridge,
+ 	mutex_lock(&mn_bridge->mutex);
+ 	cq_init(&mn_bridge->cq, 4);
+ 	cq_mask(&mn_bridge->cq, 0x6005, 0x01, 0x01);
++	cq_delay(&mn_bridge->cq, 2);
+ 	cq_writereg(&mn_bridge->cq, 0x6a03, 0x47);
++	cq_delay(&mn_bridge->cq, 10);
+ 
+ 	cq_wait_set(&mn_bridge->cq, 0x60f8, 0xff);
+ 	cq_wait_set(&mn_bridge->cq, 0x60f9, 0x01);
+@@ -582,7 +586,9 @@ static int ps4_bridge_enable_mn864729_video(struct ps4_bridge *mn_bridge,
+ 
+ 	cq_mask(&mn_bridge->cq, 0x1e00, 0x00, 0x21);
+ 	cq_mask(&mn_bridge->cq, 0x1e02, 0x00, 0x70);
++	cq_delay(&mn_bridge->cq, 300);
+ 	cq_writereg(&mn_bridge->cq, 0x6020, 0x00);
++	cq_delay(&mn_bridge->cq, 50);
+ 
+ 	cq_writereg(&mn_bridge->cq, 0x7402, 0x1c);
+ 	cq_writereg(&mn_bridge->cq, 0x6020, 0x04);
+@@ -641,6 +647,7 @@ static int ps4_bridge_enable_mn864729_video(struct ps4_bridge *mn_bridge,
+ 	cq_mask(&mn_bridge->cq, 0x7228, 0x00, 0xFF);
+ 	cq_writereg(&mn_bridge->cq, 0x7204, 0x40);
+ 	cq_wait_clear(&mn_bridge->cq, 0x7204, 0x40);
++	cq_delay(&mn_bridge->cq, 10);
+ 	if (scramble)
+ 		cq_writereg(&mn_bridge->cq, 0x10c7, 0x31);
+ 	cq_writereg(&mn_bridge->cq, 0x7a8b, 0x05);
+@@ -656,8 +663,7 @@ static int ps4_bridge_enable_mn864729_video(struct ps4_bridge *mn_bridge,
+ 	cq_mask(&mn_bridge->cq, 0x1034, 0x02, 0x02);
+ 	cq_mask(&mn_bridge->cq, 0x1e00, 0x01, 0x01);
+ 	cq_writereg(&mn_bridge->cq, VMUTECNT, VMUTECNT_LINEWIDTH_90);
+-	if (scramble)
+-		cq_delay(&mn_bridge->cq, 700);
++	cq_delay(&mn_bridge->cq, scramble ? 700 : 500);
+ 	cq_writereg(&mn_bridge->cq, HDCPEN, 0x00);
+ 	ret = cq_exec(&mn_bridge->cq);
+ 	if (ret < 0)

@@ -1,0 +1,100 @@
+From 139142490b452a4040984f6af52f8610a5e336f3 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sun, 10 May 2026 20:02:37 +0200
+Subject: [PATCH 035/124] amdgpu: fix the gem unpin and the display paths on
+ ps4
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ .../gpu/drm/amd/amdgpu/amdgpu_connectors.c    | 29 +++++++++----------
+ drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c       |  9 ++++++
+ 2 files changed, 23 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_connectors.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_connectors.c
+index 491e67f5c5039a797579f166cced53cb3b2b5674..6db7394c1ee99c53dfa06e37a5c79b6fc1d81850 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_connectors.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_connectors.c
+@@ -798,7 +798,6 @@ static int amdgpu_connector_set_lcd_property(struct drm_connector *connector,
+ 	return 0;
+ }
+ 
+-
+ static const struct drm_connector_helper_funcs amdgpu_connector_lvds_helper_funcs = {
+ 	.get_modes = amdgpu_connector_lvds_get_modes,
+ 	.mode_valid = amdgpu_connector_lvds_mode_valid,
+@@ -1589,7 +1588,6 @@ enum drm_mode_status ps4_bridge_mode_valid(struct drm_connector *connector,
+ enum drm_connector_status ps4_bridge_detect(struct drm_connector *connector,
+ 					  bool force);
+ 
+-
+ static const struct drm_connector_helper_funcs amdgpu_ps4_dp_connector_helper_funcs = {
+ 	.get_modes = ps4_bridge_get_modes,
+ 	.mode_valid = ps4_bridge_mode_valid,
+@@ -1600,7 +1598,8 @@ static const struct drm_connector_funcs amdgpu_ps4_dp_connector_funcs = {
+ 	.dpms = drm_helper_connector_dpms,
+ 	.detect = ps4_bridge_detect,
+ 	.fill_modes = drm_helper_probe_single_connector_modes,
+-	//.set_property = amdgpu_connector_set_property,
++	.set_property = amdgpu_connector_set_property,
++	.early_unregister = amdgpu_connector_unregister,
+ 	.destroy = amdgpu_connector_destroy,
+ 	.force = amdgpu_connector_dvi_force,
+ 	.late_register = amdgpu_connector_late_register,
+@@ -1645,6 +1644,18 @@ amdgpu_connector_add(struct amdgpu_device *adev,
+ 	if (connector_type == DRM_MODE_CONNECTOR_Unknown)
+ 		return;
+ 
++#ifdef CONFIG_X86_PS4
++	if (adev->asic_type == CHIP_LIVERPOOL ||
++	    adev->asic_type == CHIP_GLADIUS) {
++		if (connector_type != DRM_MODE_CONNECTOR_DisplayPort)
++			return;
++
++		connector_type = DRM_MODE_CONNECTOR_HDMIA;
++		is_dp_bridge = true;
++		is_ps4_bridge = true;
++	}
++#endif
++
+ 	/* see if we already added it */
+ 	drm_connector_list_iter_begin(dev, &iter);
+ 	drm_for_each_connector_iter(connector, &iter) {
+@@ -1687,18 +1698,6 @@ amdgpu_connector_add(struct amdgpu_device *adev,
+ 	if (!amdgpu_connector)
+ 		return;
+ 
+-	/* Liverpool (PS4) has an DP bridge which needs a special driver, and
+-	 * a fake HDMI port that doesn't really exist. */
+-	if (adev->asic_type == CHIP_LIVERPOOL || adev->asic_type == CHIP_GLADIUS) {
+-		if (connector_type == DRM_MODE_CONNECTOR_DisplayPort) {
+-			connector_type = DRM_MODE_CONNECTOR_HDMIA;
+-			is_dp_bridge = true;
+-			is_ps4_bridge = true;
+-		} else {
+-			return;
+-		}
+-	}
+-
+ 	connector = &amdgpu_connector->base;
+ 
+ 	amdgpu_connector->connector_id = connector_id;
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
+index afd8502a2bc49c66049e008d54d2ac2677303be7..8ed8c5edf3e375a2dffecbeee277ab9460b6d00d 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
+@@ -161,6 +161,15 @@ static void amdgpu_gem_object_free(struct drm_gem_object *gobj)
+ 	struct amdgpu_bo *aobj = gem_to_amdgpu_bo(gobj);
+ 
+ 	amdgpu_hmm_unregister(aobj);
++
++	if (aobj->tbo.pin_count > 0) {
++		if (amdgpu_bo_reserve(aobj, false) == 0) {
++			while (aobj->tbo.pin_count > 0)
++				amdgpu_bo_unpin(aobj);
++			amdgpu_bo_unreserve(aobj);
++		}
++	}
++
+ 	ttm_bo_fini(&aobj->tbo);
+ }
+ 

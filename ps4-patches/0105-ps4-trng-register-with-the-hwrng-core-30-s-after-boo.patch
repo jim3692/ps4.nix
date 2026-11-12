@@ -1,0 +1,62 @@
+From 72c1408ffc3da24352149913cb9d25f3b3cfef5e Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Mon, 9 Nov 2026 13:50:23 +0100
+Subject: [PATCH 105/124] ps4: trng: register with the hwrng core 30 s after
+ boot
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/ps4/ps4-trng.c | 17 +++++++++++++----
+ 1 file changed, 13 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/ps4/ps4-trng.c b/drivers/ps4/ps4-trng.c
+index 91a1548198504a38110397aba9e78f0d09372543..84277d283d1674c1bc5d766b8ba746e876131ab9 100644
+--- a/drivers/ps4/ps4-trng.c
++++ b/drivers/ps4/ps4-trng.c
+@@ -5,9 +5,11 @@
+ #include <linux/init.h>
+ #include <linux/kernel.h>
+ #include <linux/module.h>
++#include <linux/workqueue.h>
+ #include <asm/ps4.h>
+ 
+-#define PS4_TRNG_CHUNK	16
++#define PS4_TRNG_CHUNK		16
++#define PS4_TRNG_DELAY_SEC	30
+ 
+ static int ps4_trng_read(struct hwrng *rng, void *data, size_t max, bool wait)
+ {
+@@ -24,7 +26,7 @@ static struct hwrng ps4_trng = {
+ 	.quality = 900,
+ };
+ 
+-static int __init ps4_trng_init(void)
++static void ps4_trng_register(struct work_struct *work)
+ {
+ 	u8 probe[PS4_TRNG_CHUNK];
+ 	int ret;
+@@ -32,7 +34,7 @@ static int __init ps4_trng_init(void)
+ 	ret = ps4_samu_rng(probe, sizeof(probe));
+ 	if (ret) {
+ 		pr_err("samu rng request failed: %d\n", ret);
+-		return ret;
++		return;
+ 	}
+ 
+ 	ret = hwrng_register(&ps4_trng);
+@@ -40,7 +42,14 @@ static int __init ps4_trng_init(void)
+ 		pr_err("hwrng_register failed: %d\n", ret);
+ 	else
+ 		pr_info("registered with the hwrng core\n");
+-	return ret;
++}
++
++static DECLARE_DELAYED_WORK(ps4_trng_work, ps4_trng_register);
++
++static int __init ps4_trng_init(void)
++{
++	schedule_delayed_work(&ps4_trng_work, PS4_TRNG_DELAY_SEC * HZ);
++	return 0;
+ }
+ late_initcall(ps4_trng_init);
+ 

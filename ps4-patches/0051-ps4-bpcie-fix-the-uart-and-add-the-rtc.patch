@@ -1,0 +1,238 @@
+From d85ee4d7bdf8e5aa2822c1a27f3fc6024063926c Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Thu, 5 Nov 2026 17:40:09 +0100
+Subject: [PATCH 051/124] ps4: bpcie: fix the uart and add the rtc
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ config                       |  3 +-
+ drivers/ps4/Makefile         |  3 ++
+ drivers/ps4/baikal.h         | 10 +++-
+ drivers/ps4/ps4-bpcie-rtc.c  | 98 ++++++++++++++++++++++++++++++++++++
+ drivers/ps4/ps4-bpcie-uart.c |  2 +-
+ drivers/ps4/ps4-bpcie.c      | 12 ++++-
+ 6 files changed, 123 insertions(+), 5 deletions(-)
+ create mode 100644 drivers/ps4/ps4-bpcie-rtc.c
+
+diff --git a/config b/config
+index 24da5665b8c19795e4c6d99c1aa7ea7b223e8ca3..3b981856021cf60d7a51d5166a71c63bdb6ed194 100644
+--- a/config
++++ b/config
+@@ -4074,7 +4074,8 @@ CONFIG_EDAC_SUPPORT=y
+ # CONFIG_EDAC is not set
+ CONFIG_RTC_LIB=y
+ CONFIG_RTC_MC146818_LIB=y
+-# CONFIG_RTC_CLASS is not set
++CONFIG_RTC_CLASS=y
++# CONFIG_RTC_DRV_CMOS is not set
+ CONFIG_DMADEVICES=y
+ # CONFIG_DMADEVICES_DEBUG is not set
+ 
+diff --git a/drivers/ps4/Makefile b/drivers/ps4/Makefile
+index 32327800ccb7d987487f5e97f18f36d2ba40dbe6..3a754d1633602a4c0b6a9297828099cabc796274 100644
+--- a/drivers/ps4/Makefile
++++ b/drivers/ps4/Makefile
+@@ -10,6 +10,9 @@ obj-y += ps4-apcie.o \
+ obj-$(CONFIG_X86_PS4_BAIKAL) += ps4-bpcie.o \
+     ps4-bpcie-uart.o \
+     ps4-bpcie-icc.o
++ifdef CONFIG_RTC_CLASS
++obj-$(CONFIG_X86_PS4_BAIKAL) += ps4-bpcie-rtc.o
++endif
+ obj-y += ps4-led.o
+ obj-y += ps4-fan.o
+ obj-y += ps4-buzzer.o
+diff --git a/drivers/ps4/baikal.h b/drivers/ps4/baikal.h
+index c7f199cc9cf2c0776b949747efd82d97086e8b60..f1d0a88e351d670c57c19816cddb90d81cf5a4ff 100644
+--- a/drivers/ps4/baikal.h
++++ b/drivers/ps4/baikal.h
+@@ -48,7 +48,7 @@ enum bpcie_subfunc {
+ 	BPCIE_NUM_SUBFUNCS	= 32
+ };
+ 
+-#define BPCIE_NR_UARTS 2
++#define BPCIE_NR_UARTS 1
+ 
+ #define BPCIE_RGN_CHIPID_BASE		0x4000
+ #define BPCIE_RGN_CHIPID_SIZE		0x9000
+@@ -163,6 +163,14 @@ int bpcie_is_compatible_device(struct pci_dev *dev);
+ u32 glue_read32(struct bpcie_dev *sc, u32 offset);
+ void glue_write32(struct bpcie_dev *sc, u32 offset, u32 value);
+ int bpcie_uart_init(struct bpcie_dev *sc);
++#ifdef CONFIG_RTC_CLASS
++int bpcie_rtc_init(struct bpcie_dev *sc);
++#else
++static inline int bpcie_rtc_init(struct bpcie_dev *sc)
++{
++	return 0;
++}
++#endif
+ void bpcie_uart_remove(struct bpcie_dev *sc);
+ int bpcie_icc_init(struct bpcie_dev *sc);
+ void bpcie_icc_remove(struct bpcie_dev *sc);
+diff --git a/drivers/ps4/ps4-bpcie-rtc.c b/drivers/ps4/ps4-bpcie-rtc.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..1454f8763cb06207b3b9d05c261a0757ec3f546c
+--- /dev/null
++++ b/drivers/ps4/ps4-bpcie-rtc.c
+@@ -0,0 +1,98 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#include <linux/delay.h>
++#include <linux/pci.h>
++#include <linux/rtc.h>
++
++#include "baikal.h"
++
++#define BPCIE_RTC_STATUS		0x50cc
++#define BPCIE_RTC_SECONDS		0x50d0
++#define BPCIE_RTC_STATUS_BATTERY_OK	BIT(8)
++#define BPCIE_RTC_STATUS_CLOCK_OK	BIT(9)
++#define BPCIE_RTC_EPOCH			1325376000LL
++#define BPCIE_RTC_READ_RETRIES		21
++#define BPCIE_RTC_RETRY_DELAY_US	100
++
++struct bpcie_rtc {
++	struct bpcie_dev *sc;
++	time64_t offset;
++};
++
++static struct bpcie_rtc bpcie_rtc;
++
++static int bpcie_rtc_read_seconds(struct bpcie_dev *sc, u32 *seconds)
++{
++	u32 previous, current_value;
++	int retry;
++
++	previous = ioread32(sc->bar4 + BPCIE_RTC_SECONDS);
++	for (retry = 0; retry < BPCIE_RTC_READ_RETRIES; retry++) {
++		udelay(BPCIE_RTC_RETRY_DELAY_US);
++		current_value = ioread32(sc->bar4 + BPCIE_RTC_SECONDS);
++		if (current_value == previous) {
++			*seconds = current_value;
++			return 0;
++		}
++		previous = current_value;
++	}
++	return -EIO;
++}
++
++static int bpcie_rtc_read_time(struct device *dev, struct rtc_time *tm)
++{
++	struct bpcie_rtc *rtc = &bpcie_rtc;
++	u32 seconds;
++	int ret;
++
++	ret = bpcie_rtc_read_seconds(rtc->sc, &seconds);
++	if (ret)
++		return ret;
++
++	rtc_time64_to_tm(BPCIE_RTC_EPOCH + seconds + rtc->offset, tm);
++	return 0;
++}
++
++static int bpcie_rtc_set_time(struct device *dev, struct rtc_time *tm)
++{
++	struct bpcie_rtc *rtc = &bpcie_rtc;
++	u32 seconds;
++	int ret;
++
++	ret = bpcie_rtc_read_seconds(rtc->sc, &seconds);
++	if (ret)
++		return ret;
++
++	rtc->offset = rtc_tm_to_time64(tm) - (BPCIE_RTC_EPOCH + seconds);
++	return 0;
++}
++
++static const struct rtc_class_ops bpcie_rtc_ops = {
++	.read_time = bpcie_rtc_read_time,
++	.set_time = bpcie_rtc_set_time,
++};
++
++int bpcie_rtc_init(struct bpcie_dev *sc)
++{
++	struct device *dev = &sc->pdev->dev;
++	struct rtc_device *rtc_dev;
++	u32 status;
++
++	status = ioread32(sc->bar4 + BPCIE_RTC_STATUS);
++	if (!(status & BPCIE_RTC_STATUS_BATTERY_OK))
++		dev_warn(dev, "rtc: battery failure indication\n");
++	if (!(status & BPCIE_RTC_STATUS_CLOCK_OK))
++		dev_warn(dev, "rtc: clock failure indication\n");
++
++	if (bpcie_rtc.sc)
++		return -EBUSY;
++
++	rtc_dev = devm_rtc_allocate_device(dev);
++	if (IS_ERR(rtc_dev))
++		return PTR_ERR(rtc_dev);
++
++	bpcie_rtc.sc = sc;
++	bpcie_rtc.offset = 0;
++	rtc_dev->ops = &bpcie_rtc_ops;
++
++	return devm_rtc_register_device(rtc_dev);
++}
+diff --git a/drivers/ps4/ps4-bpcie-uart.c b/drivers/ps4/ps4-bpcie-uart.c
+index 4bce97fedd29adf98d2a343d1424917481068c54..1f9f0092848b9ecf3cdfa4c6953b3acaeb0a673c 100644
+--- a/drivers/ps4/ps4-bpcie-uart.c
++++ b/drivers/ps4/ps4-bpcie-uart.c
+@@ -18,7 +18,7 @@ int bpcie_uart_init(struct bpcie_dev *sc)
+ 		uint32_t off = BPCIE_RGN_UART_BASE + (i << 12);
+ 		memset(&uart, 0, sizeof(uart));
+ 		uart.port.irq		= bpcie_irqnum(sc, BPCIE_SUBFUNC_UART0 + i);
+-		uart.port.uartclk	= 58500000;
++		uart.port.uartclk	= 25000000;
+ 		uart.port.flags		= UPF_SHARE_IRQ;
+ 		uart.port.iotype	= UPIO_MEM32;
+ 		uart.port.mapbase	= pci_resource_start(sc->pdev, 2) + off;
+diff --git a/drivers/ps4/ps4-bpcie.c b/drivers/ps4/ps4-bpcie.c
+index 2f0281b1f8b55cf50cfa0ebf9471944bcf15e7e4..b68abbb6f4550dddcdc1ee4bd5ade776d66fed09 100644
+--- a/drivers/ps4/ps4-bpcie.c
++++ b/drivers/ps4/ps4-bpcie.c
+@@ -451,13 +451,18 @@ static int bpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+ 
+ 	if ((ret = bpcie_glue_init(sc)) < 0)
+ 		goto free_bars;
++	if (bpcie_uart_init(sc) < 0)
++		sc_err("uart not registered\n");
++	if (bpcie_rtc_init(sc) < 0)
++		sc_err("rtc not registered\n");
+ 	if ((ret = bpcie_icc_init(sc)) < 0)
+-		goto remove_glue;
++		goto remove_uart;
+ 
+ 	WRITE_ONCE(bpcie_initialized, true);
+ 	return 0;
+ 
+-remove_glue:
++remove_uart:
++	bpcie_uart_remove(sc);
+ 	bpcie_glue_remove(sc);
+ free_bars:
+ 	if (sc->bar0)
+@@ -478,6 +483,7 @@ static void bpcie_remove(struct pci_dev *dev) {
+ 
+ 	WRITE_ONCE(bpcie_initialized, false);
+ 	bpcie_icc_remove(sc);
++	bpcie_uart_remove(sc);
+ 	bpcie_glue_remove(sc);
+ 
+ 	if (sc->bar0)
+@@ -496,6 +502,7 @@ static int bpcie_suspend(struct pci_dev *dev, pm_message_t state) {
+ 	sc = pci_get_drvdata(dev);
+ 
+ 	bpcie_icc_suspend(sc, state);
++	bpcie_uart_suspend(sc, state);
+ 	bpcie_glue_suspend(sc, state);
+ 	return 0;
+ }
+@@ -506,6 +513,7 @@ static int bpcie_resume(struct pci_dev *dev) {
+ 
+ 	bpcie_icc_resume(sc);
+ 	bpcie_glue_resume(sc);
++	bpcie_uart_resume(sc);
+ 	return 0;
+ }
+ #endif

@@ -1,0 +1,81 @@
+From 4a9973270825e46e09beb7ae3471549eba25b249 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Fri, 6 Nov 2026 18:35:14 +0100
+Subject: [PATCH 066/124] ps4: led: use white early and violet blue at boot on
+ baikal
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/ps4/ps4-bpcie-icc.c | 10 +++-------
+ drivers/ps4/ps4-led.c       | 13 +++++++++----
+ 2 files changed, 12 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/ps4/ps4-bpcie-icc.c b/drivers/ps4/ps4-bpcie-icc.c
+index 97ace912f244467a5a0c07c64cb238ce8cba4e3b..2e2c7fe0ec968d8aa5e6e5160538f50e826e97ea 100644
+--- a/drivers/ps4/ps4-bpcie-icc.c
++++ b/drivers/ps4/ps4-bpcie-icc.c
+@@ -481,15 +481,11 @@ static void do_icc_init(void) {
+ 	u8 svc = 0x10;
+ 	u8 reply[0x30];
+ 	static const u8 led_config[] = {
+-		3, 1, 0, 0,
++		2, 1, 0, 0,
+ 			0x10, 1,
+-				2, 0xff, 2, 1, 0x00,
+-			0x11, 1,
+ 				2, 0x00, 2, 1, 0x00,
+-			0x02, 3,
+-				1, 0x00, 4, 1, 0xbf,
+-				2, 0xff, 5, 1, 0xff,
+-				2, 0x00, 5, 1, 0xff,
++			0x11, 1,
++				2, 0xff, 2, 1, 0x00,
+ 	};
+ 	int ret;
+ 	ret = bpcie_icc_cmd(2, 6, NULL, 0, reply, 0x30);
+diff --git a/drivers/ps4/ps4-led.c b/drivers/ps4/ps4-led.c
+index cf9d43a2d8eb288a47bdd666bb696ac15135256c..55998ccc8452e8def75b7f951371064d8e323bab 100644
+--- a/drivers/ps4/ps4-led.c
++++ b/drivers/ps4/ps4-led.c
+@@ -4,6 +4,7 @@
+ #include <linux/leds.h>
+ #include <linux/platform_device.h>
+ #include <linux/string.h>
++#include <asm/ps4.h>
+ #include "aeolia.h"
+ #include "ps4-led.h"
+ 
+@@ -260,6 +261,7 @@ static struct ps4_led_node ps4_led_nodes[] = {
+ 
+ static int ps4_led_probe(struct platform_device *pdev)
+ {
++	const u8 *boot_payload;
+ 	u8 reply[0x30];
+ 	int i, ret;
+ 
+@@ -274,18 +276,21 @@ static int ps4_led_probe(struct platform_device *pdev)
+ 		}
+ 	}
+ 
++	boot_payload = bpcie_status() > 0 ? led_violet_blue : led_purple;
++
+ 	memset(reply, 0, sizeof(reply));
+ 	ret = apcie_icc_cmd(PS4_LED_ICC_MAJOR, PS4_LED_ICC_MINOR,
+-			    led_purple, PS4_LED_PAYLOAD_LEN,
++			    boot_payload, PS4_LED_PAYLOAD_LEN,
+ 			    reply, sizeof(reply));
+ 	if (ret < 0 || reply[0] != 0 || reply[1] != 0)
+ 		dev_warn(&pdev->dev, "boot LED set failed: ret=%d reply=[%02x %02x]\n",
+ 			 ret, reply[0], reply[1]);
+ 	else
+-		ps4_led_current_payload = led_purple;
++		ps4_led_current_payload = boot_payload;
+ 
+-	dev_info(&pdev->dev, "PS4 LED driver ready: %zu colors, boot color: purple\n",
+-		 ARRAY_SIZE(ps4_led_nodes));
++	dev_info(&pdev->dev, "PS4 LED driver ready: %zu colors, boot color: %s\n",
++		 ARRAY_SIZE(ps4_led_nodes),
++		 boot_payload == led_violet_blue ? "violet blue" : "purple");
+ 
+ 	return 0;
+ }

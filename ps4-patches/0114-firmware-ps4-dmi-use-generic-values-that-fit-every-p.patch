@@ -1,0 +1,43 @@
+From fd8edbbd2145839ee3edd950b4d93bd8463ac75a Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Tue, 10 Nov 2026 21:09:41 +0100
+Subject: [PATCH 114/124] firmware: ps4-dmi: use generic values that fit every
+ ps4 model
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/firmware/ps4-dmi.c | 12 +-----------
+ 1 file changed, 1 insertion(+), 11 deletions(-)
+
+diff --git a/drivers/firmware/ps4-dmi.c b/drivers/firmware/ps4-dmi.c
+index 17c82bc474127fd3935b8aab82cad555e7ba9734..b58e0fba3220b477403bccdd29bd53e2aad3c46c 100644
+--- a/drivers/firmware/ps4-dmi.c
++++ b/drivers/firmware/ps4-dmi.c
+@@ -10,26 +10,16 @@ static const char * const ps4_strings[DMI_STRING_MAX] = {
+ 	[DMI_BIOS_VENDOR]           = "Sony Interactive Entertainment Inc.",
+ 	[DMI_BIOS_VERSION]          = "1.00",
+ 	[DMI_BIOS_DATE]             = "11/15/2013",
+-	[DMI_BIOS_RELEASE]          = "1.0",
+-	[DMI_EC_FIRMWARE_RELEASE]   = "1.0",
+ 
+ 	[DMI_SYS_VENDOR]            = "Sony Interactive Entertainment Inc.",
+ 	[DMI_PRODUCT_NAME]          = "PlayStation 4",
+-	[DMI_PRODUCT_VERSION]       = "CUH-1000A",
+-	[DMI_PRODUCT_SERIAL]        = "STRWB3RRYWA5H3R3",
+-	[DMI_PRODUCT_UUID]          = "DEADBEEF-CAFE-4B33-B00B-F00DBABE1234",
+-	[DMI_PRODUCT_SKU]           = "CUH-1000AB01",
+ 	[DMI_PRODUCT_FAMILY]        = "PlayStation",
+ 
+ 	[DMI_BOARD_VENDOR]          = "Sony Interactive Entertainment Inc.",
+-	[DMI_BOARD_NAME]            = "Belize",
+-	[DMI_BOARD_VERSION]         = "rev1",
+-	[DMI_BOARD_SERIAL]          = "0000000000000000",
++	[DMI_BOARD_NAME]            = "PlayStation 4",
+ 
+ 	[DMI_CHASSIS_VENDOR]        = "Sony Interactive Entertainment Inc.",
+ 	[DMI_CHASSIS_TYPE]          = "3",
+-	[DMI_CHASSIS_VERSION]       = "rev1",
+-	[DMI_CHASSIS_SERIAL]        = "0000000000000000",
+ };
+ 
+ void __init ps4_dmi_populate(const char *ident[DMI_STRING_MAX])

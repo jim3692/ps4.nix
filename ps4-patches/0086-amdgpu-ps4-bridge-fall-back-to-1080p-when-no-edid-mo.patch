@@ -1,0 +1,44 @@
+From 20ae56bee0a99f02602742391b3fe3543ff04c67 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Sat, 7 Nov 2026 22:48:46 +0100
+Subject: [PATCH 086/124] amdgpu: ps4 bridge: fall back to 1080p when no edid
+ mode is usable
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/ps4_bridge.c | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+index a856d3b2efe1209c9ae732d4ffa640234c3bee47..c977fff65737a15047555433b8dab48b02c7e507 100644
+--- a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
++++ b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+@@ -1128,6 +1128,16 @@ static void ps4_bridge_events_start(struct device *dev,
+ 		DRM_ERROR("ps4_bridge: failed to enable hdmi events\n");
+ }
+ 
++static bool ps4_bridge_has_usable_mode(struct drm_connector *connector)
++{
++	struct drm_display_mode *mode;
++
++	list_for_each_entry(mode, &connector->probed_modes, head)
++		if (ps4_bridge_mode_valid(connector, mode) == MODE_OK)
++			return true;
++	return false;
++}
++
+ int ps4_bridge_get_modes(struct drm_connector *connector)
+ {
+ 	struct drm_device *dev = connector->dev;
+@@ -1236,7 +1246,10 @@ edid_ready:
+ 		DRM_DEBUG_KMS("ps4_bridge_get_modes: EDID ok, %d modes, extensions=%u\n",
+ 			      count, raw_edid ? raw_edid->extensions : 0);
+ 		drm_edid_free(drm_edid);
+-		return count;
++		if (ps4_bridge_has_usable_mode(connector))
++			return count;
++		DRM_DEBUG_KMS("ps4_bridge_get_modes: no usable EDID mode, using fallback modes\n");
++		goto fallback_modes;
+ 	}
+ 
+ 	DRM_DEBUG_KMS("ps4_bridge_get_modes: no EDID, using fallback modes\n");

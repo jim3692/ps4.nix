@@ -1,0 +1,42 @@
+From 12a24aa5917d68e9093bebdaf2f719a8ff8d6d82 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Tue, 10 Nov 2026 21:02:32 +0100
+Subject: [PATCH 113/124] amdgpu: ps4 bridge: log the mode, dp link and enable
+ result
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/ps4_bridge.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+index 9edf32b36aca7ae23c6b3627a3012d7449766a37..2ac6f1489b6582b7880099f11bcf2baaa3ec5efa 100644
+--- a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
++++ b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+@@ -474,6 +474,8 @@ static void ps4_bridge_retrain_dp(struct ps4_bridge *mn_bridge)
+ 		DRM_DEBUG_KMS("ps4_bridge: retraining DP link after bridge enable\n");
+ 		amdgpu_atombios_dp_link_train(encoder, connector);
+ 	}
++	drm_info(connector->dev, "ps4_bridge: dp link %u lanes at %u kHz\n",
++		 dig_connector->dp_lane_count, dig_connector->dp_clock);
+ }
+ 
+ void ps4_bridge_mode_set(struct drm_bridge *bridge,
+@@ -486,7 +488,8 @@ void ps4_bridge_mode_set(struct drm_bridge *bridge,
+ 	 * the vic ID for later */
+ 	mn_bridge->mode = drm_match_cea_mode(adjusted_mode);
+ 	mn_bridge->has_mode = true;
+-	DRM_DEBUG_KMS("vic mode: %d\n", mn_bridge->mode);
++	drm_info(bridge->dev, "ps4_bridge: mode " DRM_MODE_FMT " vic %d\n",
++		 DRM_MODE_ARG(adjusted_mode), mn_bridge->mode);
+ }
+ 
+ static void ps4_bridge_pre_enable(struct drm_bridge *bridge)
+@@ -901,6 +904,7 @@ static void ps4_bridge_enable(struct drm_bridge *bridge)
+ 
+ out:
+ 	mutex_lock(&mn_bridge->mutex);
++	drm_info(dev, "ps4_bridge: enable %s\n", success ? "ok" : "failed");
+ 	mn_bridge->enabled = success;
+ 	mn_bridge->enabling = false;
+ 	mutex_unlock(&mn_bridge->mutex);

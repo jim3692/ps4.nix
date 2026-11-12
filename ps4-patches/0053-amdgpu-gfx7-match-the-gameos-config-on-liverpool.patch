@@ -1,0 +1,158 @@
+From 47bdc6827b0259f414294e7a3bb2292f7942df12 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Thu, 5 Nov 2026 11:47:52 +0100
+Subject: [PATCH 053/124] amdgpu: gfx7: match the gameos config on liverpool
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ config                                |  2 +-
+ drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c | 88 ++++++++++++++++++++++++++-
+ 2 files changed, 88 insertions(+), 2 deletions(-)
+
+diff --git a/config b/config
+index 3b981856021cf60d7a51d5166a71c63bdb6ed194..aa664a231fdc57c866822064d42a9806f3891686 100644
+--- a/config
++++ b/config
+@@ -1869,7 +1869,7 @@ CONFIG_PREVENT_FIRMWARE_BUILD=y
+ CONFIG_FW_LOADER=y
+ CONFIG_FW_LOADER_PAGED_BUF=y
+ CONFIG_FW_LOADER_SYSFS=y
+-CONFIG_EXTRA_FIRMWARE="mrvl/sd8897_uapsta.bin mediatek/mt7668pr2h.bin EEPROM_MT7668.bin EEPROM_MT7668_e1.bin mt7668_patch_e1_hdr.bin mt7668_patch_e2_hdr.bin TxPwrLimit_MT76x8.dat wifi.cfg WIFI_RAM_CODE2_SDIO_MT7668.bin WIFI_RAM_CODE2_USB_MT7668.bin WIFI_RAM_CODE_MT7668.bin mrvl/sd8797_uapsta.bin amdgpu/liverpool_ce.bin amdgpu/liverpool_me.bin amdgpu/liverpool_mec.bin amdgpu/liverpool_mec2.bin amdgpu/liverpool_pfp.bin amdgpu/liverpool_rlc.bin amdgpu/liverpool_sdma.bin amdgpu/liverpool_sdma1.bin amdgpu/gladius_ce.bin amdgpu/gladius_me.bin amdgpu/gladius_mec.bin amdgpu/gladius_mec2.bin amdgpu/gladius_pfp.bin amdgpu/gladius_rlc.bin amdgpu/gladius_sdma.bin amdgpu/gladius_sdma1.bin"
++CONFIG_EXTRA_FIRMWARE="mrvl/sd8897_uapsta.bin mediatek/mt7668pr2h.bin EEPROM_MT7668.bin EEPROM_MT7668_e1.bin mt7668_patch_e1_hdr.bin mt7668_patch_e2_hdr.bin TxPwrLimit_MT76x8.dat wifi.cfg WIFI_RAM_CODE2_SDIO_MT7668.bin WIFI_RAM_CODE2_USB_MT7668.bin WIFI_RAM_CODE_MT7668.bin mrvl/sd8797_uapsta.bin"
+ CONFIG_EXTRA_FIRMWARE_DIR="extra_firmware"
+ CONFIG_FW_LOADER_USER_HELPER=y
+ # CONFIG_FW_LOADER_USER_HELPER_FALLBACK is not set
+diff --git a/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c b/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c
+index 81270570a88bf542f9e5d32354b623153c7ce960..bd2c5acf677298107a80addb1bce1c6dcd2be028 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c
+@@ -60,6 +60,7 @@
+ 
+ /* Belize Pro dump (NUM_LOWER_PIPES=1, ROW_SIZE=1KB). Not Hawaii 0x12011003. */
+ #define GLADIUS_GB_ADDR_CONFIG_DUMP          0x42011003
++#define LIVERPOOL_HDP_ADDR_CONFIG            0x12010001
+ 
+ /*
+  * Gladius (PS4 Pro GPU) golden register tables -- the sole golden path
+@@ -1881,6 +1882,10 @@ static void gfx_v7_0_tiling_mode_table_init(struct amdgpu_device *adev)
+ 				    MICRO_TILE_MODE_NEW(ADDR_SURF_THIN_MICRO_TILING) |
+ 				    PIPE_CONFIG(ADDR_SURF_P8_32x32_16x16) |
+ 				    SAMPLE_SPLIT(ADDR_SURF_SAMPLE_SPLIT_2));
++		tile[15] = (ARRAY_MODE(ARRAY_3D_TILED_THIN1) |
++			    MICRO_TILE_MODE_NEW(ADDR_SURF_THIN_MICRO_TILING) |
++			    PIPE_CONFIG(ADDR_SURF_P8_32x32_8x16) |
++			    SAMPLE_SPLIT(ADDR_SURF_SAMPLE_SPLIT_2));
+ 		tile[16] = (ARRAY_MODE(ARRAY_PRT_TILED_THIN1) |
+ 				    MICRO_TILE_MODE_NEW(ADDR_SURF_THIN_MICRO_TILING) |
+ 				    PIPE_CONFIG(ADDR_SURF_P8_32x32_8x16) |
+@@ -1889,6 +1894,34 @@ static void gfx_v7_0_tiling_mode_table_init(struct amdgpu_device *adev)
+ 				    MICRO_TILE_MODE_NEW(ADDR_SURF_THIN_MICRO_TILING) |
+ 				    PIPE_CONFIG(ADDR_SURF_P8_32x32_16x16) |
+ 				    SAMPLE_SPLIT(ADDR_SURF_SAMPLE_SPLIT_2));
++		tile[18] = (ARRAY_MODE(ARRAY_PRT_3D_TILED_THIN1) |
++			    MICRO_TILE_MODE_NEW(ADDR_SURF_THIN_MICRO_TILING) |
++			    PIPE_CONFIG(ADDR_SURF_P8_32x32_16x16) |
++			    SAMPLE_SPLIT(ADDR_SURF_SAMPLE_SPLIT_2));
++		tile[19] = (ARRAY_MODE(ARRAY_1D_TILED_THICK) |
++			    MICRO_TILE_MODE_NEW(ADDR_SURF_THICK_MICRO_TILING) |
++			    PIPE_CONFIG(ADDR_SURF_P8_32x32_16x16));
++		tile[20] = (ARRAY_MODE(ARRAY_2D_TILED_THICK) |
++			    MICRO_TILE_MODE_NEW(ADDR_SURF_THICK_MICRO_TILING) |
++			    PIPE_CONFIG(ADDR_SURF_P8_32x32_16x16));
++		tile[21] = (ARRAY_MODE(ARRAY_3D_TILED_THICK) |
++			    MICRO_TILE_MODE_NEW(ADDR_SURF_THICK_MICRO_TILING) |
++			    PIPE_CONFIG(ADDR_SURF_P8_32x32_8x16));
++		tile[22] = (ARRAY_MODE(ARRAY_PRT_TILED_THICK) |
++			    MICRO_TILE_MODE_NEW(ADDR_SURF_THICK_MICRO_TILING) |
++			    PIPE_CONFIG(ADDR_SURF_P8_32x32_8x16));
++		tile[23] = (ARRAY_MODE(ARRAY_PRT_2D_TILED_THICK) |
++			    MICRO_TILE_MODE_NEW(ADDR_SURF_THICK_MICRO_TILING) |
++			    PIPE_CONFIG(ADDR_SURF_P8_32x32_16x16));
++		tile[24] = (ARRAY_MODE(ARRAY_PRT_3D_TILED_THICK) |
++			    MICRO_TILE_MODE_NEW(ADDR_SURF_THICK_MICRO_TILING) |
++			    PIPE_CONFIG(ADDR_SURF_P8_32x32_8x16));
++		tile[25] = (ARRAY_MODE(ARRAY_2D_TILED_XTHICK) |
++			    MICRO_TILE_MODE_NEW(ADDR_SURF_THICK_MICRO_TILING) |
++			    PIPE_CONFIG(ADDR_SURF_P8_32x32_16x16));
++		tile[26] = (ARRAY_MODE(ARRAY_3D_TILED_XTHICK) |
++			    MICRO_TILE_MODE_NEW(ADDR_SURF_THICK_MICRO_TILING) |
++			    PIPE_CONFIG(ADDR_SURF_P8_32x32_8x16));
+ 		tile[27] = (ARRAY_MODE(ARRAY_1D_TILED_THIN1) |
+ 				    PIPE_CONFIG(ADDR_SURF_P8_32x32_16x16) |
+ 				    MICRO_TILE_MODE_NEW(ADDR_SURF_ROTATED_MICRO_TILING));
+@@ -2746,6 +2779,56 @@ static void gladius_commit_gb_row_size(struct amdgpu_device *adev)
+ 	mutex_unlock(&adev->grbm_idx_mutex);
+ }
+ 
++static const struct {
++	u32 uconfig_reg;
++	u32 config_reg;
++} liverpool_vgt_cam[] = {
++	{ mmVGT_ESGS_RING_SIZE, 0x2232 },
++	{ mmVGT_GSVS_RING_SIZE, 0x2233 },
++	{ mmVGT_TF_RING_SIZE, 0x2262 },
++	{ mmVGT_HS_OFFCHIP_PARAM, 0x226c },
++	{ mmVGT_TF_MEMORY_BASE, 0x226e },
++};
++
++static void gfx_v7_0_liverpool_init_vgt_cam(struct amdgpu_device *adev)
++{
++	u32 data, readback;
++	int i;
++
++	mutex_lock(&adev->grbm_idx_mutex);
++	for (i = 0; i < ARRAY_SIZE(liverpool_vgt_cam); i++) {
++		data = (liverpool_vgt_cam[i].uconfig_reg <<
++			GRBM_CAM_DATA__CAM_ADDR__SHIFT) |
++		       (liverpool_vgt_cam[i].config_reg <<
++			GRBM_CAM_DATA__CAM_REMAPADDR__SHIFT);
++		WREG32(mmGRBM_CAM_INDEX, i);
++		WREG32(mmGRBM_CAM_DATA, data);
++		WREG32(mmGRBM_CAM_INDEX, i);
++		readback = RREG32(mmGRBM_CAM_DATA);
++		if (readback != data)
++			dev_warn(adev->dev,
++				 "liverpool: grbm cam slot %d reads 0x%08x, wrote 0x%08x\n",
++				 i, readback, data);
++	}
++	mutex_unlock(&adev->grbm_idx_mutex);
++}
++
++static void gfx_v7_0_liverpool_constants_init(struct amdgpu_device *adev)
++{
++	u32 tmp;
++
++	WREG32(mmHDP_ADDR_CONFIG, LIVERPOOL_HDP_ADDR_CONFIG);
++	WREG32(mmSQ_CONFIG, 1);
++
++	tmp = RREG32(mmDB_DEBUG2) & ~0xf00fffff;
++	WREG32(mmDB_DEBUG2, tmp | 0x00004400);
++
++	WREG32(mmCB_HW_CONTROL, 0x00058208);
++	WREG32(mmPA_SC_FORCE_EOV_MAX_CNTS, 0x00ffffff);
++
++	gfx_v7_0_liverpool_init_vgt_cam(adev);
++}
++
+ /**
+  * gfx_v7_0_constants_init - setup the 3D engine
+  *
+@@ -2892,6 +2975,9 @@ static void gfx_v7_0_constants_init(struct amdgpu_device *adev)
+ 	if (adev->asic_type == CHIP_GLADIUS)
+ 		gladius_commit_gb_row_size(adev);
+ 
++	if (adev->asic_type == CHIP_LIVERPOOL)
++		gfx_v7_0_liverpool_constants_init(adev);
++
+ 	udelay(50);
+ }
+ 
+@@ -5132,7 +5218,7 @@ static void gfx_v7_0_gpu_early_init(struct amdgpu_device *adev)
+ 	case CHIP_LIVERPOOL:
+ 		adev->gfx.config.max_shader_engines = 2; // Verified
+ 		adev->gfx.config.max_tile_pipes = 8; // Verified
+-		adev->gfx.config.max_cu_per_sh = 9; // Probably OK
++		adev->gfx.config.max_cu_per_sh = 10;
+ 		adev->gfx.config.max_sh_per_se = 1; // Verified
+ 		adev->gfx.config.max_backends_per_se = 2; // Probably OK?
+ 		adev->gfx.config.max_texture_channel_caches = 4; // ??

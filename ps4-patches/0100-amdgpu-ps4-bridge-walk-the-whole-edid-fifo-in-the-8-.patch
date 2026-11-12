@@ -1,0 +1,24 @@
+From 880e2ea98224e0b77e5ea946253723014e31d842 Mon Sep 17 00:00:00 2001
+From: Armandas Kvietkus <armandas.kvietkus@proton.me>
+Date: Mon, 9 Nov 2026 00:31:58 +0100
+Subject: [PATCH 100/124] amdgpu: ps4 bridge: walk the whole edid fifo in the 8
+ byte fallback
+
+Signed-off-by: Armandas Kvietkus <armandas.kvietkus@proton.me>
+---
+ drivers/gpu/drm/amd/amdgpu/ps4_bridge.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+index 98a3805c20c87f4bdb1de97f4f9dbd925c3d571b..cc9cbaa28ba43d4dc7175fa0db07beade91b7bbe 100644
+--- a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
++++ b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+@@ -978,7 +978,7 @@ static int ps4_bridge_edid_fetch(struct ps4_bridge *mn_bridge, u8 seq, u8 *out)
+ small_reads:
+ 	for (i = 0; i < 2 * EDID_LENGTH / 8; i++) {
+ 		cq_init(q, 4);
+-		cq_read(q, i ? EDIDFIFO1 : EDIDFIFO0, 8);
++		cq_read(q, EDIDFIFO0 + i * 8, 8);
+ 		ret = cq_exec(q);
+ 		if (ret < 0)
+ 			return ret;
