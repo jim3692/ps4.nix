@@ -20,7 +20,7 @@ so untracked files, including ignored caches and local kernel checkouts, are
 not copied into the Nix store. Add new build inputs to Git before running Nix:
 
 ```sh
-git add flake.nix flake.lock ps4-patches
+git add flake.nix flake.lock ps4-patches compatibility
 ```
 
 Edits to tracked files are included without committing them. Ignoring a file
@@ -67,17 +67,18 @@ distribution. A successful build does not verify booting on PS4 hardware.
 ## Updates
 
 The [patch manifest](ps4-patches/manifest.txt) records the exact PS4 source
-and official Linux baseline commits. The nixpkgs input is pinned to a revision
-whose `linuxPackages_latest.kernel` is 7.3.3, matching the current patch
-baseline. Kernel version and source are taken from nixpkgs rather than
-hard-coded in the builder. [flake.lock](flake.lock) pins the input contents.
+and official Linux baseline commits. The nixpkgs input follows
+`nixos-unstable-small`; [flake.lock](flake.lock) pins its resolved revision
+for reproducible builds. Kernel version and source are taken from
+`linuxPackages_latest.kernel` in that revision, not hard-coded in the builder.
 
 The [update workflow](.github/workflows/update-ps4-patches.yml) runs daily at
 03:17 UTC and can also be started manually. It:
 
 1. Reuses a cached bare repository and exports the PS4 default branch.
 2. Replaces only the generated patch directory, including removing stale patches.
-3. If patches changed, checks their ordered application and builds ThinLTO
+3. If patches changed, applies any version-specific compatibility adjustments,
+   checks the resulting series against the kernel, and builds ThinLTO
    (including configuration).
 4. Commits and pushes the generated files only after validation succeeds.
 
@@ -86,13 +87,41 @@ produce no commit. FullLTO is available but is not built by the update job.
 The workflow needs permission to push to the default branch; branch protection
 must allow the automation. No GitHub workflow has been run locally.
 
-Automatic export is not automatic forward-porting: the original 7.3.3 series
-does not apply cleanly to 7.3.4. The workflow deliberately does not update
-nixpkgs. When moving to a new kernel baseline, select a compatible nixpkgs
-revision in [flake.nix](flake.nix), run `nix flake update nixpkgs`, regenerate
-the patches, and validate both variants as needed.
+The workflow deliberately does not update nixpkgs. Run
+`nix flake update nixpkgs` to advance to the channel's latest revision, then
+validate patch application and the kernel build. Automatic export is not
+automatic forward-porting; a new kernel may need compatibility adjustments.
 
 For manual export, see [the exporter documentation](export-ps4-patches/README.md).
 The exporter requires a new output directory; review and replace
 [ps4-patches/](ps4-patches/) only after a successful export. Check patch
 application without compiling the kernel using `nix flake check`.
+
+## Compatibility patches
+
+[compatibility/](compatibility/) contains a directory for each target kernel
+version that needs adjustments, selected by exact `baseKernel.version`.
+Each directory has an ordered `series` file and patches that edit the
+**exported patch files**, not the kernel source directly.
+
+The build copies the original exports to a writable Nix build directory,
+applies that version's compatibility series, then applies the adjusted PS4
+series to the nixpkgs kernel source. The committed exports remain untouched.
+Each version's compatibility series starts from the original exports; it
+does not inherit adjustments for earlier kernel versions.
+
+If no directory exists for the target version, the original series is tried.
+An existing directory must contain a `series` file. Missing files, stale
+compatibility hunks, or kernel patch conflicts fail the build and prevent
+the scheduled workflow from committing an update. There is no fuzzy or
+three-way conflict resolution and no fallback that skips failed patches.
+
+The [7.3.4 adjustment](compatibility/7.3.4/0001-adapt-amdgpu-job-cleanup.patch)
+adapts patch 0056 to the stable kernel's shared AMDGPU job cleanup path.
+It preserves that stable fix and calls the Liverpool cleanup once from
+`amdgpu_job_free`, which also handles scheduler callbacks in 7.3.4.
+
+When adding an adjustment, document its reason in the compatibility patch,
+add its filename to that version's `series`, and add both files to Git.
+Run `nix flake check` and build the kernel before accepting it. Patch
+application and compilation do not replace testing on PS4 hardware.

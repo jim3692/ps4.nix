@@ -1,0 +1,37 @@
+Linux 7.3.4 routes amdgpu_job_free_cb through amdgpu_job_free and moves
+gang-submit fence cleanup there. Keep the stable fix and run the Liverpool
+cleanup exactly once, in the shared free function, before its resources
+are released.
+
+This adjusts the exported patch, not the kernel source or original export.
+
+diff --git a/0056-amdgpu-vce-add-the-native-vce1-block-on-baikal-liver.patch b/0056-amdgpu-vce-add-the-native-vce1-block-on-baikal-liver.patch
+--- a/0056-amdgpu-vce-add-the-native-vce1-block-on-baikal-liver.patch
++++ b/0056-amdgpu-vce-add-the-native-vce1-block-on-baikal-liver.patch
+@@ -65,23 +65,14 @@
+  	if (!drm_dev_enter(adev_to_drm(adev), &idx)) {
+  		dev_info(adev->dev, "%s - device unplugged skipping recovery on scheduler:%s",
+  			 __func__, s_job->sched->name);
+-@@ -315,6 +321,8 @@ static void amdgpu_job_free_cb(struct drm_sched_job *s_job)
+- {
+- 	struct amdgpu_job *job = to_amdgpu_job(s_job);
+- 
+-+	vce_liverpool_free_job(job);
+-+
+- 	drm_sched_job_cleanup(s_job);
+- 
+- 	amdgpu_sync_free(&job->explicit_sync);
+-@@ -349,6 +357,7 @@ void amdgpu_job_set_gang_leader(struct amdgpu_job *job,
++@@ -333,6 +339,7 @@ void amdgpu_job_set_gang_leader(struct amdgpu_job *job,
+  
+  void amdgpu_job_free(struct amdgpu_job *job)
+  {
+ +	vce_liverpool_free_job(job);
+- 	if (job->base.entity)
+- 		drm_sched_job_cleanup(&job->base);
++ 	if (job->gang_submit != &job->base.s_fence->scheduled)
++ 		dma_fence_put(job->gang_submit);
+  
+ @@ -387,10 +396,17 @@ int amdgpu_job_submit_direct(struct amdgpu_job *job, struct amdgpu_ring *ring,
+  	int r;
+  

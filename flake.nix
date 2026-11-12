@@ -2,8 +2,7 @@
   description = "Strawberry PS4 Linux kernel";
 
   inputs = {
-    # Keep linuxPackages_latest on the release targeted by the exported patches.
-    nixpkgs.url = "github:NixOS/nixpkgs/41691813c5b74a5f1394fcac9a4dafa58b9e06f0";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable-small";
   };
 
   outputs =
@@ -15,6 +14,26 @@
       llvm = pkgs.llvmPackages;
       clangHeaders = "${pkgs.lib.getLib llvm.clang-unwrapped}/lib/clang/${pkgs.lib.versions.major llvm.clang-unwrapped.version}/include";
 
+      compatibilityDir = ./compatibility + "/${baseKernel.version}";
+      adaptedPatches =
+        if builtins.pathExists compatibilityDir then
+          pkgs.applyPatches {
+            name = "ps4-patches-${baseKernel.version}";
+            src = ./ps4-patches;
+            nativeBuildInputs = [ pkgs.git ];
+
+            patchPhase = ''
+              runHook prePatch
+              while IFS= read -r patch; do
+                echo "Applying compatibility patch $patch"
+                git apply --whitespace=nowarn "${compatibilityDir}/$patch"
+              done < ${compatibilityDir}/series
+              runHook postPatch
+            '';
+          }
+        else
+          ./ps4-patches;
+
       patchedSource = pkgs.applyPatches {
         name = "linux-ps4-source-${baseKernel.version}";
         src = baseKernel.src;
@@ -24,8 +43,8 @@
           runHook prePatch
           while IFS= read -r patch; do
             echo "Applying $patch"
-            git apply --allow-empty --whitespace=nowarn "${./ps4-patches}/$patch"
-          done < ${./ps4-patches}/series
+            git apply --allow-empty --whitespace=nowarn "${adaptedPatches}/$patch"
+          done < ${adaptedPatches}/series
           runHook postPatch
         '';
       };
